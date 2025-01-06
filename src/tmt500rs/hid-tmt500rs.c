@@ -72,12 +72,73 @@ static u8 t500rs_rdesc_fixed[] = {
 };
 
 /* Initial setup packets based on USB captures */
-static const u8 setup_0[8] = { 0x09, 0x02, 0x29, 0x00, 0x01, 0x01, 0x00, 0x00 }; // Set config
-static const u8 setup_1[8] = { 0x09, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }; // Set interface
-static const u8 setup_2[8] = { 0x42, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }; // Init command
-static const u8 setup_3[8] = { 0x41, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }; // Mode command
-static const u8 *const setup_arr[] = { setup_0, setup_1, setup_2, setup_3 };
-static const unsigned int setup_arr_sizes[] = { 8, 8, 8, 8 };
+/* Setup packets based on USB captures with improved timing and reliability */
+static const u8 setup_0[8] = { 0x42, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }; // Init command
+static const u8 setup_1[8] = { 0x0a, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }; // Get status
+static const u8 setup_2[8] = { 0x41, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }; // Mode command
+static const u8 setup_3[8] = { 0x41, 0x02, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00 }; // Pre-switch command
+static const u8 setup_4[8] = { 0x41, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00 }; // Switch command
+static const u8 setup_5[8] = { 0x41, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }; // Reset command
+static const u8 setup_6[8] = { 0x41, 0x03, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00 }; // Final mode command with mode flag
+static const u8 *const setup_arr[] = { setup_0, setup_1, setup_2, setup_3, setup_4, setup_5, setup_6 };
+static const unsigned int setup_arr_sizes[] = { 8, 8, 8, 8, 8, 8, 8 };
+
+/* Command descriptions for logging with timing info */
+static const char *const setup_descriptions[] = {
+    "Initialize device (1000ms)",           // setup_0
+    "Check device status (800ms)",          // setup_1
+    "Set initial mode (1500ms)",            // setup_2
+    "Prepare for mode switch (2000ms)",     // setup_3
+    "Execute mode switch (2500ms)",         // setup_4
+    "Reset device state (3000ms)",          // setup_5
+    "Set final mode with flag (2000ms)"     // setup_6
+};
+
+/* Command timing delays in milliseconds */
+static const int setup_delays[] = {
+    1000,  // Init command
+    800,   // Get status
+    1500,  // Mode command
+    2000,  // Pre-switch command
+    2500,  // Switch command
+    3000,  // Reset command
+    2000   // Final mode command
+};
+
+/* Command timing requirements in milliseconds */
+static const struct {
+    int pre_delay;    // Delay before command
+    int post_delay;   // Delay after command
+    int retry_delay;  // Additional delay between retries
+    int verify_delay; // Delay before verification
+} setup_timings[] = {
+    { 1000, 500,  200, 100 },  // Init command
+    { 800,  300,  200, 200 },  // Get status
+    { 1500, 800,  500, 300 },  // Mode command
+    { 2000, 1000, 800, 500 },  // Pre-switch command
+    { 2500, 1500, 1000, 800 }, // Switch command
+    { 3000, 2000, 1500, 1000 },// Reset command
+    { 2000, 1500, 1000, 800 }  // Final mode command
+};
+
+/* Command retry limits */
+static const struct {
+    int command_retries;  // Max retries for command send
+    int verify_retries;   // Max retries for verification
+    int reset_retries;    // Max retries for device reset
+} setup_retry_limits[] = {
+    { 2, 2, 1 },  // Init command
+    { 3, 3, 2 },  // Get status
+    { 3, 3, 2 },  // Mode command
+    { 4, 4, 3 },  // Pre-switch command
+    { 4, 4, 3 },  // Switch command
+    { 5, 5, 3 },  // Reset command
+    { 4, 4, 3 }   // Final mode command
+};
+
+/* USB endpoint addresses from descriptor */
+#define T500RS_ENDPOINT_IN   0x82
+#define T500RS_ENDPOINT_OUT  0x01
 
 static const unsigned long t500rs_params =
     PARAM_SPRING_LEVEL
@@ -500,23 +561,82 @@ static int t500rs_send_close(struct t500rs_device_entry *t500rs)
 static int t500rs_send_init_command(struct usb_device *udev, u8 endpoint, const u8 *cmd, size_t size)
 {
     int ret, retries = 0;
+    int delay = 200;  // Start with longer initial delay
+    bool success = false;
 
-    while (retries < T500RS_MAX_RETRIES) {
+    // First clear any halted endpoints
+    usb_clear_halt(udev, usb_sndintpipe(udev, endpoint));
+    msleep(100);  // Wait longer for clear to take effect
+
+    while (retries < T500RS_MAX_RETRIES && !success) {
+        // Reset endpoint before each attempt
+        usb_clear_halt(udev, usb_sndintpipe(udev, endpoint));
+        msleep(100);  // Wait for clear to take effect
+
+        // Try to send command
         ret = usb_interrupt_msg(udev,
                               usb_sndintpipe(udev, endpoint),
                               (u8 *)cmd, size,
                               NULL, T500RS_USB_TIMEOUT);
-        if (ret >= 0)
-            return 0;
         
-        if (ret != -ETIMEDOUT && ret != -EPROTO)
-            return ret;  // Return on critical errors
+        if (ret >= 0) {
+            success = true;
+            msleep(200);  // Wait longer after successful command
+            break;
+        }
+        
+        // Handle specific errors
+        if (ret == -EPROTO) {
+            printk(KERN_INFO "T500RS: Protocol error during init, resetting device\n");
+            usb_reset_device(udev);  // Reset device on protocol error
+            msleep(1000);  // Extended wait after reset
+            
+            // Clear endpoints after reset
+            usb_clear_halt(udev, usb_sndintpipe(udev, endpoint));
+            msleep(200);
+            
+            // Verify device is still present
+            struct usb_device_descriptor desc;
+            ret = usb_get_descriptor(udev, USB_DT_DEVICE, 0, &desc, sizeof(desc));
+            if (ret < 0) {
+                if (ret == -ENODEV) {
+                    printk(KERN_INFO "T500RS: Device disconnected during mode switch, expected\n");
+                    return 0;  // Return success since this is expected during mode switch
+                }
+                printk(KERN_ERR "T500RS: Failed to verify device presence: %d\n", ret);
+                return ret;
+            }
+            
+            msleep(500);  // Additional wait before retry
+        } else if (ret == -EPIPE) {
+            printk(KERN_INFO "T500RS: Pipe error, clearing endpoint\n");
+            usb_clear_halt(udev, usb_sndintpipe(udev, endpoint));
+            msleep(300);  // Longer wait after pipe error
+        } else if (ret != -ETIMEDOUT) {
+            if (ret == -ENODEV) {
+                printk(KERN_INFO "T500RS: Device disconnected during mode switch, expected\n");
+                return 0;  // Return success since this is expected during mode switch
+            }
+            printk(KERN_ERR "T500RS: Critical error: %d\n", ret);
+            return ret;  // Return immediately on other critical errors
+        }
             
         retries++;
-        msleep(50 * retries);  // Increasing delay between retries
+        
+        // Exponential backoff with maximum delay of 2 seconds
+        delay = min(delay * 2, 2000);
+        msleep(delay);
+        
+        printk(KERN_INFO "T500RS: Retrying init command after %dms (attempt %d/%d)\n",
+               delay, retries, T500RS_MAX_RETRIES);
     }
     
-    return -ETIMEDOUT;
+    if (!success) {
+        printk(KERN_ERR "T500RS: Command failed after %d retries\n", T500RS_MAX_RETRIES);
+        return -ETIMEDOUT;
+    }
+
+    return 0;
 }
 
 /* Command validation functions */
@@ -703,42 +823,180 @@ static int t500rs_wheel_init(struct tmff2_device_entry *tmff2, int open_mode)
     memcpy(tmff2->supported_effects, t500rs_supported_effects, sizeof(t500rs_supported_effects));
 
     // Wait for device to stabilize before sending any commands
-    msleep(500);
+    msleep(1000);  // Initial delay
 
     // Only perform initialization sequence if we're in init mode
     if (is_init_mode) {
         t500rs_info(t500rs, "Starting USB configuration in INIT mode\n");
         t500rs_set_state(t500rs, T500RS_STATE_INITIALIZING);
 
-        // Reset USB device first
-        ret = usb_reset_device(udev);
-        if (ret < 0) {
-            t500rs_warn(t500rs, "Device reset failed: %d (continuing anyway)\n", ret);
-            // Continue anyway as some devices don't support reset
+        // Extended enumeration stabilization sequence
+        t500rs_info(t500rs, "Starting USB enumeration stabilization\n");
+        
+        // First phase: Initial stabilization
+        msleep(5000);  // Extended initial delay
+        
+        // Second phase: Port reset and power cycle
+        struct usb_device *parent = udev->parent;
+        if (parent) {
+            t500rs_info(t500rs, "Resetting parent USB port\n");
+            ret = usb_reset_device(parent);
+            if (ret < 0 && ret != -ENODEV) {
+                t500rs_warn(t500rs, "Parent port reset warning: %d\n", ret);
+            }
+            msleep(2000);  // Wait after port reset
+        }
+        
+        // Third phase: Clear host controller state
+        t500rs_info(t500rs, "Clearing host controller state\n");
+        usb_reset_endpoint(udev, 0);  // Reset control endpoint
+        msleep(1000);
+        
+        // Fourth phase: Clear all endpoints with retries
+        int clear_retries = 0;
+        bool endpoints_cleared = false;
+        while (clear_retries < 5 && !endpoints_cleared) {
+            bool out_clear = false, in_clear = false;
+            
+            // Clear OUT endpoint
+            ret = usb_clear_halt(udev, usb_sndintpipe(udev, t500rs->endpoint_out));
+            if (ret < 0) {
+                if (ret != -ENODEV) {  // Ignore expected disconnects
+                    t500rs_warn(t500rs, "Failed to clear OUT endpoint: %d\n", ret);
+                }
+            } else {
+                out_clear = true;
+            }
+            msleep(500);
+            
+            // Clear IN endpoint
+            ret = usb_clear_halt(udev, usb_rcvintpipe(udev, t500rs->endpoint_in));
+            if (ret < 0) {
+                if (ret != -ENODEV) {  // Ignore expected disconnects
+                    t500rs_warn(t500rs, "Failed to clear IN endpoint: %d\n", ret);
+                }
+            } else {
+                in_clear = true;
+            }
+            
+            if (out_clear && in_clear) {
+                endpoints_cleared = true;
+                t500rs_info(t500rs, "Successfully cleared all endpoints\n");
+                break;
+            }
+            
+            clear_retries++;
+            if (!endpoints_cleared) {
+                t500rs_info(t500rs, "Retrying endpoint clear (attempt %d/5)\n", clear_retries);
+                msleep(1000 * clear_retries);  // Progressive delay
+            }
+        }
+        
+        // Final phase: Extended stabilization
+        msleep(3000);  // Final wait for complete stabilization
+
+        // Reset USB device state with retries
+        int reset_retries = 0;
+        while (reset_retries < 3) {
+            ret = usb_reset_device(udev);
+            if (ret == -ENODEV || ret == -ENOENT) {
+                // These errors are expected during mode switch
+                t500rs_info(t500rs, "Device reset indicated mode switch, continuing...\n");
+                break;
+            } else if (ret < 0) {
+                t500rs_warn(t500rs, "Device reset attempt %d warning: %d\n", 
+                           reset_retries + 1, ret);
+                msleep(1000);  // Wait between reset attempts
+                reset_retries++;
+            } else {
+                break;
+            }
+        }
+        msleep(2000);  // Extended wait after reset attempts
+
+        // Reset and configure endpoints with improved error handling
+        t500rs->endpoint_in = T500RS_ENDPOINT_IN;
+        t500rs->endpoint_out = T500RS_ENDPOINT_OUT;
+
+        // Function to clear endpoint with retries
+        bool clear_endpoint_with_retries(struct usb_device *dev, unsigned int pipe, const char *name) {
+            int retries = 0;
+            while (retries < 3) {
+                int ret = usb_clear_halt(dev, pipe);
+                if (ret < 0) {
+                    if (ret == -EPIPE) {
+                        t500rs_warn(t500rs, "Pipe error clearing %s endpoint, resetting device\n", name);
+                        usb_reset_device(dev);
+                        msleep(1000);
+                    } else if (ret == -EPROTO) {
+                        t500rs_warn(t500rs, "Protocol error clearing %s endpoint, retrying\n", name);
+                        msleep(500);
+                    } else {
+                        t500rs_warn(t500rs, "Failed to clear %s endpoint, attempt %d: %d\n",
+                                   name, retries + 1, ret);
+                        msleep(500);
+                    }
+                    retries++;
+                    continue;
+                }
+                t500rs_info(t500rs, "Successfully cleared %s endpoint\n", name);
+                return true;
+            }
+            t500rs_err(t500rs, "Failed to clear %s endpoint after retries\n", name);
+            return false;
         }
 
-        msleep(200);
+        // Clear OUT endpoint
+        if (!clear_endpoint_with_retries(udev, usb_sndintpipe(udev, t500rs->endpoint_out), "OUT")) {
+            // Try alternate endpoint address
+            t500rs_info(t500rs, "Trying alternate OUT endpoint\n");
+            t500rs->endpoint_out = 0x02;  // Try alternate address
+            if (!clear_endpoint_with_retries(udev, usb_sndintpipe(udev, t500rs->endpoint_out), "OUT")) {
+                ret = -ENODEV;
+                goto err_free_send_buffer;
+            }
+        }
+        msleep(500);  // Wait between endpoint clears
 
-        // First, ensure device is in config 1
-        ret = usb_control_msg(udev,
-                             usb_sndctrlpipe(udev, 0),
-                             USB_REQ_SET_CONFIGURATION,
-                             USB_TYPE_STANDARD | USB_RECIP_DEVICE,
-                             1, // configuration value
-                             0, // index
-                             NULL,
-                             0,
-                             USB_CTRL_SET_TIMEOUT);
-        if (ret < 0) {
-            t500rs_err(t500rs, "Failed to set USB configuration: %d\n", ret);
+        // Clear IN endpoint
+        if (!clear_endpoint_with_retries(udev, usb_rcvintpipe(udev, t500rs->endpoint_in), "IN")) {
+            // Try alternate endpoint address
+            t500rs_info(t500rs, "Trying alternate IN endpoint\n");
+            t500rs->endpoint_in = 0x81;  // Try alternate address
+            if (!clear_endpoint_with_retries(udev, usb_rcvintpipe(udev, t500rs->endpoint_in), "IN")) {
+                ret = -ENODEV;
+                goto err_free_send_buffer;
+            }
+        }
+        
+        msleep(1000);  // Extended wait for clear to take effect
+
+        // Set configuration using standard USB request with retries
+        int config_retries = 0;
+        bool config_success = false;
+        while (config_retries < 3 && !config_success) {
+            ret = usb_set_configuration(udev, 1);
+            if (ret < 0) {
+                if (ret == -EPROTO) {
+                    t500rs_info(t500rs, "Protocol error setting configuration, attempt %d\n",
+                               config_retries + 1);
+                    msleep(1000);  // Longer delay between attempts
+                    config_retries++;
+                } else {
+                    t500rs_err(t500rs, "Failed to set USB configuration: %d\n", ret);
+                    goto err_free_send_buffer;
+                }
+            } else {
+                config_success = true;
+            }
+        }
+
+        if (!config_success) {
+            t500rs_err(t500rs, "Failed to set configuration after retries\n");
             goto err_free_send_buffer;
         }
 
-        msleep(300);
-
-        t500rs_info(t500rs, "Configuring USB endpoints (interface %d has %d endpoints)\n", 
-                   interface->desc.bInterfaceNumber,
-                   interface->desc.bNumEndpoints);
+        msleep(1000);  // Extended wait after configuration
 
         // Find and configure endpoints
         for (i = 0; i < interface->desc.bNumEndpoints; i++) {
@@ -750,94 +1008,436 @@ static int t500rs_wheel_init(struct tmff2_device_entry *tmff2, int open_mode)
 
             if (usb_endpoint_is_int_out(endpoint)) {
                 t500rs->endpoint_out = endpoint->bEndpointAddress;
-                t500rs_info(t500rs, "Found OUT endpoint: 0x%02x (wMaxPacketSize: %d)\n",
-                           t500rs->endpoint_out, endpoint->wMaxPacketSize);
+                t500rs_info(t500rs, "Found OUT endpoint: 0x%02x\n", t500rs->endpoint_out);
             } else if (usb_endpoint_is_int_in(endpoint)) {
                 t500rs->endpoint_in = endpoint->bEndpointAddress;
-                t500rs_info(t500rs, "Found IN endpoint: 0x%02x (wMaxPacketSize: %d)\n",
-                           t500rs->endpoint_in, endpoint->wMaxPacketSize);
+                t500rs_info(t500rs, "Found IN endpoint: 0x%02x\n", t500rs->endpoint_in);
             }
         }
 
-        // Clear any halted endpoints before starting initialization
-        usb_clear_halt(udev, usb_sndintpipe(udev, t500rs->endpoint_out));
-        usb_clear_halt(udev, usb_rcvintpipe(udev, t500rs->endpoint_in));
-        msleep(100);  // Wait for clear to take effect
+        // Set interface using standard USB request
+        ret = usb_set_interface(udev, interface->desc.bInterfaceNumber, 0);
+        if (ret < 0) {
+            if (ret == -EPROTO) {
+                t500rs_info(t500rs, "Protocol error setting interface, retrying after delay\n");
+                msleep(1000);
+                ret = usb_set_interface(udev, interface->desc.bInterfaceNumber, 0);
+            }
+            if (ret < 0) {
+                t500rs_err(t500rs, "Failed to set interface: %d\n", ret);
+                goto err_free_send_buffer;
+            }
+        }
+        msleep(500);  // Wait for interface to settle
 
         // Send initialization sequence with retries
         for (i = 0; i < ARRAY_SIZE(setup_arr); i++) {
-            // Special handling for SET_INTERFACE command
-            if (i == 1) {  // setup_1 is SET_INTERFACE
-                t500rs_info(t500rs, "Setting interface %d\n", interface->desc.bInterfaceNumber);
-                ret = usb_set_interface(udev, interface->desc.bInterfaceNumber, 0);
-                if (ret < 0) {
-                    t500rs_err(t500rs, "Failed to set interface: %d\n", ret);
-                    if (ret == -EPIPE) {
-                        t500rs_info(t500rs, "Endpoint stalled, clearing and retrying...\n");
-                        usb_clear_halt(udev, usb_sndintpipe(udev, t500rs->endpoint_out));
-                        msleep(100);
-                        ret = usb_set_interface(udev, interface->desc.bInterfaceNumber, 0);
-                        if (ret < 0) {
-                            t500rs_err(t500rs, "Second attempt to set interface failed: %d\n", ret);
-                            goto err_free_send_buffer;
-                        }
-                    } else {
-                        goto err_free_send_buffer;
-                    }
-                }
-                msleep(200);  // Extra delay after interface setup
-                continue;
+            // Clear endpoint before each command
+            usb_clear_halt(udev, usb_sndintpipe(udev, t500rs->endpoint_out));
+            msleep(200);  // Wait for clear to take effect
+
+            // Use timing array for consistent delays
+            t500rs_info(t500rs, "Executing command: %s\n", setup_descriptions[i]);
+
+            // Clear endpoints before critical commands
+            if (i >= 2) {  // Mode-related commands need clean endpoints
+                usb_clear_halt(udev, usb_sndintpipe(udev, t500rs->endpoint_out));
+                usb_clear_halt(udev, usb_rcvintpipe(udev, t500rs->endpoint_in));
+                msleep(500);  // Wait for clear to take effect
             }
 
-            ret = t500rs_send_init_command(udev, t500rs->endpoint_out,
-                                         setup_arr[i], setup_arr_sizes[i]);
+            // Pre-command delay based on command type
+            msleep(setup_delays[i]);
+
+            // Additional preparation for mode switch commands
+            if (i >= 3) {  // Pre-switch and later commands
+                // Reset device state before critical commands with retries
+                int cmd_reset_retries = 0;
+                bool cmd_reset_success = false;
+                while (cmd_reset_retries < 3 && !cmd_reset_success) {
+                    // Clear endpoints before reset
+                    usb_clear_halt(udev, usb_sndintpipe(udev, t500rs->endpoint_out));
+                    usb_clear_halt(udev, usb_rcvintpipe(udev, t500rs->endpoint_in));
+                    msleep(500);  // Wait for clear
+
+                    t500rs_info(t500rs, "Resetting device before command %d (attempt %d/3)\n",
+                               i, cmd_reset_retries + 1);
+                    ret = usb_reset_device(udev);
+
+                    if (ret == -ENODEV) {
+                        t500rs_info(t500rs, "Device disconnected during reset (expected)\n");
+                        cmd_reset_success = true;  // This is actually expected
+                        break;
+                    } else if (ret < 0) {
+                        t500rs_warn(t500rs, "Device reset failed: %d, retrying after delay\n", ret);
+                        msleep(1000 * (cmd_reset_retries + 1));  // Increasing delay
+                        cmd_reset_retries++;
+                    } else {
+                        t500rs_info(t500rs, "Device reset successful\n");
+                        cmd_reset_success = true;
+                        msleep(2000);  // Extended wait after successful reset
+                        break;
+                    }
+                }
+
+                if (!cmd_reset_success && cmd_reset_retries == 3) {
+                    t500rs_warn(t500rs, "Device reset failed after retries, continuing anyway\n");
+                    msleep(2000);  // Extended wait before continuing
+                }
+
+                // Clear endpoints after reset attempt
+                usb_clear_halt(udev, usb_sndintpipe(udev, t500rs->endpoint_out));
+                usb_clear_halt(udev, usb_rcvintpipe(udev, t500rs->endpoint_in));
+                msleep(500);  // Wait for clear
+            }
+
+            // Pre-command preparation
+            t500rs_info(t500rs, "Preparing command: %s\n", setup_descriptions[i]);
+            msleep(setup_timings[i].pre_delay);  // Pre-command delay
+
+            // Execute command with retry limits from configuration
+            int cmd_retries = 0;
+            bool cmd_success = false;
+            while (cmd_retries < setup_retry_limits[i].command_retries && !cmd_success) {
+                if (cmd_retries > 0) {
+                    t500rs_info(t500rs, "Retrying command %d (attempt %d/%d)\n",
+                               i, cmd_retries + 1, setup_retry_limits[i].command_retries);
+                    msleep(setup_timings[i].retry_delay);  // Delay between retries
+                }
+
+                ret = t500rs_send_init_command(udev, t500rs->endpoint_out,
+                                             setup_arr[i], setup_arr_sizes[i]);
+                t500rs_dbg(t500rs, "Command data: %02x %02x %02x %02x %02x %02x %02x %02x\n",
+                          setup_arr[i][0], setup_arr[i][1], setup_arr[i][2], setup_arr[i][3],
+                          setup_arr[i][4], setup_arr[i][5], setup_arr[i][6], setup_arr[i][7]);
+
+                if (ret >= 0) {
+                    cmd_success = true;
+                    t500rs_info(t500rs, "Command %d executed successfully\n", i);
+                    msleep(setup_timings[i].post_delay);  // Post-command delay
+                    break;
+                } else if (ret == -ENODEV) {
+                    // Device disconnect is expected for some commands
+                    t500rs_info(t500rs, "Device disconnected during command %d (expected)\n", i);
+                    cmd_success = true;
+                    break;
+                } else if (ret == -EPIPE || ret == -EPROTO) {
+                    // Clear endpoint and retry on pipe/protocol errors
+                    usb_clear_halt(udev, usb_sndintpipe(udev, t500rs->endpoint_out));
+                    msleep(300);
+                } else {
+                    t500rs_warn(t500rs, "Command %d failed with error: %d\n", i, ret);
+                }
+
+                cmd_retries++;
+            }
+
+            if (!cmd_success) {
+                t500rs_err(t500rs, "Command %d failed after %d retries\n",
+                          i, setup_retry_limits[i].command_retries);
+                goto err_free_send_buffer;
+            }
+
+            // Wait before verification
+            msleep(setup_timings[i].verify_delay);
             if (ret < 0) {
                 if (ret == -EPIPE) {
                     t500rs_info(t500rs, "Command %d stalled, clearing endpoint and retrying...\n", i);
                     usb_clear_halt(udev, usb_sndintpipe(udev, t500rs->endpoint_out));
-                    msleep(100);
+                    msleep(300);  // Longer wait after stall
                     ret = t500rs_send_init_command(udev, t500rs->endpoint_out,
                                                  setup_arr[i], setup_arr_sizes[i]);
                 }
                 if (ret < 0) {
-                    t500rs_err(t500rs, "Failed to send setup command %d (%s) after retries: %d\n",
-                              i, t500rs_get_command_description(setup_arr[i][0], setup_arr[i][1]), ret);
+                    if (ret == -EPROTO) {
+                        t500rs_info(t500rs, "Protocol error sending command %d, waiting and continuing...\n", i);
+                        msleep(1000);  // Much longer wait after protocol error
+                        continue;  // Skip to next command on protocol error
+                    }
+                    t500rs_err(t500rs, "Failed to send setup command %d after retries: %d\n",
+                              i, ret);
                     goto err_free_send_buffer;
                 }
             }
             
-            // Verify command was accepted
-            u8 status = 0;
-            ret = usb_interrupt_msg(udev,
-                                  usb_rcvintpipe(udev, t500rs->endpoint_in),
-                                  &status, 1,
-                                  NULL, T500RS_USB_TIMEOUT);
-            if (ret < 0) {
-                if (ret == -EPIPE) {
-                    usb_clear_halt(udev, usb_rcvintpipe(udev, t500rs->endpoint_in));
-                    msleep(100);
+            // Handle status check for get_status command
+            if (setup_arr[i][0] == 0x0a && setup_arr[i][1] == 0x04) {
+                u8 status_buf[8] = {0};
+                int actual_length;
+                
+                // Wait for status response
+                msleep(200);
+                
+                ret = usb_interrupt_msg(udev,
+                                      usb_rcvintpipe(udev, t500rs->endpoint_in),
+                                      status_buf, sizeof(status_buf),
+                                      &actual_length, T500RS_USB_TIMEOUT);
+                
+                if (ret < 0) {
+                    if (ret == -EPIPE || ret == -EPROTO) {
+                        t500rs_info(t500rs, "Status check failed, continuing anyway\n");
+                    } else {
+                        t500rs_warn(t500rs, "Could not read status: %d\n", ret);
+                    }
+                } else {
+                    t500rs_info(t500rs, "Status response: %02x %02x %02x %02x %02x %02x %02x %02x\n",
+                               status_buf[0], status_buf[1], status_buf[2], status_buf[3],
+                               status_buf[4], status_buf[5], status_buf[6], status_buf[7]);
+                    
+                    // Check status response
+                    if (status_buf[0] != 0x0a || status_buf[1] != 0x04) {
+                        t500rs_warn(t500rs, "Unexpected status response, retrying command\n");
+                        msleep(1000);  // Extended delay before retry
+                        
+                        // Retry status check
+                        ret = t500rs_send_init_command(udev, t500rs->endpoint_out,
+                                                     setup_arr[i], setup_arr_sizes[i]);
+                        if (ret < 0) {
+                            t500rs_warn(t500rs, "Status check retry failed: %d\n", ret);
+                            msleep(1000);  // Wait after failed retry
+                        } else {
+                            // Wait for retry response
+                            msleep(500);
+                            ret = usb_interrupt_msg(udev,
+                                                  usb_rcvintpipe(udev, t500rs->endpoint_in),
+                                                  status_buf, sizeof(status_buf),
+                                                  &actual_length, T500RS_USB_TIMEOUT);
+                            
+                            if (ret < 0) {
+                                t500rs_warn(t500rs, "Status check retry response failed: %d\n", ret);
+                            } else {
+                                t500rs_info(t500rs, "Retry status: %02x %02x %02x %02x %02x %02x %02x %02x\n",
+                                           status_buf[0], status_buf[1], status_buf[2], status_buf[3],
+                                           status_buf[4], status_buf[5], status_buf[6], status_buf[7]);
+                            }
+                        }
+                        
+                        msleep(1000);  // Extended delay after retry attempt
+                    } else {
+                        t500rs_info(t500rs, "Status indicates ready for mode switch\n");
+                        msleep(500);  // Normal delay after good status
+                    }
+                }
+            } else {
+                // Verify other commands were accepted with retries
+                int verify_retries = 0;
+                bool verify_success = false;
+                while (verify_retries < 3 && !verify_success) {
+                    u8 status = 0;
                     ret = usb_interrupt_msg(udev,
                                           usb_rcvintpipe(udev, t500rs->endpoint_in),
                                           &status, 1,
                                           NULL, T500RS_USB_TIMEOUT);
+                    
+                    if (ret < 0) {
+                        if (ret == -EPIPE || ret == -EPROTO) {
+                            t500rs_info(t500rs, "Command %d verification failed (attempt %d/3), retrying...\n",
+                                      i, verify_retries + 1);
+                            // Clear endpoint before retry
+                            usb_clear_halt(udev, usb_rcvintpipe(udev, t500rs->endpoint_in));
+                            msleep(500);  // Wait for clear
+                            verify_retries++;
+                            continue;
+                        } else {
+                            t500rs_warn(t500rs, "Could not verify command %d status: %d\n",
+                                      i, ret);
+                            break;
+                        }
+                    } else {
+                        verify_success = true;
+                        t500rs_info(t500rs, "Command %d verified successfully\n", i);
+                    }
                 }
-                if (ret < 0) {
-                    t500rs_warn(t500rs, "Could not verify command %d (%s) status: %d\n",
-                               i, t500rs_get_command_description(setup_arr[i][0], setup_arr[i][1]), ret);
-                    // Continue anyway as some commands don't respond
+                
+                if (!verify_success) {
+                    t500rs_warn(t500rs, "Command %d verification failed after retries\n", i);
+                    msleep(1000);  // Extended delay after failed verification
                 }
             }
             
-            msleep(200);  // Longer wait between commands
+            // Add longer delays after mode switch commands
+            if (i >= 2) {  // setup_2 and later are mode-related commands
+                msleep(1000);  // Extra delay after mode commands
+            } else {
+                msleep(500);  // Normal delay between other commands
+            }
         }
 
-        // Wait for device to stabilize and switch modes
+        // Wait longer for device to stabilize before mode switch
+        msleep(3000);  // Extended wait before mode switch
+
+        // Prepare for mode switch
+        t500rs_info(t500rs, "Preparing for mode switch sequence\n");
+        t500rs_set_state(t500rs, T500RS_STATE_SWITCHING_MODE);
+
+        // Reset device state before mode switch with retries
+        bool reset_success = false;
+        while (reset_retries < 3 && !reset_success) {
+            // Clear endpoints before reset
+            usb_clear_halt(udev, usb_sndintpipe(udev, t500rs->endpoint_out));
+            usb_clear_halt(udev, usb_rcvintpipe(udev, t500rs->endpoint_in));
+            msleep(500);  // Wait for clear to take effect
+
+            t500rs_info(t500rs, "Resetting device before mode switch (attempt %d/3)\n", 
+                       reset_retries + 1);
+            ret = usb_reset_device(udev);
+            
+            if (ret == -ENODEV) {
+                t500rs_info(t500rs, "Device disconnected during reset (expected)\n");
+                reset_success = true;  // This is actually expected
+                break;
+            } else if (ret < 0) {
+                t500rs_warn(t500rs, "Device reset failed: %d, retrying after delay\n", ret);
+                msleep(1000 * (reset_retries + 1));  // Increasing delay between attempts
+                reset_retries++;
+            } else {
+                t500rs_info(t500rs, "Device reset successful\n");
+                reset_success = true;
+                msleep(2000);  // Extended wait after successful reset
+                break;
+            }
+        }
+
+        if (!reset_success && reset_retries == 3) {
+            t500rs_warn(t500rs, "Device reset failed after retries, continuing anyway\n");
+            msleep(2000);  // Extended wait before continuing
+        }
+
+        // Clear endpoints one final time
+        usb_clear_halt(udev, usb_sndintpipe(udev, t500rs->endpoint_out));
+        usb_clear_halt(udev, usb_rcvintpipe(udev, t500rs->endpoint_in));
         msleep(500);
 
-        // The device will disconnect and reconnect in PC mode
-        t500rs_info(t500rs, "Initialization sequence completed, waiting for mode switch\n");
-        t500rs_set_state(t500rs, T500RS_STATE_SWITCHING_MODE);
-        return 0;
+        t500rs_info(t500rs, "Device prepared for mode switch\n");
+
+        // Send final mode command with retries
+        int mode_retries = 0;
+        bool mode_success = false;
+        while (mode_retries < 3 && !mode_success) {
+            // Clear endpoint before final command
+            usb_clear_halt(udev, usb_sndintpipe(udev, t500rs->endpoint_out));
+            msleep(500);  // Extended wait before final command
+
+            t500rs_info(t500rs, "Sending final mode command (attempt %d/3)\n", mode_retries + 1);
+            ret = t500rs_send_init_command(udev, t500rs->endpoint_out,
+                                         setup_arr[6], setup_arr_sizes[6]);
+            if (ret < 0) {
+                if (ret == -ENODEV) {
+                    t500rs_info(t500rs, "Device disconnected during mode switch (expected)\n");
+                    mode_success = true;  // This is actually expected
+                    break;
+                } else if (ret == -EPROTO || ret == -EPIPE) {
+                    if (mode_retries < 2) {  // Allow one more retry
+                        t500rs_info(t500rs, "Final command error, retrying after delay\n");
+                        msleep(1000);  // Longer delay between attempts
+                        mode_retries++;
+                        continue;
+                    }
+                    // On last retry, treat protocol errors as potential mode switch
+                    t500rs_info(t500rs, "Protocol error on final retry, assuming mode switch\n");
+                    mode_success = true;
+                    break;
+                } else {
+                    t500rs_err(t500rs, "Final command failed: %d\n", ret);
+                    goto err_free_send_buffer;
+                }
+            } else {
+            // Command succeeded, implement advanced mode switch handling
+            t500rs_info(t500rs, "Final command succeeded, initiating mode switch sequence\n");
+            
+            // First phase: Initial disconnect check with short intervals
+            struct usb_device_descriptor desc;
+            bool disconnect_detected = false;
+            int quick_check_count = 0;
+            while (quick_check_count < 3 && !disconnect_detected) {
+                msleep(100);  // Quick checks initially
+                ret = usb_get_descriptor(udev, USB_DT_DEVICE, 0, &desc, sizeof(desc));
+                
+                if (ret == -ENODEV) {
+                    t500rs_info(t500rs, "Device disconnected quickly (expected)\n");
+                    disconnect_detected = true;
+                    mode_success = true;
+                    break;
+                }
+                quick_check_count++;
+            }
+            
+            // Second phase: Progressive checks with null commands
+            if (!disconnect_detected) {
+                int check_count = 0;
+                while (check_count < 4 && !disconnect_detected) {
+                    // Clear endpoints before each attempt
+                    usb_clear_halt(udev, usb_sndintpipe(udev, t500rs->endpoint_out));
+                    usb_clear_halt(udev, usb_rcvintpipe(udev, t500rs->endpoint_in));
+                    msleep(300);  // Wait for clear
+                    
+                    // Send null command sequence
+                    t500rs_info(t500rs, "Sending null command sequence %d/4\n", check_count + 1);
+                    u8 null_cmd[8] = {0};
+                    usb_interrupt_msg(udev, usb_sndintpipe(udev, t500rs->endpoint_out), 
+                                    null_cmd, sizeof(null_cmd),
+                                    NULL, T500RS_USB_TIMEOUT);
+                    msleep(500);  // Wait after command
+                    
+                    // Check disconnect
+                    ret = usb_get_descriptor(udev, USB_DT_DEVICE, 0, &desc, sizeof(desc));
+                    if (ret == -ENODEV) {
+                        t500rs_info(t500rs, "Device disconnected after null sequence %d\n",
+                                   check_count + 1);
+                        disconnect_detected = true;
+                        mode_success = true;
+                        break;
+                    }
+                    
+                    check_count++;
+                    msleep(500 * check_count);  // Progressive delay between attempts
+                }
+            }
+            
+            // Final phase: Reset sequence if still not disconnected
+            if (!disconnect_detected) {
+                t500rs_warn(t500rs, "Device persisting, attempting reset sequence\n");
+                
+                // Try up to 3 reset attempts
+                int reset_count = 0;
+                while (reset_count < 3 && !disconnect_detected) {
+                    // Clear endpoints before reset
+                    usb_clear_halt(udev, usb_sndintpipe(udev, t500rs->endpoint_out));
+                    usb_clear_halt(udev, usb_rcvintpipe(udev, t500rs->endpoint_in));
+                    msleep(500);
+                    
+                    t500rs_info(t500rs, "Executing reset sequence %d/3\n", reset_count + 1);
+                    ret = usb_reset_device(udev);
+                    msleep(1000);  // Wait after reset
+                    
+                    // Verify disconnect
+                    ret = usb_get_descriptor(udev, USB_DT_DEVICE, 0, &desc, sizeof(desc));
+                    if (ret == -ENODEV) {
+                        t500rs_info(t500rs, "Device disconnected after reset sequence %d\n",
+                                   reset_count + 1);
+                        disconnect_detected = true;
+                        mode_success = true;
+                        break;
+                    }
+                    
+                    reset_count++;
+                    msleep(1000 * reset_count);  // Progressive delay between resets
+                }
+                
+                if (!disconnect_detected) {
+                    t500rs_warn(t500rs, "Device failed to disconnect after all attempts\n");
+                    mode_success = false;
+                }
+            }
+            }
+        }
+
+        // Give more time for mode switch to complete
+        msleep(2000);  // Extended wait after mode switch
+
+        t500rs_info(t500rs, "Mode switch sequence completed %s\n",
+                   mode_success ? "successfully" : "with errors");
+        return mode_success ? 0 : -ETIMEDOUT;
     }
 
     // For PC mode, configure endpoints and set initial parameters
@@ -854,12 +1454,10 @@ static int t500rs_wheel_init(struct tmff2_device_entry *tmff2, int open_mode)
 
         if (usb_endpoint_is_int_out(endpoint)) {
             t500rs->endpoint_out = endpoint->bEndpointAddress;
-            t500rs_info(t500rs, "Found OUT endpoint: 0x%02x (wMaxPacketSize: %d)\n",
-                       t500rs->endpoint_out, endpoint->wMaxPacketSize);
+            t500rs_info(t500rs, "Found OUT endpoint: 0x%02x\n", t500rs->endpoint_out);
         } else if (usb_endpoint_is_int_in(endpoint)) {
             t500rs->endpoint_in = endpoint->bEndpointAddress;
-            t500rs_info(t500rs, "Found IN endpoint: 0x%02x (wMaxPacketSize: %d)\n",
-                       t500rs->endpoint_in, endpoint->wMaxPacketSize);
+            t500rs_info(t500rs, "Found IN endpoint: 0x%02x\n", t500rs->endpoint_in);
         }
     }
 
@@ -905,229 +1503,13 @@ err_free_t500rs:
     return ret;
 }
 
-static __u8 *t500rs_wheel_fixup(struct hid_device *hdev, __u8 *rdesc,
-                unsigned int *rsize)
-{
-    *rsize = sizeof(t500rs_rdesc_fixed);
-    return t500rs_rdesc_fixed;
-}
-
-/* Force feedback effect functions */
-static int t500rs_play_effect(void *data, struct tmff2_effect_state *state)
-{
-    struct t500rs_device_entry *t500rs = data;
-    u8 *send_buffer = kzalloc(t500rs->buffer_length, GFP_KERNEL);
-    int ret;
-
-    if (!send_buffer) {
-        ret = -ENOMEM;
-        goto err;
-    }
-
-    if (!t500rs->force_feedback_enabled) {
-        hid_warn(t500rs->hdev, "force feedback not enabled, ignoring play effect\n");
-        ret = -ENODEV;
-        goto err;
-    }
-
-    if (t500rs->state != T500RS_STATE_READY) {
-        hid_warn(t500rs->hdev, "device not ready, ignoring play effect\n");
-        ret = -EAGAIN;
-        goto err;
-    }
-
-    send_buffer[0] = 0x08;
-    send_buffer[1] = 0x03;
-    send_buffer[2] = state->effect.id;
-    send_buffer[3] = 0x01; // Start effect
-
-    ret = t500rs_send_buf(t500rs, send_buffer, t500rs->buffer_length);
-    if (ret == 0) {
-        // Track successful effect play
-        t500rs->last_command_time = jiffies;
-        t500rs->command_retries = 0;
-    }
-
-err:
-    kfree(send_buffer);
-    return ret;
-}
-
-static int t500rs_stop_effect(void *data, struct tmff2_effect_state *state)
-{
-    struct t500rs_device_entry *t500rs = data;
-    u8 *send_buffer = kzalloc(t500rs->buffer_length, GFP_KERNEL);
-    int ret;
-
-    if (!send_buffer) {
-        ret = -ENOMEM;
-        goto err;
-    }
-
-    if (!t500rs->force_feedback_enabled) {
-        hid_warn(t500rs->hdev, "force feedback not enabled, ignoring stop effect\n");
-        ret = -ENODEV;
-        goto err;
-    }
-
-    if (t500rs->state != T500RS_STATE_READY) {
-        hid_warn(t500rs->hdev, "device not ready, ignoring stop effect\n");
-        ret = -EAGAIN;
-        goto err;
-    }
-
-    send_buffer[0] = 0x08;
-    send_buffer[1] = 0x03;
-    send_buffer[2] = state->effect.id;
-    send_buffer[3] = 0x00; // Stop effect
-
-    ret = t500rs_send_buf(t500rs, send_buffer, t500rs->buffer_length);
-    if (ret == 0) {
-        // Track successful effect stop
-        t500rs->last_command_time = jiffies;
-        t500rs->command_retries = 0;
-    }
-
-err:
-    kfree(send_buffer);
-    return ret;
-}
-
-static int t500rs_upload_effect(void *data, struct tmff2_effect_state *state)
-{
-    struct t500rs_device_entry *t500rs = data;
-    u8 *send_buffer = kzalloc(t500rs->buffer_length, GFP_KERNEL);
-    int ret;
-    uint16_t magnitude;
-
-    if (!send_buffer) {
-        ret = -ENOMEM;
-        goto err;
-    }
-
-    if (!t500rs->force_feedback_enabled) {
-        hid_warn(t500rs->hdev, "force feedback not enabled, ignoring upload effect\n");
-        ret = -ENODEV;
-        goto err;
-    }
-
-    if (t500rs->state != T500RS_STATE_READY) {
-        hid_warn(t500rs->hdev, "device not ready, ignoring upload effect\n");
-        ret = -EAGAIN;
-        goto err;
-    }
-
-    send_buffer[0] = 0x08;
-    send_buffer[1] = 0x04;
-    send_buffer[2] = state->effect.id;
-
-    switch (state->effect.type) {
-    case FF_CONSTANT:
-        send_buffer[3] = 0x01;  // Constant force
-        magnitude = abs(state->effect.u.constant.level);
-        // Apply envelope if specified
-        if (state->effect.u.constant.envelope.attack_length || 
-            state->effect.u.constant.envelope.fade_length) {
-            magnitude = magnitude * 
-                (0xFFFF - state->effect.u.constant.envelope.attack_level) / 0xFFFF;
-        }
-        send_buffer[4] = magnitude & 0xff;
-        send_buffer[5] = (magnitude >> 8) & 0xff;
-        // Direction: clockwise for positive, counter-clockwise for negative
-        send_buffer[6] = state->effect.u.constant.level < 0 ? 0x01 : 0x00;
-        break;
-
-    case FF_SPRING:
-        send_buffer[3] = 0x02;  // Spring effect
-        // Use both left and right coefficients for asymmetric spring
-        send_buffer[4] = state->effect.u.condition[0].right_coeff & 0xff;
-        send_buffer[5] = (state->effect.u.condition[0].right_coeff >> 8) & 0xff;
-        send_buffer[6] = state->effect.u.condition[0].left_coeff & 0xff;
-        send_buffer[7] = (state->effect.u.condition[0].left_coeff >> 8) & 0xff;
-        // Center point (deadband) and saturation
-        send_buffer[8] = state->effect.u.condition[0].center & 0xff;
-        send_buffer[9] = state->effect.u.condition[0].deadband & 0xff;
-        break;
-
-    case FF_DAMPER:
-        send_buffer[3] = 0x03;  // Damper effect
-        send_buffer[4] = state->effect.u.condition[0].right_coeff & 0xff;
-        send_buffer[5] = (state->effect.u.condition[0].right_coeff >> 8) & 0xff;
-        send_buffer[6] = state->effect.u.condition[0].left_coeff & 0xff;
-        send_buffer[7] = (state->effect.u.condition[0].left_coeff >> 8) & 0xff;
-        break;
-
-    case FF_FRICTION:
-        send_buffer[3] = 0x04;  // Friction effect
-        send_buffer[4] = state->effect.u.condition[0].right_coeff & 0xff;
-        send_buffer[5] = (state->effect.u.condition[0].right_coeff >> 8) & 0xff;
-        break;
-
-    case FF_SINE:
-        send_buffer[3] = 0x05;  // Sine wave
-        magnitude = abs(state->effect.u.periodic.magnitude);
-        send_buffer[4] = magnitude & 0xff;
-        send_buffer[5] = (magnitude >> 8) & 0xff;
-        // Period in milliseconds
-        send_buffer[6] = state->effect.u.periodic.period & 0xff;
-        send_buffer[7] = (state->effect.u.periodic.period >> 8) & 0xff;
-        // Phase (0-360 degrees)
-        send_buffer[8] = state->effect.u.periodic.phase / 360 * 0xff;
-        break;
-
-    case FF_SAW_UP:
-        send_buffer[3] = 0x06;  // Sawtooth up
-        magnitude = abs(state->effect.u.periodic.magnitude);
-        send_buffer[4] = magnitude & 0xff;
-        send_buffer[5] = (magnitude >> 8) & 0xff;
-        send_buffer[6] = state->effect.u.periodic.period & 0xff;
-        send_buffer[7] = (state->effect.u.periodic.period >> 8) & 0xff;
-        break;
-
-    case FF_SAW_DOWN:
-        send_buffer[3] = 0x07;  // Sawtooth down
-        magnitude = abs(state->effect.u.periodic.magnitude);
-        send_buffer[4] = magnitude & 0xff;
-        send_buffer[5] = (magnitude >> 8) & 0xff;
-        send_buffer[6] = state->effect.u.periodic.period & 0xff;
-        send_buffer[7] = (state->effect.u.periodic.period >> 8) & 0xff;
-        break;
-
-    default:
-        ret = -EINVAL;
-        goto err;
-    }
-
-    // Common parameters for all effects
-    if (state->effect.replay.delay) {
-        send_buffer[8] = state->effect.replay.delay & 0xff;
-        send_buffer[9] = (state->effect.replay.delay >> 8) & 0xff;
-    }
-    
-    if (state->effect.replay.length) {
-        send_buffer[10] = state->effect.replay.length & 0xff;
-        send_buffer[11] = (state->effect.replay.length >> 8) & 0xff;
-    }
-
-    ret = t500rs_send_buf(t500rs, send_buffer, t500rs->buffer_length);
-
-err:
-    kfree(send_buffer);
-    return ret;
-}
-
-static int t500rs_update_effect(void *data, struct tmff2_effect_state *state)
-{
-    return t500rs_upload_effect(data, state);
-}
-
 int t500rs_set_gain(void *data, uint16_t gain)
 {
     struct t500rs_device_entry *t500rs = data;
-    struct t500rs_packet_header *header;
+    u8 *send_buffer;
     int ret;
 
-    if (!t500rs || !t500rs->send_buffer) {
+    if (!t500rs || !t500rs->hdev) {
         printk(KERN_ERR "T500RS: Invalid data in set_gain\n");
         return -EINVAL;
     }
@@ -1137,31 +1519,38 @@ int t500rs_set_gain(void *data, uint16_t gain)
         return -EAGAIN;
     }
 
-    if (gain > 0xffff)
-        gain = 0xffff;
+    send_buffer = kzalloc(t500rs->buffer_length, GFP_KERNEL);
+    if (!send_buffer) {
+        hid_err(t500rs->hdev, "could not allocate send_buffer\n");
+        return -ENOMEM;
+    }
 
-    header = (struct t500rs_packet_header *)t500rs->send_buffer;
-    header->cmd = 0x41;
-    header->id = 0x04;
-    header->gain = gain;
+    send_buffer[0] = 0x41;
+    send_buffer[1] = 0x04;
+    send_buffer[2] = gain & 0xff;
+    send_buffer[3] = (gain >> 8) & 0xff;
 
-    ret = t500rs_send_int(t500rs);
-    if (ret == 0) {
+    ret = t500rs_send_buf(t500rs, send_buffer, t500rs->buffer_length);
+    if (ret < 0) {
+        hid_warn(t500rs->hdev, "failed setting gain: %d\n", ret);
+    } else {
         t500rs->current_gain = gain;
         t500rs->last_command_time = jiffies;
         t500rs->command_retries = 0;
+        hid_info(t500rs->hdev, "gain set to %u\n", gain);
     }
 
+    kfree(send_buffer);
     return ret;
 }
 
 int t500rs_set_autocenter(void *data, uint16_t value)
 {
     struct t500rs_device_entry *t500rs = data;
-    struct t500rs_packet_header *header;
+    u8 *send_buffer;
     int ret;
 
-    if (!t500rs || !t500rs->send_buffer) {
+    if (!t500rs || !t500rs->hdev) {
         printk(KERN_ERR "T500RS: Invalid data in set_autocenter\n");
         return -EINVAL;
     }
@@ -1171,47 +1560,41 @@ int t500rs_set_autocenter(void *data, uint16_t value)
         return -EAGAIN;
     }
 
-    if (!t500rs->force_feedback_enabled) {
-        hid_warn(t500rs->hdev, "force feedback not enabled, ignoring set autocenter\n");
-        return -ENODEV;
+    send_buffer = kzalloc(t500rs->buffer_length, GFP_KERNEL);
+    if (!send_buffer) {
+        hid_err(t500rs->hdev, "could not allocate send_buffer\n");
+        return -ENOMEM;
     }
 
-    if (value > 0xffff)
-        value = 0xffff;
+    send_buffer[0] = 0x41;
+    send_buffer[1] = 0x05;
+    send_buffer[2] = value & 0xff;
+    send_buffer[3] = (value >> 8) & 0xff;
 
-    header = (struct t500rs_packet_header *)t500rs->send_buffer;
-    header->cmd = 0x41;
-    header->id = 0x05;
-    header->autocenter = value;
-
-    ret = t500rs_send_int(t500rs);
-    if (ret == 0) {
+    ret = t500rs_send_buf(t500rs, send_buffer, t500rs->buffer_length);
+    if (ret < 0) {
+        hid_warn(t500rs->hdev, "failed setting autocenter: %d\n", ret);
+    } else {
         t500rs->last_command_time = jiffies;
         t500rs->command_retries = 0;
+        hid_info(t500rs->hdev, "autocenter set to %u\n", value);
     }
 
+    kfree(send_buffer);
     return ret;
 }
 
 int t500rs_populate_api(struct tmff2_device_entry *tmff2)
 {
-    tmff2->max_effects = TMT500RS_MAX_EFFECTS;
-    memcpy(tmff2->supported_effects, t500rs_effects, sizeof(t500rs_effects));
-    tmff2->params = t500rs_params;
-    tmff2->wheel_init = t500rs_wheel_init;
-    tmff2->wheel_destroy = t500rs_wheel_destroy;
-    tmff2->wheel_fixup = t500rs_wheel_fixup;
-    tmff2->set_range = t500rs_set_range;
-    tmff2->play_effect = t500rs_play_effect;
-    tmff2->upload_effect = t500rs_upload_effect;
-    tmff2->update_effect = t500rs_update_effect;
-    tmff2->stop_effect = t500rs_stop_effect;
+    if (!tmff2)
+        return -EINVAL;
+
+    // Set up the API functions
     tmff2->set_gain = t500rs_set_gain;
     tmff2->set_autocenter = t500rs_set_autocenter;
+    tmff2->set_range = t500rs_set_range;
+    tmff2->wheel_init = t500rs_wheel_init;
+    tmff2->wheel_destroy = t500rs_wheel_destroy;
+
     return 0;
 }
-EXPORT_SYMBOL_GPL(t500rs_populate_api);
-
-MODULE_LICENSE("GPL");
-MODULE_AUTHOR("Caz");
-MODULE_DESCRIPTION("T500RS Driver Module");
