@@ -7,16 +7,33 @@
 - [ ] Provide seamless integration with Linux HID subsystem
 
 ## Key Features
+- [ ] Device Initialization
+  - [ ] USB Endpoint Configuration
+  - [ ] Proper Command Sequencing
+  - [ ] Error Recovery (EPIPE handling)
+  - [ ] Timing/Delay Management
+
 - [ ] Force Feedback Effects Implementation
-  - [ ] Constant Force
+  - [ ] Constant Force (8-bit, centered at 0x80)
   - [ ] Periodic Effects
-  - [ ] Spring Effect
-  - [ ] Damper Effect
-  - [ ] Friction Effect
+    - [ ] Square Wave
+    - [ ] Sine Wave
+    - [ ] Triangle Wave
+    - [ ] Sawtooth Up/Down
+  - [ ] Spring Effect (with coefficients)
+  - [ ] Damper Effect (with coefficients)
+  - [ ] Friction Effect (with coefficients)
   - [ ] Inertia Effect
+  - [ ] Envelope Support
+    - [ ] Attack/Fade Length
+    - [ ] Attack/Fade Level
+    - [ ] Duration Control
   
 - [ ] Device Support
   - [ ] TMT500RS
+    - [ ] USB Protocol Implementation
+    - [ ] Force Feedback Effects
+    - [ ] Error Handling
   - [ ] TMT300RS
   - [ ] TMT248
   - [ ] TMTSXW

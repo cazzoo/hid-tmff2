@@ -24,14 +24,19 @@
 ## Data Flow
 1. Device Connection
    - USB device detection
-   - HID protocol initialization
+   - HID protocol initialization (41004101)
+   - Device mode configuration (41000001)
    - Device-specific setup
    
 2. Force Feedback
    - Effect requests from userspace
-   - Processing in core driver
-   - Device-specific implementations
+   - Processing in core driver (hid-tmff2.c)
+   - Device-specific protocol translation
+     - Command format: 030e00XX
+     - 8-bit force value resolution
+     - 16-32ms update intervals
    - USB communication for effect execution
+   - Error handling and retries
 
 ## External Dependencies
 - Linux Kernel HID Subsystem
