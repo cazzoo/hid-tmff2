@@ -679,6 +679,11 @@ static int tmff2_probe(struct hid_device *hdev, const struct hid_device_id *id)
 			if ((ret = tsxw_populate_api(tmff2)))
 				goto wheel_err;
 			break;
+		case TMT500RS_INIT_ID:
+		case TMT500RS_PC_ID:
+			if ((ret = t500rs_populate_api(tmff2)))
+				goto wheel_err;
+			break;
 		default:
 			ret = -ENODEV;
 			goto wheel_err;
@@ -770,18 +775,23 @@ static void tmff2_remove(struct hid_device *hdev)
 }
 
 static const struct hid_device_id tmff2_devices[] = {
-	/* t300rs and variations */
-	{HID_USB_DEVICE(USB_VENDOR_ID_THRUSTMASTER, TMT300RS_PS3_NORM_ID)},
-	{HID_USB_DEVICE(USB_VENDOR_ID_THRUSTMASTER, TMT300RS_PS3_ADV_ID)},
-	{HID_USB_DEVICE(USB_VENDOR_ID_THRUSTMASTER, TMT300RS_PS4_NORM_ID)},
-	/* t248 PC*/
-	{HID_USB_DEVICE(USB_VENDOR_ID_THRUSTMASTER, TMT248_PC_ID)},
-	/* tx */
-	{HID_USB_DEVICE(USB_VENDOR_ID_THRUSTMASTER, TX_ACTIVE)},
-	/* tsxw */
-	{HID_USB_DEVICE(USB_VENDOR_ID_THRUSTMASTER, TSXW_ACTIVE)},
-
-	{}
+	{ HID_USB_DEVICE(USB_VENDOR_ID_THRUSTMASTER, TMT300RS_PS3_NORM_ID),
+		.driver_data = (kernel_ulong_t)t300rs_populate_api },
+	{ HID_USB_DEVICE(USB_VENDOR_ID_THRUSTMASTER, TMT300RS_PS3_ADV_ID),
+		.driver_data = (kernel_ulong_t)t300rs_populate_api },
+	{ HID_USB_DEVICE(USB_VENDOR_ID_THRUSTMASTER, TMT300RS_PS4_NORM_ID),
+		.driver_data = (kernel_ulong_t)t300rs_populate_api },
+	{ HID_USB_DEVICE(USB_VENDOR_ID_THRUSTMASTER, TMT248_PC_ID),
+		.driver_data = (kernel_ulong_t)t248_populate_api },
+	{ HID_USB_DEVICE(USB_VENDOR_ID_THRUSTMASTER, TX_ACTIVE),
+		.driver_data = (kernel_ulong_t)tx_populate_api },
+	{ HID_USB_DEVICE(USB_VENDOR_ID_THRUSTMASTER, TSXW_ACTIVE),
+		.driver_data = (kernel_ulong_t)tsxw_populate_api },
+	{ HID_USB_DEVICE(USB_VENDOR_ID_THRUSTMASTER, TMT500RS_INIT_ID),
+		.driver_data = (kernel_ulong_t)t500rs_populate_api },
+	{ HID_USB_DEVICE(USB_VENDOR_ID_THRUSTMASTER, TMT500RS_PC_ID),
+		.driver_data = (kernel_ulong_t)t500rs_populate_api },
+	{ }
 };
 MODULE_DEVICE_TABLE(hid, tmff2_devices);
 
