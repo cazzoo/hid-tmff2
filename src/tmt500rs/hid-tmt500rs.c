@@ -1,236 +1,385 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-#include <linux/module.h>
+/*
+ * Force feedback support for Thrustmaster T500RS
+ *
+ * Copyright (c) 2024 Your Name
+ */
+
+#define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
+
+#include <linux/types.h>
+#include <linux/kernel.h>
 #include <linux/slab.h>
+#include <linux/module.h>
+#include <linux/init.h>
 #include <linux/usb.h>
+#include <linux/usb/input.h>
 #include <linux/hid.h>
-#include <linux/fixp-arith.h>
+#include <linux/input.h>
+#include <linux/spinlock.h>
+#include <linux/completion.h>
+#include <linux/delay.h>
+#include <linux/string.h>
+#include <linux/jiffies.h>
+#include <linux/timer.h>
+#include <linux/mutex.h>
+#include <linux/bitops.h>
+#include <linux/ktime.h>
+#include <linux/hid-debug.h>
+#include <linux/device.h>
+#include <asm/unaligned.h>
 #include "../hid-tmff2.h"
 #include "hid-tmt500rs.h"
 
-/* HID descriptor based on USB captures */
-static u8 t500rs_rdesc_fixed[] = {
-    0x05, 0x01,        // Usage Page (Generic Desktop)
-    0x09, 0x04,        // Usage (Joystick)
-    0xa1, 0x01,        // Collection (Application)
-    0x09, 0x01,        // Usage (Pointer)
-    0xa1, 0x00,        // Collection (Physical)
-    0x85, 0x07,        // Report ID (7)
-    0x09, 0x30,        // Usage (X)
-    0x15, 0x00,        // Logical Minimum (0)
-    0x27, 0xff, 0xff, 0x00, 0x00,  // Logical Maximum (65535)
-    0x35, 0x00,        // Physical Minimum (0)
-    0x47, 0xff, 0xff, 0x00, 0x00,  // Physical Maximum (65535)
-    0x75, 0x10,        // Report Size (16)
-    0x95, 0x01,        // Report Count (1)
-    0x81, 0x02,        // Input (Data,Var,Abs)
-    0x09, 0x31,        // Usage (Y)
-    0x26, 0xff, 0x03,  // Logical Maximum (1023)
-    0x46, 0xff, 0x03,  // Physical Maximum (1023)
-    0x81, 0x02,        // Input (Data,Var,Abs)
-    0x09, 0x35,        // Usage (Rz)
-    0x81, 0x02,        // Input (Data,Var,Abs)
-    0x09, 0x36,        // Usage (Slider)
-    0x81, 0x02,        // Input (Data,Var,Abs)
-    0x81, 0x03,        // Input (Cnst,Var,Abs)
-    0x05, 0x09,        // Usage Page (Button)
-    0x19, 0x01,        // Usage Minimum (1)
-    0x29, 0x0d,        // Usage Maximum (13)
-    0x25, 0x01,        // Logical Maximum (1)
-    0x45, 0x01,        // Physical Maximum (1)
-    0x75, 0x01,        // Report Size (1)
-    0x95, 0x0d,        // Report Count (13)
-    0x81, 0x02,        // Input (Data,Var,Abs)
-    0x75, 0x0b,        // Report Size (11)
-    0x95, 0x01,        // Report Count (1)
-    0x81, 0x03,        // Input (Cnst,Var,Abs)
-    0x05, 0x01,        // Usage Page (Generic Desktop)
-    0x09, 0x39,        // Usage (Hat switch)
-    0x25, 0x07,        // Logical Maximum (7)
-    0x46, 0x3b, 0x01,  // Physical Maximum (315)
-    0x55, 0x00,        // Unit Exponent (0)
-    0x65, 0x14,        // Unit (Eng Rot:Angular Pos)
-    0x75, 0x04,        // Report Size (4)
-    0x81, 0x42,        // Input (Data,Var,Abs,Null)
-    0x65, 0x00,        // Unit (None)
-    0x81, 0x03,        // Input (Cnst,Var,Abs)
-    0x85, 0x0a,        // Report ID (10)
-    0x06, 0x00, 0xff,  // Usage Page (Vendor Defined)
-    0x09, 0x0a,        // Usage (10)
-    0x75, 0x08,        // Report Size (8)
-    0x95, 0x0e,        // Report Count (14)
-    0x26, 0xff, 0x00,  // Logical Maximum (255)
-    0x46, 0xff, 0x00,  // Physical Maximum (255)
-    0x91, 0x02,        // Output (Data,Var,Abs)
-    0x85, 0x02,        // Report ID (2)
-    0x09, 0x02,        // Usage (2)
-    0x81, 0x02,        // Input (Data,Var,Abs)
-    0x09, 0x14,        // Usage (20)
-    0x85, 0x14,        // Report ID (20)
-    0x81, 0x02,        // Input (Data,Var,Abs)
-    0xc0,              // End Collection
-    0xc0               // End Collection
-};
-
-/* Initial setup packets based on USB captures */
-/* Setup packets based on USB captures with improved timing and reliability */
-static const u8 setup_0[8] = { 0x42, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }; // Init command
-static const u8 setup_1[8] = { 0x0a, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }; // Get status
-static const u8 setup_2[8] = { 0x41, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }; // Mode command
-static const u8 setup_3[8] = { 0x41, 0x02, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00 }; // Pre-switch command
-static const u8 setup_4[8] = { 0x41, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00 }; // Switch command
-static const u8 setup_5[8] = { 0x41, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }; // Reset command
-static const u8 setup_6[8] = { 0x41, 0x03, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00 }; // Final mode command with mode flag
-static const u8 *const setup_arr[] = { setup_0, setup_1, setup_2, setup_3, setup_4, setup_5, setup_6 };
-static const unsigned int setup_arr_sizes[] = { 8, 8, 8, 8, 8, 8, 8 };
-
-/* Command descriptions for logging with timing info */
-static const char *const setup_descriptions[] = {
-    "Initialize device (1000ms)",           // setup_0
-    "Check device status (800ms)",          // setup_1
-    "Set initial mode (1500ms)",            // setup_2
-    "Prepare for mode switch (2000ms)",     // setup_3
-    "Execute mode switch (2500ms)",         // setup_4
-    "Reset device state (3000ms)",          // setup_5
-    "Set final mode with flag (2000ms)"     // setup_6
-};
-
-/* Command timing delays in milliseconds */
-static const int setup_delays[] = {
-    1000,  // Init command
-    800,   // Get status
-    1500,  // Mode command
-    2000,  // Pre-switch command
-    2500,  // Switch command
-    3000,  // Reset command
-    2000   // Final mode command
-};
-
-/* Command timing requirements in milliseconds */
-static const struct {
-    int pre_delay;    // Delay before command
-    int post_delay;   // Delay after command
-    int retry_delay;  // Additional delay between retries
-    int verify_delay; // Delay before verification
-} setup_timings[] = {
-    { 1000, 500,  200, 100 },  // Init command
-    { 800,  300,  200, 200 },  // Get status
-    { 1500, 800,  500, 300 },  // Mode command
-    { 2000, 1000, 800, 500 },  // Pre-switch command
-    { 2500, 1500, 1000, 800 }, // Switch command
-    { 3000, 2000, 1500, 1000 },// Reset command
-    { 2000, 1500, 1000, 800 }  // Final mode command
-};
-
-/* Command retry limits */
-static const struct {
-    int command_retries;  // Max retries for command send
-    int verify_retries;   // Max retries for verification
-    int reset_retries;    // Max retries for device reset
-} setup_retry_limits[] = {
-    { 2, 2, 1 },  // Init command
-    { 3, 3, 2 },  // Get status
-    { 3, 3, 2 },  // Mode command
-    { 4, 4, 3 },  // Pre-switch command
-    { 4, 4, 3 },  // Switch command
-    { 5, 5, 3 },  // Reset command
-    { 4, 4, 3 }   // Final mode command
-};
-
-/* USB endpoint addresses from descriptor */
+/* USB endpoints */
 #define T500RS_ENDPOINT_IN   0x82
 #define T500RS_ENDPOINT_OUT  0x01
 
-static const unsigned long t500rs_params =
-    PARAM_SPRING_LEVEL
-    | PARAM_DAMPER_LEVEL
-    | PARAM_FRICTION_LEVEL
-    | PARAM_RANGE
-    | PARAM_GAIN;
-
-static const signed short t500rs_effects[] = {
-    FF_CONSTANT,
-    FF_SPRING,
-    FF_DAMPER,
-    FF_FRICTION,
-    FF_PERIODIC,
-    FF_GAIN,
-    -1
-};
-
 /* Supported effects */
-const signed short t500rs_supported_effects[FF_CNT] = {
-    [FF_CONSTANT] = 0x4000,
-    [FF_SPRING] = 0x4001,
-    [FF_DAMPER] = 0x4002,
-    [FF_FRICTION] = 0x4003,
-    [FF_SINE] = 0x4004,
-    [FF_SAW_UP] = 0x4005,
-    [FF_SAW_DOWN] = 0x4006,
-    [FF_CUSTOM] = 0x4007,
-    [FF_GAIN] = 0x4008,
-    [FF_AUTOCENTER] = 0x4009,
+static const signed short t500rs_supported_effects[] = {
+    FF_CONSTANT,
+    -1  /* Terminator */
 };
 
-/* Supported parameters */
-const unsigned long t500rs_supported_parameters[FF_CNT] = {
-    [FF_CONSTANT] = PARAM_GAIN,
-    [FF_SPRING] = PARAM_SPRING_LEVEL | PARAM_GAIN,
-    [FF_DAMPER] = PARAM_DAMPER_LEVEL | PARAM_GAIN,
-    [FF_FRICTION] = PARAM_FRICTION_LEVEL | PARAM_GAIN,
-    [FF_SINE] = PARAM_GAIN,
-    [FF_SAW_UP] = PARAM_GAIN,
-    [FF_SAW_DOWN] = PARAM_GAIN,
-    [FF_CUSTOM] = PARAM_GAIN,
-    [FF_GAIN] = 0,
-    [FF_AUTOCENTER] = 0,
+/* Device initialization data */
+struct setup_command {
+    u8 cmd;
+    u8 id;
+    u8 data[6];
 };
 
-#define TMT500RS_MAX_EFFECTS 16
+struct setup_timing {
+    u16 pre_delay;
+    u16 post_delay;
+    u16 retry_delay;
+    u16 verify_delay;
+};
+
+struct setup_retry_limit {
+    u8 command_retries;
+    u8 verify_retries;
+};
+
+static const u8 setup_arr[][8] = {
+    {0x42, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},  // Init command
+    {0x41, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},  // Mode command
+    {0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},  // Open command
+    {0x08, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},  // Enable interrupts
+    {0x08, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},  // Effect control
+    {0x08, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},  // Upload effect
+    {0x41, 0x04, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00},  // Set gain
+};
+
+static const size_t setup_arr_sizes[] = {8, 8, 8, 8, 8, 8, 8};
+
+static const char *setup_descriptions[] = {
+    "Init command",
+    "Mode command",
+    "Open command",
+    "Enable interrupts",
+    "Effect control",
+    "Upload effect",
+    "Set gain"
+};
+
+static const u16 setup_delays[] = {
+    1000,  // Init command
+    500,   // Mode command
+    200,   // Open command
+    200,   // Enable interrupts
+    200,   // Effect control
+    200,   // Upload effect
+    200    // Set gain
+};
+
+static const struct setup_timing setup_timings[] = {
+    {1000, 500, 200, 300},  // Init command
+    {500,  300, 200, 300},  // Mode command
+    {200,  200, 200, 300},  // Open command
+    {200,  200, 200, 300},  // Enable interrupts
+    {200,  200, 200, 300},  // Effect control
+    {200,  200, 200, 300},  // Upload effect
+    {200,  200, 200, 300}   // Set gain
+};
+
+static const struct setup_retry_limit setup_retry_limits[] = {
+    {3, 2},  // Init command
+    {3, 2},  // Mode command
+    {3, 2},  // Open command
+    {3, 2},  // Enable interrupts
+    {3, 2},  // Effect control
+    {3, 2},  // Upload effect
+    {3, 2}   // Set gain
+};
+
+static int t500rs_send_int(struct t500rs_device_entry *t500rs)
+{
+	memset(t500rs->send_buffer + 2, 0, t500rs->buffer_length - 2);
+	return t500rs_send_buf(t500rs, t500rs->send_buffer + 2, t500rs->buffer_length);
+}
 
 /* Helper function to send data using the report */
-static int t500rs_send_int(struct t500rs_device_entry *t500rs)
+static int t500rs_send_effect(struct t500rs_device_entry *t500rs, u8 *data, size_t len)
 {
     int ret;
 
-    if (!t500rs || !t500rs->send_buffer) {
-        t500rs_err(t500rs, "Invalid data in send_int\n");
+    if (!t500rs || !data)
+        return -EINVAL;
+
+    if (t500rs->state != T500RS_STATE_READY) {
+        t500rs_warn(t500rs, "device not ready, ignoring effect\n");
+        return -EAGAIN;
+    }
+
+    ret = t500rs_send_buf(t500rs, data, len);
+    if (ret < 0) {
+        t500rs_err(t500rs, "failed to send effect: %d\n", ret);
+        return ret;
+    }
+
+    return 0;
+}
+
+static int t500rs_upload_constant_force(struct t500rs_device_entry *t500rs,
+                                      struct tmff2_effect_state *effect)
+{
+    u8 *send_buffer;
+    int ret;
+    s16 level;
+    u8 scaled_level;
+    u16 attack_length, fade_length;
+    u16 attack_level, fade_level;
+    bool has_envelope = false;
+
+    if (!t500rs || !effect) {
+        t500rs_err(t500rs, "Invalid parameters in upload_constant_force\n");
         return -EINVAL;
     }
 
-    if (t500rs->state == T500RS_STATE_ERROR) {
-        t500rs_err(t500rs, "Cannot send command in error state\n");
-        return -ENODEV;
+    if (t500rs->state != T500RS_STATE_READY) {
+        t500rs_warn(t500rs, "Device not ready for constant force upload\n");
+        return -EAGAIN;
     }
 
-    t500rs_dbg(t500rs, "Sending command: %s (0x%02x, 0x%02x)\n",
-               t500rs_get_command_description(t500rs->send_buffer[0], t500rs->send_buffer[1]),
-               t500rs->send_buffer[0], t500rs->send_buffer[1]);
+    send_buffer = kzalloc(t500rs->buffer_length, GFP_KERNEL);
+    if (!send_buffer) {
+        t500rs_err(t500rs, "Failed to allocate constant force buffer\n");
+        return -ENOMEM;
+    }
 
-    // Track command attempt
-    t500rs->last_command_time = jiffies;
+    // Check for envelope
+    if (effect->effect.u.constant.envelope.attack_length || 
+        effect->effect.u.constant.envelope.fade_length) {
+        has_envelope = true;
+        attack_length = effect->effect.u.constant.envelope.attack_length;
+        fade_length = effect->effect.u.constant.envelope.fade_length;
+        attack_level = effect->effect.u.constant.envelope.attack_level;
+        fade_level = effect->effect.u.constant.envelope.fade_level;
+        
+        t500rs_dbg(t500rs, "Constant force envelope: attack=%u/%u fade=%u/%u\n",
+                  attack_length, attack_level, fade_length, fade_level);
+    }
 
-    ret = t500rs_send_buf(t500rs, t500rs->send_buffer, t500rs->buffer_length);
-    if (ret < 0) {
-        if (ret == -ETIMEDOUT) {
-            t500rs->command_retries++;
-            if (t500rs->command_retries >= T500RS_MAX_RETRIES * 2) {
-                t500rs_err(t500rs, "Too many timeouts (%d), marking device as error\n",
-                          t500rs->command_retries);
-                t500rs_set_state(t500rs, T500RS_STATE_ERROR);
-            } else {
-                t500rs_dbg(t500rs, "Command timeout (attempt %d/%d)\n",
-                          t500rs->command_retries, T500RS_MAX_RETRIES * 2);
-            }
-        } else {
-            t500rs_err(t500rs, "Command failed with error: %d\n", ret);
-            t500rs_set_state(t500rs, T500RS_STATE_ERROR);
+    // Map level from -32767...32767 to 0...255 with improved precision
+    level = effect->effect.u.constant.level;
+    scaled_level = (u8)(((s32)(level + 32768) * 255) / 65536);
+    
+    t500rs_dbg(t500rs, "Constant force level: %d -> %u\n", level, scaled_level);
+
+    // Upload effect parameters with retries
+    int retries = 0;
+    bool upload_success = false;
+    while (retries < T500RS_MAX_RETRIES && !upload_success) {
+        // Clear any previous data
+        memset(send_buffer, 0, t500rs->buffer_length);
+
+        // Upload command
+        send_buffer[0] = 0x02;  // Upload command
+        send_buffer[1] = 0x1c;  // Constant force subtype
+        send_buffer[2] = effect->effect.id & 0xFF;  // Effect ID
+        send_buffer[3] = has_envelope ? 0x01 : 0x00;  // Envelope flag
+        
+        ret = t500rs_send_effect(t500rs, send_buffer, t500rs->buffer_length);
+        if (ret >= 0) {
+            upload_success = true;
+            break;
         }
-    } else {
-        t500rs_dbg(t500rs, "Command sent successfully\n");
-        t500rs->command_retries = 0;  // Reset retry counter on success
+
+        if (ret == -EPIPE || ret == -EPROTO) {
+            t500rs_warn(t500rs, "Upload retry %d after error: %d\n", 
+                       retries + 1, ret);
+            msleep(50 * (retries + 1));  // Progressive delay
+            retries++;
+        } else {
+            t500rs_err(t500rs, "Critical error in upload: %d\n", ret);
+            goto err_free;
+        }
     }
 
-    memset(t500rs->send_buffer, 0, t500rs->buffer_length);
+    if (!upload_success) {
+        t500rs_err(t500rs, "Failed to upload effect after retries\n");
+        ret = -ETIMEDOUT;
+        goto err_free;
+    }
+
+    // Wait before sending force level
+    msleep(50);
+
+    // Set force level with envelope if present
+    memset(send_buffer, 0, t500rs->buffer_length);
+    send_buffer[0] = 0x03;  // Modify command
+    send_buffer[1] = 0x0e;  // Force level subtype
+    send_buffer[2] = effect->effect.id & 0xFF;  // Effect ID
+    send_buffer[3] = scaled_level;  // Force level
+
+    if (has_envelope) {
+        // Pack envelope parameters
+        send_buffer[4] = attack_length & 0xFF;
+        send_buffer[5] = (attack_length >> 8) & 0xFF;
+        send_buffer[6] = attack_level & 0xFF;
+        send_buffer[7] = (attack_level >> 8) & 0xFF;
+        send_buffer[8] = fade_length & 0xFF;
+        send_buffer[9] = (fade_length >> 8) & 0xFF;
+        send_buffer[10] = fade_level & 0xFF;
+        send_buffer[11] = (fade_level >> 8) & 0xFF;
+    }
+
+    ret = t500rs_send_effect(t500rs, send_buffer, t500rs->buffer_length);
+    if (ret < 0) {
+        t500rs_err(t500rs, "Failed to set force level: %d\n", ret);
+        goto err_free;
+    }
+
+    // Wait before setting duration
+    msleep(50);
+
+    // Set duration with improved timing handling
+    memset(send_buffer, 0, t500rs->buffer_length);
+    send_buffer[0] = 0x01;  // Duration command
+    send_buffer[1] = 0x00;  // Reserved
+    send_buffer[2] = effect->effect.id & 0xFF;  // Effect ID
+    send_buffer[3] = 0x40;  // Duration flag
+
+    // Handle infinite duration
+    if (effect->effect.replay.length == 0) {
+        send_buffer[4] = 0xFF;
+        send_buffer[5] = 0xFF;
+        t500rs_dbg(t500rs, "Setting infinite duration\n");
+    } else {
+        // Duration in milliseconds (little endian)
+        send_buffer[4] = effect->effect.replay.length & 0xFF;
+        send_buffer[5] = (effect->effect.replay.length >> 8) & 0xFF;
+        t500rs_dbg(t500rs, "Setting duration: %u ms\n", effect->effect.replay.length);
+    }
+
+    send_buffer[9] = 0x0e;   // Effect type
+    send_buffer[11] = 0x1c;  // Effect subtype
+
+    ret = t500rs_send_effect(t500rs, send_buffer, t500rs->buffer_length);
+    if (ret < 0) {
+        t500rs_err(t500rs, "Failed to set duration: %d\n", ret);
+    } else {
+        t500rs_dbg(t500rs, "Successfully uploaded constant force effect\n");
+    }
+
+err_free:
+    kfree(send_buffer);
+    return ret;
+}
+
+static int t500rs_play_constant_force(struct t500rs_device_entry *t500rs,
+                                    struct tmff2_effect_state *effect,
+                                    int value)
+{
+    u8 *send_buffer;
+    int ret;
+    bool play_success = false;
+    int retries = 0;
+
+    if (!t500rs || !effect) {
+        t500rs_err(t500rs, "Invalid parameters in play_constant_force\n");
+        return -EINVAL;
+    }
+
+    if (t500rs->state != T500RS_STATE_READY) {
+        t500rs_warn(t500rs, "Device not ready for constant force playback\n");
+        return -EAGAIN;
+    }
+
+    if (effect->effect.id >= TMT500RS_MAX_EFFECTS) {
+        t500rs_err(t500rs, "Invalid effect ID: %d\n", effect->effect.id);
+        return -EINVAL;
+    }
+
+    send_buffer = kzalloc(t500rs->buffer_length, GFP_KERNEL);
+    if (!send_buffer) {
+        t500rs_err(t500rs, "Failed to allocate play buffer\n");
+        return -ENOMEM;
+    }
+
+    t500rs_dbg(t500rs, "%s constant force effect %d\n",
+               value ? "Starting" : "Stopping", effect->effect.id);
+
+    // Try to play/stop effect with retries
+    while (retries < T500RS_MAX_RETRIES && !play_success) {
+        memset(send_buffer, 0, t500rs->buffer_length);
+
+        if (value) {
+            // Start effect with proper ID
+            send_buffer[0] = 0x41;  // Play command
+            send_buffer[1] = 0x00;  // Reserved
+            send_buffer[2] = 0x41;  // Play flag
+            send_buffer[3] = 0x01;  // Effect type
+            send_buffer[4] = effect->effect.id & 0xFF;  // Effect ID
+            send_buffer[5] = 0x01;  // Start flag
+        } else {
+            // Stop effect with proper ID
+            send_buffer[0] = 0x41;  // Play command
+            send_buffer[1] = 0x00;  // Reserved
+            send_buffer[2] = 0x00;  // Stop flag
+            send_buffer[3] = 0x01;  // Effect type
+            send_buffer[4] = effect->effect.id & 0xFF;  // Effect ID
+            send_buffer[5] = 0x00;  // Stop flag
+        }
+
+        // Ensure minimum delay between commands
+        if (time_before(jiffies, t500rs->last_command_time + msecs_to_jiffies(50))) {
+            msleep(jiffies_to_msecs(t500rs->last_command_time + 
+                   msecs_to_jiffies(50) - jiffies));
+        }
+
+        ret = t500rs_send_effect(t500rs, send_buffer, t500rs->buffer_length);
+        if (ret >= 0) {
+            play_success = true;
+            t500rs_dbg(t500rs, "Successfully %s effect %d\n",
+                      value ? "started" : "stopped", effect->effect.id);
+
+            // Update last command time
+            t500rs->last_command_time = jiffies;
+            break;
+        }
+
+        if (ret == -EPIPE || ret == -EPROTO) {
+            t500rs_warn(t500rs, "Play retry %d after error: %d\n",
+                       retries + 1, ret);
+            msleep(50 * (retries + 1));  // Progressive delay
+            retries++;
+        } else {
+            t500rs_err(t500rs, "Critical error in play: %d\n", ret);
+            goto err_free;
+        }
+    }
+
+    if (!play_success) {
+        t500rs_err(t500rs, "Failed to play effect after retries\n");
+        ret = -ETIMEDOUT;
+    }
+
+    kfree(send_buffer);
+    return ret;
+
+err_free:
+    kfree(send_buffer);
     return ret;
 }
 
@@ -1584,10 +1733,309 @@ int t500rs_set_autocenter(void *data, uint16_t value)
     return ret;
 }
 
+/* Force feedback effect implementation */
+static int t500rs_play_effect2(struct t500rs_device_entry *t500rs, u8 *data, size_t len)
+{
+    int ret;
+
+    if (!t500rs || !data)
+        return -EINVAL;
+
+    if (t500rs->state != T500RS_STATE_READY) {
+        t500rs_warn(t500rs, "device not ready, ignoring effect\n");
+        return -EAGAIN;
+    }
+
+    ret = t500rs_send_buf(t500rs, data, len);
+    if (ret < 0) {
+        t500rs_err(t500rs, "failed to send effect: %d\n", ret);
+        return ret;
+    }
+
+    return 0;
+}
+
+static int t500rs_upload_constant_force2(struct t500rs_device_entry *t500rs,
+                                      struct tmff2_effect_state *effect)
+{
+    u8 *send_buffer;
+    int ret;
+    s16 level;
+    u8 scaled_level;
+    u16 attack_length, fade_length;
+    u16 attack_level, fade_level;
+    bool has_envelope = false;
+
+    if (!t500rs || !effect) {
+        t500rs_err(t500rs, "Invalid parameters in upload_constant_force\n");
+        return -EINVAL;
+    }
+
+    if (t500rs->state != T500RS_STATE_READY) {
+        t500rs_warn(t500rs, "Device not ready for constant force upload\n");
+        return -EAGAIN;
+    }
+
+    send_buffer = kzalloc(t500rs->buffer_length, GFP_KERNEL);
+    if (!send_buffer) {
+        t500rs_err(t500rs, "Failed to allocate constant force buffer\n");
+        return -ENOMEM;
+    }
+
+    // Check for envelope
+    if (effect->effect.u.constant.envelope.attack_length || 
+        effect->effect.u.constant.envelope.fade_length) {
+        has_envelope = true;
+        attack_length = effect->effect.u.constant.envelope.attack_length;
+        fade_length = effect->effect.u.constant.envelope.fade_length;
+        attack_level = effect->effect.u.constant.envelope.attack_level;
+        fade_level = effect->effect.u.constant.envelope.fade_level;
+        
+        t500rs_dbg(t500rs, "Constant force envelope: attack=%u/%u fade=%u/%u\n",
+                  attack_length, attack_level, fade_length, fade_level);
+    }
+
+    // Map level from -32767...32767 to 0...255 with improved precision
+    level = effect->effect.u.constant.level;
+    scaled_level = (u8)(((s32)(level + 32768) * 255) / 65536);
+    
+    t500rs_dbg(t500rs, "Constant force level: %d -> %u\n", level, scaled_level);
+
+    // Upload effect parameters with retries
+    int retries = 0;
+    bool upload_success = false;
+    while (retries < T500RS_MAX_RETRIES && !upload_success) {
+        // Clear any previous data
+        memset(send_buffer, 0, t500rs->buffer_length);
+
+        // Upload command
+        send_buffer[0] = 0x02;  // Upload command
+        send_buffer[1] = 0x1c;  // Constant force subtype
+        send_buffer[2] = effect->effect.id & 0xFF;  // Effect ID
+        send_buffer[3] = has_envelope ? 0x01 : 0x00;  // Envelope flag
+        
+        ret = t500rs_play_effect2(t500rs, send_buffer, t500rs->buffer_length);
+        if (ret >= 0) {
+            upload_success = true;
+            break;
+        }
+
+        if (ret == -EPIPE || ret == -EPROTO) {
+            t500rs_warn(t500rs, "Upload retry %d after error: %d\n", 
+                       retries + 1, ret);
+            msleep(50 * (retries + 1));  // Progressive delay
+            retries++;
+        } else {
+            t500rs_err(t500rs, "Critical error in upload: %d\n", ret);
+            goto err_free;
+        }
+    }
+
+    if (!upload_success) {
+        t500rs_err(t500rs, "Failed to upload effect after retries\n");
+        ret = -ETIMEDOUT;
+        goto err_free;
+    }
+
+    // Wait before sending force level
+    msleep(50);
+
+    // Set force level with envelope if present
+    memset(send_buffer, 0, t500rs->buffer_length);
+    send_buffer[0] = 0x03;  // Modify command
+    send_buffer[1] = 0x0e;  // Force level subtype
+    send_buffer[2] = effect->effect.id & 0xFF;  // Effect ID
+    send_buffer[3] = scaled_level;  // Force level
+
+    if (has_envelope) {
+        // Pack envelope parameters
+        send_buffer[4] = attack_length & 0xFF;
+        send_buffer[5] = (attack_length >> 8) & 0xFF;
+        send_buffer[6] = attack_level & 0xFF;
+        send_buffer[7] = (attack_level >> 8) & 0xFF;
+        send_buffer[8] = fade_length & 0xFF;
+        send_buffer[9] = (fade_length >> 8) & 0xFF;
+        send_buffer[10] = fade_level & 0xFF;
+        send_buffer[11] = (fade_level >> 8) & 0xFF;
+    }
+
+    ret = t500rs_play_effect2(t500rs, send_buffer, t500rs->buffer_length);
+    if (ret < 0) {
+        t500rs_err(t500rs, "Failed to set force level: %d\n", ret);
+        goto err_free;
+    }
+
+    // Wait before setting duration
+    msleep(50);
+
+    // Set duration with improved timing handling
+    memset(send_buffer, 0, t500rs->buffer_length);
+    send_buffer[0] = 0x01;  // Duration command
+    send_buffer[1] = 0x00;  // Reserved
+    send_buffer[2] = effect->effect.id & 0xFF;  // Effect ID
+    send_buffer[3] = 0x40;  // Duration flag
+
+    // Handle infinite duration
+    if (effect->effect.replay.length == 0) {
+        send_buffer[4] = 0xFF;
+        send_buffer[5] = 0xFF;
+        t500rs_dbg(t500rs, "Setting infinite duration\n");
+    } else {
+        // Duration in milliseconds (little endian)
+        send_buffer[4] = effect->effect.replay.length & 0xFF;
+        send_buffer[5] = (effect->effect.replay.length >> 8) & 0xFF;
+        t500rs_dbg(t500rs, "Setting duration: %u ms\n", effect->effect.replay.length);
+    }
+
+    send_buffer[9] = 0x0e;   // Effect type
+    send_buffer[11] = 0x1c;  // Effect subtype
+
+    ret = t500rs_play_effect2(t500rs, send_buffer, t500rs->buffer_length);
+    if (ret < 0) {
+        t500rs_err(t500rs, "Failed to set duration: %d\n", ret);
+    } else {
+        t500rs_dbg(t500rs, "Successfully uploaded constant force effect\n");
+    }
+
+err_free:
+    kfree(send_buffer);
+    return ret;
+}
+
+static int t500rs_play_constant_force2(struct t500rs_device_entry *t500rs,
+                                    struct tmff2_effect_state *effect, int value)
+{
+    u8 *send_buffer;
+    int ret;
+    bool play_success = false;
+    int retries = 0;
+
+    if (!t500rs || !effect) {
+        t500rs_err(t500rs, "Invalid parameters in play_constant_force\n");
+        return -EINVAL;
+    }
+
+    if (t500rs->state != T500RS_STATE_READY) {
+        t500rs_warn(t500rs, "Device not ready for constant force playback\n");
+        return -EAGAIN;
+    }
+
+    if (effect->effect.id >= TMT500RS_MAX_EFFECTS) {
+        t500rs_err(t500rs, "Invalid effect ID: %d\n", effect->effect.id);
+        return -EINVAL;
+    }
+
+    send_buffer = kzalloc(t500rs->buffer_length, GFP_KERNEL);
+    if (!send_buffer) {
+        t500rs_err(t500rs, "Failed to allocate play buffer\n");
+        return -ENOMEM;
+    }
+
+    t500rs_dbg(t500rs, "%s constant force effect %d\n",
+               value ? "Starting" : "Stopping", effect->effect.id);
+
+    // Try to play/stop effect with retries
+    while (retries < T500RS_MAX_RETRIES && !play_success) {
+        memset(send_buffer, 0, t500rs->buffer_length);
+
+        if (value) {
+            // Start effect with proper ID
+            send_buffer[0] = 0x41;  // Play command
+            send_buffer[1] = 0x00;  // Reserved
+            send_buffer[2] = 0x41;  // Play flag
+            send_buffer[3] = 0x01;  // Effect type
+            send_buffer[4] = effect->effect.id & 0xFF;  // Effect ID
+            send_buffer[5] = 0x01;  // Start flag
+        } else {
+            // Stop effect with proper ID
+            send_buffer[0] = 0x41;  // Play command
+            send_buffer[1] = 0x00;  // Reserved
+            send_buffer[2] = 0x00;  // Stop flag
+            send_buffer[3] = 0x01;  // Effect type
+            send_buffer[4] = effect->effect.id & 0xFF;  // Effect ID
+            send_buffer[5] = 0x00;  // Stop flag
+        }
+
+        // Ensure minimum delay between commands
+        if (time_before(jiffies, t500rs->last_command_time + msecs_to_jiffies(50))) {
+            msleep(jiffies_to_msecs(t500rs->last_command_time + 
+                   msecs_to_jiffies(50) - jiffies));
+        }
+
+        ret = t500rs_play_effect2(t500rs, send_buffer, t500rs->buffer_length);
+        if (ret >= 0) {
+            play_success = true;
+            t500rs_dbg(t500rs, "Successfully %s effect %d\n",
+                      value ? "started" : "stopped", effect->effect.id);
+
+            // Update last command time
+            t500rs->last_command_time = jiffies;
+            break;
+        }
+
+        if (ret == -EPIPE || ret == -EPROTO) {
+            t500rs_warn(t500rs, "Play retry %d after error: %d\n",
+                       retries + 1, ret);
+            msleep(50 * (retries + 1));  // Progressive delay
+            retries++;
+        } else {
+            t500rs_err(t500rs, "Critical error in play: %d\n", ret);
+            goto err_free;
+        }
+    }
+
+    if (!play_success) {
+        t500rs_err(t500rs, "Failed to play effect after retries\n");
+        ret = -ETIMEDOUT;
+    }
+
+err_free:
+    kfree(send_buffer);
+    return ret;
+}
+
+// Effect handlers
+static int t500rs_upload_effect(void *data, struct tmff2_effect_state *effect)
+{
+    struct t500rs_device_entry *t500rs = data;
+
+    if (!t500rs || !effect)
+        return -EINVAL;
+
+    switch (effect->effect.type) {
+    case FF_CONSTANT:
+        return t500rs_upload_constant_force(t500rs, effect);
+    default:
+        t500rs_warn(t500rs, "Unsupported effect type: %d\n", effect->effect.type);
+        return -EINVAL;
+    }
+}
+
+static int t500rs_play_effect(void *data, struct tmff2_effect_state *effect)
+{
+    struct t500rs_device_entry *t500rs = data;
+
+    if (!t500rs || !effect)
+        return -EINVAL;
+
+    switch (effect->effect.type) {
+    case FF_CONSTANT:
+        return t500rs_play_constant_force(t500rs, effect, effect->count);
+    default:
+        t500rs_warn(t500rs, "Unsupported effect type: %d\n", effect->effect.type);
+        return -EINVAL;
+    }
+}
+
 int t500rs_populate_api(struct tmff2_device_entry *tmff2)
 {
     if (!tmff2)
         return -EINVAL;
+
+	tmff2->play_effect = t300rs_play_effect;
+	tmff2->upload_effect = t300rs_upload_effect;
+	tmff2->update_effect = t300rs_update_effect;
+	tmff2->stop_effect = t300rs_stop_effect;
 
     // Set up the API functions
     tmff2->set_gain = t500rs_set_gain;
@@ -1595,6 +2043,7 @@ int t500rs_populate_api(struct tmff2_device_entry *tmff2)
     tmff2->set_range = t500rs_set_range;
     tmff2->wheel_init = t500rs_wheel_init;
     tmff2->wheel_destroy = t500rs_wheel_destroy;
+    tmff2->upload_effect = t500rs_upload_effect;
 
     return 0;
 }
