@@ -13,8 +13,16 @@
 
 ## Description
 
-A Linux kernel module for Thrustmaster T300RS, T248, and (experimental support)
-TX and TS-XV wheels.
+A Linux kernel module for Thrustmaster wheels with comprehensive force feedback support.
+
+### Supported Wheels
+- T300RS (fully supported)
+- T248 (fully supported)
+- T500RS (experimental support, see [T500RS Module](src/tmt500rs/README.md))
+- TX (experimental support)
+- T128 (experimental support)
+- T-GT II (experimental support)
+- TS-XW (experimental support)
 
 I've been working on enhancing the real-time updating of effects, and although
 it's not flawless yet, the overall experience is gradually improving. There are

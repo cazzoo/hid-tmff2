@@ -11,6 +11,10 @@
 ### Device-Specific Drivers
 - Each device has its own implementation directory:
   - src/tmt500rs/ - TMT500RS implementation
+    - hid-tmt500rs.h - Core definitions and structures
+    - hid-tmt500rs-init.c - Device initialization and cleanup
+    - hid-tmt500rs-ff.c - Force feedback implementation
+    - hid-tmt500rs-utils.h - Utility functions and command validation
   - src/tmt300rs/ - TMT300RS implementation
   - src/tmt248/ - TMT248 implementation
   - src/tmtsxw/ - TMTSXW implementation
@@ -24,17 +28,14 @@
 ## Data Flow
 1. Device Connection
    - USB device detection
-   - HID protocol initialization (41004101)
-   - Device mode configuration (41000001)
+   - HID protocol initialization
+   - Device mode configuration
    - Device-specific setup
    
 2. Force Feedback
    - Effect requests from userspace
    - Processing in core driver (hid-tmff2.c)
    - Device-specific protocol translation
-     - Command format: 030e00XX
-     - 8-bit force value resolution
-     - 16-32ms update intervals
    - USB communication for effect execution
    - Error handling and retries
 
@@ -45,13 +46,21 @@
 - DKMS (for distribution)
 
 ## Recent Significant Changes
-- Initial project structure setup
-- Basic driver framework implementation
-- Device detection system
+- Implemented TMT500RS module structure
+- Added command validation system
+- Integrated force feedback handlers
+- Fixed build issues and warnings
+- Set up error handling and logging
 
 ## Documentation Structure
 - docs/ - Main project documentation
 - source/ - USB captures and specifications
+  - device_init.pcapng - Device initialization sequence
+  - t500rs_constant_force.pcapng - Force feedback commands
+  - combined_effects_t500.txt - Combined effects analysis
+  - INIT_SEQUENCES_TRACKING.md - Initialization tracking
+  - constant_force_detailed.txt - Detailed force analysis
+  - GET_DESCRIPTIOR_HEX_DUMPS - USB descriptor data
 - cline_docs/ - Development tracking and planning
 
 ## User Feedback Integration

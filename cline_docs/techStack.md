@@ -42,20 +42,19 @@
     - Attack/Fade Level
     - Duration Control
 
-- Effect Types:
-  - Constant Force (8-bit resolution)
-  - Spring Effect (with coefficients)
-  - Damper Effect (with coefficients)
-  - Friction Effect (with coefficients)
-  - Inertia Effect
-  - Periodic Effects:
-    - Square Wave
-    - Sine Wave
-    - Triangle Wave
-    - Sawtooth Up/Down
-
 ### Device-Specific Implementations
 - TMT500RS implementation (src/tmt500rs/)
+  - Core structures and definitions (hid-tmt500rs.h)
+  - Device initialization and cleanup (hid-tmt500rs-init.c)
+  - Force feedback implementation (hid-tmt500rs-ff.c)
+  - Utility functions and command validation (hid-tmt500rs-utils.h)
+  - Supported Effects:
+    - Constant Force
+    - Spring Effect
+    - Damper Effect
+    - Friction Effect
+    - Autocenter
+    - Gain Control
 - TMT300RS implementation (src/tmt300rs/)
 - TMT248 implementation (src/tmt248/)
 - TMTSXW implementation (src/tmtsxw/)
@@ -67,9 +66,19 @@
 - Modular compilation support
 
 ### Testing Infrastructure
-- USB capture analysis
+- USB Protocol Analysis:
+  - Wireshark for pcapng file analysis
+  - tshark for command-line capture processing
+  - Custom scripts for protocol verification
+  - Capture comparison tools
+- USB capture analysis and verification:
+  - Device initialization sequence
+  - Force feedback command structure
+  - Combined effects behavior
+  - Protocol compliance checking
 - Force feedback effect testing
 - Device initialization verification
+- Error handling validation
 
 ## Dependencies
 - Linux Kernel Headers

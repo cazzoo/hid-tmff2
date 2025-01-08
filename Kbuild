@@ -5,4 +5,7 @@ hid-tmff-new-y := \
 		src/tmt248/hid-tmt248.o \
 		src/tmtx/hid-tmtx.o \
 		src/tmtsxw/hid-tmtsxw.o \
-		src/tmt500rs/hid-tmt500rs.o
+		src/tmt500rs/hid-tmt500rs.o \
+		src/tmt500rs/hid-tmt500rs-usb.o \
+		src/tmt500rs/hid-tmt500rs-ff.o \
+		src/tmt500rs/hid-tmt500rs-init.o

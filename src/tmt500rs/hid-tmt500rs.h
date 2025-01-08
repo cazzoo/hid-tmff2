@@ -1,67 +1,18 @@
 #ifndef __HID_TMT500RS_H
 #define __HID_TMT500RS_H
 
+#include <linux/hid.h>
+#include <linux/input.h>
+#include <linux/usb.h>
+#include <linux/spinlock.h>
+#include <linux/completion.h>
 #include "../hid-tmff2.h"
 
-/* Buffer and effect limits */
-#define TMT500RS_BUFFER_LENGTH 64
-#define TMT500RS_MAX_EFFECTS 16
-#define T500RS_MAX_RETRIES 3
+#define T500RS_REPORT_LENGTH 64
+#define T500RS_FF_LENGTH 4
+#define T500RS_MAX_EFFECTS 16
 
-/* Logging macros */
-#define t500rs_err(t500rs, fmt, args...) \
-    hid_err((t500rs)->hdev, "T500RS Error: " fmt, ##args)
-
-#define t500rs_info(t500rs, fmt, args...) \
-    hid_info((t500rs)->hdev, "T500RS: " fmt, ##args)
-
-#define t500rs_dbg(t500rs, fmt, args...) \
-    hid_dbg((t500rs)->hdev, "T500RS Debug: " fmt, ##args)
-
-#define t500rs_warn(t500rs, fmt, args...) \
-    hid_warn((t500rs)->hdev, "T500RS Warning: " fmt, ##args)
-
-/* Command validation and tracking */
-struct t500rs_command_info {
-    u8 cmd;
-    u8 id;
-    const char *description;
-    size_t min_length;
-    size_t max_length;
-    bool requires_response;
-};
-
-/* Error codes */
-#define T500RS_SUCCESS          0
-#define T500RS_ERROR_TIMEOUT   -1
-#define T500RS_ERROR_PROTO     -2
-#define T500RS_ERROR_STALL     -3
-#define T500RS_ERROR_DISCONNECT -4
-#define T500RS_ERROR_INVALID   -5
-
-static const struct t500rs_command_info t500rs_commands[] = {
-    { 0x41, 0x03, "Mode command",         8, 8, true  },
-    { 0x42, 0x01, "Init command",         8, 8, true  },
-    { 0x08, 0x00, "Open command",         8, 8, false },
-    { 0x08, 0x01, "Enable interrupts",    8, 8, false },
-    { 0x08, 0x03, "Effect control",       8, 8, false },
-    { 0x08, 0x04, "Upload effect",        8, 8, false },
-    { 0x08, 0x11, "Set range",           8, 8, false },
-    { 0x41, 0x04, "Set gain",            8, 8, false },
-    { 0x41, 0x05, "Set autocenter",      8, 8, false }
-};
-
-struct t500rs_packet_header {
-    u8 cmd;
-    u8 id;
-    union {
-        u16 gain;
-        u16 autocenter;
-        u16 range;
-        u8 data[62];  // Rest of the buffer for other commands
-    };
-} __packed;
-
+/* Device state */
 enum t500rs_device_state {
     T500RS_STATE_DISCONNECTED,
     T500RS_STATE_INITIALIZING,
@@ -70,43 +21,72 @@ enum t500rs_device_state {
     T500RS_STATE_ERROR
 };
 
+/* Command info structure */
+struct t500rs_command_info {
+    u8 cmd;
+    u8 id;
+    const char *name;
+    size_t min_length;
+    size_t max_length;
+    bool requires_response;
+};
+
+/* T500RS specific device structure */
 struct t500rs_device_entry {
     struct hid_device *hdev;
     struct input_dev *input_dev;
+    struct usb_device *usbdev;
+    struct tmff2_device_entry *tmff2;
     struct hid_report *report;
     struct hid_field *ff_field;
-    struct usb_device *usbdev;
-
-    int (*open)(struct input_dev *dev);
-    void (*close)(struct input_dev *dev);
-
-    u8 endpoint_in;
-    u8 endpoint_out;
-    u8 buffer_length;
-    u8 *send_buffer;
     
-    /* Device state tracking */
+    /* Device state */
     enum t500rs_device_state state;
-    unsigned long last_command_time;
-    int command_retries;
-    bool force_feedback_enabled;
-    u16 current_gain;
-    u16 current_range;
+    
+    /* USB communication */
+    struct urb *urb;
+    u8 *buffer;
+    dma_addr_t buffer_dma;
+    size_t buffer_length;
+    spinlock_t lock;
+    struct completion response_completion;
+    bool waiting_for_response;
+    int retry_count;
+    u8 endpoint_out;
+    u8 interval;
 };
 
-// Function declarations
-int t500rs_populate_api(struct tmff2_device_entry *tmff2);
-int t500rs_send_buf(struct t500rs_device_entry *t500rs, u8 *send_buffer, size_t len);
+/* Function declarations */
+int t500rs_upload_effect(void *data, struct tmff2_effect_state *effect);
+int t500rs_play_effect(void *data, struct tmff2_effect_state *effect);
 int t500rs_set_gain(void *data, uint16_t gain);
+int t500rs_set_autocenter(void *data, uint16_t autocenter);
 int t500rs_set_range(void *data, uint16_t range);
-int t500rs_set_autocenter(void *data, uint16_t value);
-int t500rs_open(struct input_dev *dev);
-void t500rs_close(struct input_dev *dev);
-void t500rs_set_state(struct t500rs_device_entry *t500rs, enum t500rs_device_state state);
-const char *t500rs_get_command_description(u8 cmd, u8 id);
-bool t500rs_state_allows_command(struct t500rs_device_entry *t500rs, u8 cmd, u8 id);
-bool t500rs_validate_command(u8 cmd, u8 id, size_t len);
-const char *t500rs_error_to_string(int error);
-const char *t500rs_state_to_string(enum t500rs_device_state state);
+__u8 *t500rs_wheel_fixup(struct hid_device *hdev, __u8 *rdesc, unsigned int *rsize);
+int t500rs_open(void *data, int open_mode);
+int t500rs_close(void *data, int open_mode);
+int t500rs_wheel_init(struct tmff2_device_entry *tmff2, int open_mode);
+int t500rs_wheel_destroy(void *data);
 
-#endif
+/* USB protocol constants */
+#define T500RS_INPUT_REPORT_ID 0x07
+#define T500RS_FF_REPORT_ID 0x03
+
+/* Error codes */
+#define T500RS_SUCCESS 0
+#define T500RS_ERROR_TIMEOUT -1
+#define T500RS_ERROR_PROTO -2
+#define T500RS_ERROR_STALL -3
+#define T500RS_ERROR_DISCONNECT -4
+#define T500RS_ERROR_INVALID -5
+
+/* Effect types */
+extern const signed short t500rs_supported_effects[];
+
+/* USB communication functions */
+int t500rs_send_command(struct t500rs_device_entry *t500rs, u8 cmd_id, u8 param1, u8 param2);
+int t500rs_send_buf(struct t500rs_device_entry *t500rs, const u8 *buf, size_t len);
+int t500rs_send_int(struct t500rs_device_entry *t500rs, u8 cmd, u8 id);
+int t500rs_interrupts(struct t500rs_device_entry *t500rs);
+
+#endif /* __HID_TMT500RS_H */
