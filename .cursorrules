@@ -11,7 +11,7 @@
 - Keep the module splitted in multiple files.
 - Do not make the tmt500rs module standalone, it should be integrated with the other modules.
 - Do not edit the base driver tmtff2 as most of the code is already written.
-- integrate the new module as the other module does.
+- integrate the new module as the other module does (but the test module/framework).
 - Always to to build the module after you have written the code.
 - Make sure the system is not hanging, crashing or freezing.
 - Never remove USB base modules (hid & usbhid).
@@ -61,6 +61,7 @@
 - Note these additional documents in codebaseSummary.md for easy reference
 
 ### Adaptive Workflow
+- When troubleshoting issues, in cline_docs folder, create a tracking file you will follow every time you try a new solution so you don't do twice the same attempts.
 - At the beginning of every task when instructed to "follow the plan", read the essential documents in this order:
   1. projectRoadmap.md (for high-level context and goals)
   2. currentTask.md (for specific current objectives)
@@ -75,6 +76,7 @@
   - No need for a formal structure, but ensure clarity and completeness
   - Use numbered lists for sequential steps, code blocks for commands or code snippets
 - Prioritize frequent testing: Run builds and modules insertion (using modprobe) and test functionality regularly throughout development, rather than building extensive features before testing
+- Use dmesg for debugging and capture the last 100 lines
 
 ## User Interaction and Adaptive Behavior
 - Ask follow-up questions when critical information is missing for task completion

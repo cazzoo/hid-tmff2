@@ -43,6 +43,12 @@ int t500rs_populate_api(struct tmff2_device_entry *tmff2)
 
     tmff2->data = t500rs;
     tmff2->max_effects = T500RS_MAX_EFFECTS;
+    tmff2->params = PARAM_SPRING_LEVEL | PARAM_DAMPER_LEVEL | PARAM_FRICTION_LEVEL |
+                    PARAM_GAIN | PARAM_RANGE | PARAM_ALT_MODE;
+
+    /* Set up supported effects */
+    memcpy(tmff2->supported_effects, t500rs_supported_effects,
+           sizeof(signed short) * FF_CNT);
 
     /* Set up force feedback interface */
     tmff2->upload_effect = t500rs_upload_effect;
@@ -60,3 +66,4 @@ int t500rs_populate_api(struct tmff2_device_entry *tmff2)
 
     return 0;
 }
+EXPORT_SYMBOL_GPL(t500rs_populate_api);

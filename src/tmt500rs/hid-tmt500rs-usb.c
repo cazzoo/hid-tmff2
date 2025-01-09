@@ -98,11 +98,26 @@ int t500rs_send_int(struct t500rs_device_entry *t500rs, u8 cmd, u8 id)
 
 int t500rs_interrupts(struct t500rs_device_entry *t500rs)
 {
-    struct usb_device *udev = t500rs->usbdev;
-    struct usb_interface *intf = to_usb_interface(t500rs->hdev->dev.parent);
-    struct usb_host_interface *interface = intf->cur_altsetting;
+    struct usb_device *udev;
+    struct usb_interface *intf;
+    struct usb_host_interface *interface;
     struct usb_endpoint_descriptor *endpoint;
     int i;
+
+    if (!t500rs || !t500rs->hdev || !t500rs->usbdev)
+        return -EINVAL;
+
+    udev = t500rs->usbdev;
+    intf = to_usb_interface(t500rs->hdev->dev.parent);
+    
+    if (!intf)
+        return -ENODEV;
+
+    interface = intf->cur_altsetting;
+    if (!interface)
+        return -ENODEV;
+
+    t500rs->endpoint_out = 0;  // Reset endpoint
 
     for (i = 0; i < interface->desc.bNumEndpoints; i++) {
         endpoint = &interface->endpoint[i].desc;
@@ -113,8 +128,22 @@ int t500rs_interrupts(struct t500rs_device_entry *t500rs)
         }
     }
 
-    if (!t500rs->endpoint_out)
+    if (!t500rs->endpoint_out) {
+        hid_err(t500rs->hdev, "No OUT endpoint found\n");
         return -ENODEV;
+    }
+
+    // Free existing URB if any
+    if (t500rs->urb) {
+        usb_free_urb(t500rs->urb);
+        t500rs->urb = NULL;
+    }
+
+    // Free existing buffer if any
+    if (t500rs->buffer) {
+        usb_free_coherent(udev, T500RS_REPORT_LENGTH, t500rs->buffer, t500rs->buffer_dma);
+        t500rs->buffer = NULL;
+    }
 
     t500rs->urb = usb_alloc_urb(0, GFP_KERNEL);
     if (!t500rs->urb)
@@ -124,6 +153,7 @@ int t500rs_interrupts(struct t500rs_device_entry *t500rs)
                                       GFP_KERNEL, &t500rs->buffer_dma);
     if (!t500rs->buffer) {
         usb_free_urb(t500rs->urb);
+        t500rs->urb = NULL;
         return -ENOMEM;
     }
 
@@ -135,6 +165,11 @@ int t500rs_interrupts(struct t500rs_device_entry *t500rs)
                      t500rs_urb_complete, t500rs, t500rs->interval);
     t500rs->urb->transfer_dma = t500rs->buffer_dma;
     t500rs->urb->transfer_flags |= URB_NO_TRANSFER_DMA_MAP;
+
+    spin_lock_init(&t500rs->lock);
+    init_completion(&t500rs->response_completion);
+    t500rs->waiting_for_response = false;
+    t500rs->retry_count = 0;
 
     return 0;
 }

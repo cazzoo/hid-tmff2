@@ -32,24 +32,6 @@
 
 /* Device initialization functions */
 
-static const signed short t500rs_effects[] = {
-    FF_CONSTANT,
-    FF_SPRING,
-    FF_DAMPER,
-    FF_FRICTION,
-    FF_GAIN,
-    FF_AUTOCENTER,
-    -1
-};
-
-static const unsigned long t500rs_params =
-    PARAM_SPRING_LEVEL
-    | PARAM_DAMPER_LEVEL
-    | PARAM_FRICTION_LEVEL
-    | PARAM_GAIN
-    | PARAM_RANGE
-    | PARAM_ALT_MODE;
-
 int t500rs_wheel_init(struct tmff2_device_entry *tmff2, int open_mode)
 {
     struct t500rs_device_entry *t500rs = tmff2->data;
@@ -99,6 +81,7 @@ err_free_usb:
     }
     return ret;
 }
+EXPORT_SYMBOL_GPL(t500rs_wheel_init);
 
 int t500rs_wheel_destroy(void *data)
 {
@@ -123,6 +106,7 @@ int t500rs_wheel_destroy(void *data)
 
     return ret;
 }
+EXPORT_SYMBOL_GPL(t500rs_wheel_destroy);
 
 int t500rs_open(void *data, int open_mode)
 {

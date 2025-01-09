@@ -77,6 +77,32 @@ int t500rs_upload_effect(void *data, struct tmff2_effect_state *state)
         ret = t500rs_send_command(t500rs, 0x0e, state->effect.id | 0x60,
                                 state->effect.u.condition[0].right_coeff >> 8);
         break;
+    case FF_PERIODIC:
+        switch (state->effect.u.periodic.waveform) {
+        case FF_SINE:
+            ret = t500rs_send_command(t500rs, 0x0e, state->effect.id | 0x80,
+                                    state->effect.u.periodic.magnitude >> 8);
+            break;
+        case FF_TRIANGLE:
+            ret = t500rs_send_command(t500rs, 0x0e, state->effect.id | 0x90,
+                                    state->effect.u.periodic.magnitude >> 8);
+            break;
+        case FF_SQUARE:
+            ret = t500rs_send_command(t500rs, 0x0e, state->effect.id | 0xa0,
+                                    state->effect.u.periodic.magnitude >> 8);
+            break;
+        case FF_SAW_UP:
+            ret = t500rs_send_command(t500rs, 0x0e, state->effect.id | 0xb0,
+                                    state->effect.u.periodic.magnitude >> 8);
+            break;
+        case FF_SAW_DOWN:
+            ret = t500rs_send_command(t500rs, 0x0e, state->effect.id | 0xc0,
+                                    state->effect.u.periodic.magnitude >> 8);
+            break;
+        default:
+            return -EINVAL;
+        }
+        break;
     default:
         return -EINVAL;
     }
@@ -94,6 +120,7 @@ int t500rs_play_effect(void *data, struct tmff2_effect_state *state)
     
     return t500rs_send_command(t500rs, 0x0e, state->effect.id | 0x10, cmd);
 }
+EXPORT_SYMBOL_GPL(t500rs_play_effect);
 
 int t500rs_set_gain(void *data, uint16_t gain)
 {
