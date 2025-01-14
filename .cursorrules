@@ -16,11 +16,13 @@
 - Make sure the system is not hanging, crashing or freezing.
 - Never remove USB base modules (hid & usbhid).
 - Always use modprobe to insert/load or remove the modules.
+- When you encounter several time the same problem, use the test_troubleshooting.md file in the cline_docs folder.
 
 ## Critical Documentation and Workflow
 
 ### Documentation Management
-- Maintain a 'cline_docs' folder in the root directory (create if it doesn't exist) with the following essential files:
+- Maintain and a 'cline_docs' folder in the root directory (create if it doesn't exist) with the following essential files:
+- Review Every time you start a new task, read the files in 'cline_docs' folder.
 
 1. projectRoadmap.md
    - Purpose: High-level goals, features, completion criteria, and progress tracker
@@ -55,12 +57,20 @@
    - Format: Use headers (##) for main sections, subheaders (###) for components, bullet points for details
    - Content: Provide a high-level overview of the project structure and recent changes
 
+5. test_troubleshooting.md
+   - Purpose: Troubleshooting guide for the test module
+   - Update: Every time you try a new solution to fix a problem
+   - Format: Follow the same format that is currently in the file
+   - Content: Provide a troubleshooting guide for the test module
+
 ### Additional Documentation
 - Create reference documents for future developers as needed, storing them in the cline_docs folder
 - Examples include styleAesthetic.md or wireframes.md
 - Note these additional documents in codebaseSummary.md for easy reference
 
 ### Adaptive Workflow
+- Do not remove code that is already written, it is already tested and working.
+- Commit each major successful step to the repository.
 - When troubleshoting issues, in cline_docs folder, create a tracking file you will follow every time you try a new solution so you don't do twice the same attempts.
 - At the beginning of every task when instructed to "follow the plan", read the essential documents in this order:
   1. projectRoadmap.md (for high-level context and goals)

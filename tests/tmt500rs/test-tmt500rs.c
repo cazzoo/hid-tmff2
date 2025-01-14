@@ -59,6 +59,8 @@ static struct mock_t500rs_device *test_mock_dev;
 static int test_t500rs_upload_effect(struct mock_t500rs_device *mock_dev, struct ff_effect *effect);
 static int test_device_init(void);
 static int safe_device_cleanup_with_retry(struct mock_t500rs_device *mock_dev);
+static int test_effect_combinations(struct mock_t500rs_device *mock_dev);
+static int test_edge_cases(struct mock_t500rs_device *mock_dev);
 
 /* Test function implementations */
 static int test_t500rs_upload_effect(struct mock_t500rs_device *mock_dev, struct ff_effect *effect)
@@ -99,11 +101,150 @@ static int test_t500rs_upload_effect(struct mock_t500rs_device *mock_dev, struct
                 return -EINVAL;
             }
             break;
+        case FF_PERIODIC:
+            // Validate waveform
+            if (effect->u.periodic.waveform > FF_CUSTOM) {
+                return -EINVAL;
+            }
+            // Validate magnitude
+            if (effect->u.periodic.magnitude <= 0 || effect->u.periodic.magnitude > 0x7FFF) {
+                return -EINVAL;
+            }
+            break;
+        case FF_SPRING:
+        case FF_DAMPER:
+        case FF_FRICTION:
+            // Validate coefficients
+            if (effect->u.condition[0].right_coeff <= 0 || 
+                effect->u.condition[0].left_coeff <= 0) {
+                return -EINVAL;
+            }
+            break;
         default:
             return -EINVAL;
     }
 
     pr_info("Effect %d uploaded successfully\n", effect->id);
+    return 0;
+}
+
+static int test_effect_combinations(struct mock_t500rs_device *mock_dev)
+{
+    struct ff_effect effects[3];
+    int ret;
+
+    // Test combining constant force with periodic effect
+    memset(&effects[0], 0, sizeof(effects[0]));
+    effects[0].type = FF_CONSTANT;
+    effects[0].id = 0;
+    effects[0].u.constant.level = 0x4000;
+
+    memset(&effects[1], 0, sizeof(effects[1]));
+    effects[1].type = FF_PERIODIC;
+    effects[1].id = 1;
+    effects[1].u.periodic.waveform = FF_SINE;
+    effects[1].u.periodic.magnitude = 0x4000;
+
+    ret = test_t500rs_upload_effect(mock_dev, &effects[0]);
+    if (ret < 0) {
+        pr_err("Failed to upload constant force effect: %d\n", ret);
+        return ret;
+    }
+
+    ret = test_t500rs_upload_effect(mock_dev, &effects[1]);
+    if (ret < 0) {
+        pr_err("Failed to upload periodic effect: %d\n", ret);
+        return ret;
+    }
+
+    pr_info("Combined constant force and periodic effect test passed\n");
+
+    // Test combining spring with damper effect
+    memset(&effects[0], 0, sizeof(effects[0]));
+    effects[0].type = FF_SPRING;
+    effects[0].id = 0;
+    effects[0].u.condition[0].right_coeff = 0x4000;
+    effects[0].u.condition[0].left_coeff = 0x4000;
+
+    memset(&effects[1], 0, sizeof(effects[1]));
+    effects[1].type = FF_DAMPER;
+    effects[1].id = 1;
+    effects[1].u.condition[0].right_coeff = 0x4000;
+    effects[1].u.condition[0].left_coeff = 0x4000;
+
+    ret = test_t500rs_upload_effect(mock_dev, &effects[0]);
+    if (ret < 0) {
+        pr_err("Failed to upload spring effect: %d\n", ret);
+        return ret;
+    }
+
+    ret = test_t500rs_upload_effect(mock_dev, &effects[1]);
+    if (ret < 0) {
+        pr_err("Failed to upload damper effect: %d\n", ret);
+        return ret;
+    }
+
+    pr_info("Combined spring and damper effect test passed\n");
+
+    return 0;
+}
+
+static int test_edge_cases(struct mock_t500rs_device *mock_dev)
+{
+    struct ff_effect effect;
+    int ret;
+
+    // Test maximum magnitude for constant force
+    memset(&effect, 0, sizeof(effect));
+    effect.type = FF_CONSTANT;
+    effect.id = 0;
+    effect.u.constant.level = 0x7FFF;  // Maximum valid level
+
+    ret = test_t500rs_upload_effect(mock_dev, &effect);
+    if (ret < 0) {
+        pr_err("Maximum constant force test failed: %d\n", ret);
+        return ret;
+    }
+    pr_info("Maximum constant force test passed\n");
+
+    // Test minimum valid magnitude
+    effect.u.constant.level = 1;  // Minimum valid level
+    ret = test_t500rs_upload_effect(mock_dev, &effect);
+    if (ret < 0) {
+        pr_err("Minimum constant force test failed: %d\n", ret);
+        return ret;
+    }
+    pr_info("Minimum constant force test passed\n");
+
+    // Test rapid effect changes
+    int i;
+    for (i = 0; i < 10; i++) {
+        effect.id = i % 2;
+        effect.u.constant.level = 0x4000;
+        ret = test_t500rs_upload_effect(mock_dev, &effect);
+        if (ret < 0) {
+            pr_err("Rapid effect change test failed at iteration %d: %d\n", i, ret);
+            return ret;
+        }
+    }
+    pr_info("Rapid effect change test passed\n");
+
+    // Test all periodic waveforms
+    effect.type = FF_PERIODIC;
+    effect.id = 0;
+    effect.u.periodic.magnitude = 0x4000;
+
+    u16 waveforms[] = {FF_SQUARE, FF_TRIANGLE, FF_SINE, FF_SAW_UP, FF_SAW_DOWN};
+    for (i = 0; i < ARRAY_SIZE(waveforms); i++) {
+        effect.u.periodic.waveform = waveforms[i];
+        ret = test_t500rs_upload_effect(mock_dev, &effect);
+        if (ret < 0) {
+            pr_err("Waveform test failed for type %d: %d\n", waveforms[i], ret);
+            return ret;
+        }
+    }
+    pr_info("All waveform types test passed\n");
+
     return 0;
 }
 
@@ -249,7 +390,7 @@ static int __init test_tmt500rs_init(void)
     int ret;
 
     memset(&test_stats, 0, sizeof(test_stats));
-    test_stats.total_phases = 4;  // Device init, FF effects, Invalid params, Resource exhaustion
+    test_stats.total_phases = 6;  // Device init, FF effects, Invalid params, Resource exhaustion, Effect combinations, Edge cases
 
     pr_info("Starting TMT500RS test module\n");
     
@@ -344,6 +485,7 @@ static int __init test_tmt500rs_init(void)
     // Test phase 4: Resource Exhaustion
     test_stats.current_phase++;
     effect.id = FF_MAX_EFFECTS - 1;
+    effect.type = FF_CONSTANT;
     effect.u.constant.level = 0x4000;
     ret = test_t500rs_upload_effect(test_mock_dev, &effect);
     test_stats.total_tests++;
@@ -352,6 +494,30 @@ static int __init test_tmt500rs_init(void)
         test_stats.passed_tests++;
     } else {
         pr_err("Resource exhaustion test failed: %d\n", ret);
+        test_stats.failed_tests++;
+    }
+
+    // Test phase 5: Effect Combinations
+    test_stats.current_phase++;
+    ret = test_effect_combinations(test_mock_dev);
+    test_stats.total_tests++;
+    if (ret == 0) {
+        pr_info("Effect combinations test passed\n");
+        test_stats.passed_tests++;
+    } else {
+        pr_err("Effect combinations test failed: %d\n", ret);
+        test_stats.failed_tests++;
+    }
+
+    // Test phase 6: Edge Cases
+    test_stats.current_phase++;
+    ret = test_edge_cases(test_mock_dev);
+    test_stats.total_tests++;
+    if (ret == 0) {
+        pr_info("Edge cases test passed\n");
+        test_stats.passed_tests++;
+    } else {
+        pr_err("Edge cases test failed: %d\n", ret);
         test_stats.failed_tests++;
     }
 
@@ -369,6 +535,8 @@ cleanup:
     pr_info("- Force Feedback Effects\n");
     pr_info("- Error Handling\n");
     pr_info("- Resource Management\n");
+    pr_info("- Effect Combinations\n");
+    pr_info("- Edge Cases\n");
 
     return 0;
 }
