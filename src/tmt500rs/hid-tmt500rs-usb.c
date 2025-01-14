@@ -1,191 +1,208 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
-/*
- * Force feedback support for Thrustmaster T500RS - USB Communication
- *
- * Copyright (c) 2024 Your Name
- */
-
-#include <linux/types.h>
 #include <linux/kernel.h>
 #include <linux/slab.h>
-#include <linux/module.h>
-#include <linux/init.h>
 #include <linux/usb.h>
-#include <linux/usb/input.h>
-#include <linux/hid.h>
-#include <linux/input.h>
-#include <linux/spinlock.h>
-#include <linux/completion.h>
-#include <linux/delay.h>
-#include <linux/string.h>
-#include <linux/jiffies.h>
-#include <linux/timer.h>
-#include <linux/mutex.h>
-#include <linux/bitops.h>
-#include <linux/ktime.h>
-#include <linux/hid-debug.h>
-#include <linux/device.h>
-#include <asm/unaligned.h>
-#include "../hid-tmff2.h"
 #include "hid-tmt500rs.h"
 
-#define USB_TIMEOUT 1000
+#define T500RS_REPORT_LENGTH 64
 
 static void t500rs_urb_complete(struct urb *urb)
 {
-    struct t500rs_device_entry *t500rs = urb->context;
+    struct t500rs_device_data *data = urb->context;
+    struct hid_device *hdev = data->hdev;
+    int retries = 0;
 
-    if (t500rs->waiting_for_response)
-        complete(&t500rs->response_completion);
+    if (!data->initialized) {
+        tmff2_dbg("T500RS: Device not initialized in URB completion\n");
+        return;
+    }
+
+    if (data->state != T500RS_STATE_READY) {
+        tmff2_dbg("T500RS: Device not ready in URB completion (state=%d)\n", data->state);
+        return;
+    }
+
+    switch (urb->status) {
+    case 0:
+        // Success
+        break;
+
+    case -ECONNRESET:
+    case -ENOENT:
+    case -ESHUTDOWN:
+        // These errors are expected when unplugging
+        return;
+
+    case -EPIPE:
+        tmff2_dbg("T500RS: URB pipe error, attempting to clear halt\n");
+        usb_clear_halt(data->usbdev, urb->pipe);
+        break;
+
+    case -EPROTO:
+        tmff2_dbg("T500RS: URB protocol error\n");
+        break;
+
+    case -EILSEQ:
+        tmff2_dbg("T500RS: URB CRC error\n");
+        break;
+
+    case -ETIMEDOUT:
+        tmff2_dbg("T500RS: URB timeout\n");
+        data->state = T500RS_STATE_ERROR;
+        return;
+
+    case -EOVERFLOW:
+        tmff2_dbg("T500RS: URB overflow error\n");
+        break;
+
+    default:
+        dev_err(&hdev->dev, "T500RS: Unexpected URB status %d\n", urb->status);
+        data->state = T500RS_STATE_ERROR;
+        return;
+    }
+
+    // Resubmit the URB with retries
+    while (retries < 3) {
+        int ret = usb_submit_urb(urb, GFP_ATOMIC);
+        if (ret == 0)
+            break;
+        if (ret != -19 && ret != -ENODEV)
+            break;
+        msleep(100 * (retries + 1));
+        retries++;
+    }
 }
 
-int t500rs_send_buf(struct t500rs_device_entry *t500rs, const u8 *send_buffer, size_t len)
+int t500rs_init_usb(struct hid_device *hdev)
 {
-    unsigned long flags;
+    struct t500rs_device_data *data;
+    struct usb_device *usbdev = interface_to_usbdev(to_usb_interface(hdev->dev.parent));
     int ret;
 
-    if (!t500rs || !send_buffer || len > T500RS_REPORT_LENGTH)
-        return -EINVAL;
+    data = kzalloc(sizeof(*data), GFP_KERNEL);
+    if (!data)
+        return -ENOMEM;
 
-    spin_lock_irqsave(&t500rs->lock, flags);
+    data->state = T500RS_STATE_INITIALIZING;
+    data->usbdev = usbdev;
+    data->hdev = hdev;
 
-    if (!t500rs->buffer) {
-        t500rs->buffer = usb_alloc_coherent(t500rs->usbdev, T500RS_REPORT_LENGTH,
-                                          GFP_ATOMIC, &t500rs->buffer_dma);
-        if (!t500rs->buffer) {
-            spin_unlock_irqrestore(&t500rs->lock, flags);
-            return -ENOMEM;
-        }
+    // Allocate URB and buffer
+    data->urb = usb_alloc_urb(0, GFP_KERNEL);
+    if (!data->urb) {
+        ret = -ENOMEM;
+        goto err_free_data;
     }
 
-    memcpy(t500rs->buffer, send_buffer, len);
-    t500rs->buffer_length = len;
-    t500rs->retry_count = 0;
-    t500rs->waiting_for_response = true;
-    reinit_completion(&t500rs->response_completion);
+    data->buffer = usb_alloc_coherent(data->usbdev, T500RS_REPORT_LENGTH,
+                                     GFP_KERNEL, &data->buffer_dma);
+    if (!data->buffer) {
+        ret = -ENOMEM;
+        goto err_free_urb;
+    }
 
-    ret = usb_submit_urb(t500rs->urb, GFP_ATOMIC);
+    // Initialize URB
+    usb_fill_int_urb(data->urb, data->usbdev,
+                     usb_rcvintpipe(data->usbdev, 0x81),
+                     data->buffer, T500RS_REPORT_LENGTH,
+                     t500rs_urb_complete, data, data->interval);
+    data->urb->transfer_dma = data->buffer_dma;
+    data->urb->transfer_flags |= URB_NO_TRANSFER_DMA_MAP;
+
+    // Submit URB
+    ret = usb_submit_urb(data->urb, GFP_KERNEL);
     if (ret) {
-        t500rs->waiting_for_response = false;
-        hid_err(t500rs->hdev, "Failed to submit URB: %d\n", ret);
-        spin_unlock_irqrestore(&t500rs->lock, flags);
-        return ret;
+        dev_err(&hdev->dev, "T500RS: Failed to submit URB: %d\n", ret);
+        goto err_free_buffer;
     }
 
-    spin_unlock_irqrestore(&t500rs->lock, flags);
+    data->state = T500RS_STATE_READY;
+    data->initialized = true;
+    return 0;
 
-    ret = wait_for_completion_timeout(&t500rs->response_completion,
-                                    msecs_to_jiffies(USB_TIMEOUT));
-    if (!ret) {
-        usb_kill_urb(t500rs->urb);
-        return T500RS_ERROR_TIMEOUT;
+err_free_buffer:
+    usb_free_coherent(data->usbdev, T500RS_REPORT_LENGTH,
+                      data->buffer, data->buffer_dma);
+err_free_urb:
+    usb_free_urb(data->urb);
+err_free_data:
+    data->state = T500RS_STATE_ERROR;
+    kfree(data);
+    return ret;
+}
+
+void t500rs_cleanup_usb(struct hid_device *hdev)
+{
+    struct t500rs_device_data *data = hid_get_drvdata(hdev);
+
+    if (!data)
+        return;
+
+    data->state = T500RS_STATE_DISCONNECTED;
+    data->initialized = false;
+
+    if (data->urb) {
+        usb_kill_urb(data->urb);
+        if (data->buffer) {
+            usb_free_coherent(data->usbdev, T500RS_REPORT_LENGTH,
+                             data->buffer, data->buffer_dma);
+            data->buffer = NULL;
+        }
+        usb_free_urb(data->urb);
+        data->urb = NULL;
     }
-
-    return T500RS_SUCCESS;
 }
 
-int t500rs_send_int(struct t500rs_device_entry *t500rs, u8 cmd, u8 id)
+int t500rs_interrupts(struct t500rs_device_data *data)
 {
-    if (!t500rs || !t500rs->buffer)
+    struct hid_device *hdev = data->hdev;
+    int ret;
+
+    if (!data->initialized || data->state != T500RS_STATE_READY)
         return -EINVAL;
 
-    t500rs->buffer[0] = cmd;
-    t500rs->buffer[1] = id;
-    memset(t500rs->buffer + 2, 0, t500rs->buffer_length - 2);
+    if (data->urb) {
+        ret = usb_submit_urb(data->urb, GFP_ATOMIC);
+        if (ret) {
+            if (ret == -EPIPE) {
+                tmff2_dbg("T500RS: URB pipe error, attempting to clear halt\n");
+                usb_clear_halt(data->usbdev, data->urb->pipe);
+                ret = usb_submit_urb(data->urb, GFP_ATOMIC);
+            }
 
-    return t500rs_send_buf(t500rs, t500rs->buffer, t500rs->buffer_length);
-}
-
-int t500rs_interrupts(struct t500rs_device_entry *t500rs)
-{
-    struct usb_device *udev;
-    struct usb_interface *intf;
-    struct usb_host_interface *interface;
-    struct usb_endpoint_descriptor *endpoint;
-    int i;
-
-    if (!t500rs || !t500rs->hdev || !t500rs->usbdev)
-        return -EINVAL;
-
-    udev = t500rs->usbdev;
-    intf = to_usb_interface(t500rs->hdev->dev.parent);
-    
-    if (!intf)
-        return -ENODEV;
-
-    interface = intf->cur_altsetting;
-    if (!interface)
-        return -ENODEV;
-
-    t500rs->endpoint_out = 0;  // Reset endpoint
-
-    for (i = 0; i < interface->desc.bNumEndpoints; i++) {
-        endpoint = &interface->endpoint[i].desc;
-        if (usb_endpoint_is_int_out(endpoint)) {
-            t500rs->endpoint_out = endpoint->bEndpointAddress;
-            t500rs->interval = endpoint->bInterval;
-            break;
+            if (ret) {
+                dev_err(&hdev->dev, "T500RS: Failed to submit URB: %d\n", ret);
+                data->state = T500RS_STATE_ERROR;
+                return ret;
+            }
         }
     }
-
-    if (!t500rs->endpoint_out) {
-        hid_err(t500rs->hdev, "No OUT endpoint found\n");
-        return -ENODEV;
-    }
-
-    // Free existing URB if any
-    if (t500rs->urb) {
-        usb_free_urb(t500rs->urb);
-        t500rs->urb = NULL;
-    }
-
-    // Free existing buffer if any
-    if (t500rs->buffer) {
-        usb_free_coherent(udev, T500RS_REPORT_LENGTH, t500rs->buffer, t500rs->buffer_dma);
-        t500rs->buffer = NULL;
-    }
-
-    t500rs->urb = usb_alloc_urb(0, GFP_KERNEL);
-    if (!t500rs->urb)
-        return -ENOMEM;
-
-    t500rs->buffer = usb_alloc_coherent(udev, T500RS_REPORT_LENGTH,
-                                      GFP_KERNEL, &t500rs->buffer_dma);
-    if (!t500rs->buffer) {
-        usb_free_urb(t500rs->urb);
-        t500rs->urb = NULL;
-        return -ENOMEM;
-    }
-
-    t500rs->buffer_length = T500RS_REPORT_LENGTH;
-
-    usb_fill_int_urb(t500rs->urb, udev,
-                     usb_sndintpipe(udev, t500rs->endpoint_out),
-                     t500rs->buffer, t500rs->buffer_length,
-                     t500rs_urb_complete, t500rs, t500rs->interval);
-    t500rs->urb->transfer_dma = t500rs->buffer_dma;
-    t500rs->urb->transfer_flags |= URB_NO_TRANSFER_DMA_MAP;
-
-    spin_lock_init(&t500rs->lock);
-    init_completion(&t500rs->response_completion);
-    t500rs->waiting_for_response = false;
-    t500rs->retry_count = 0;
 
     return 0;
 }
 
-int t500rs_send_command(struct t500rs_device_entry *t500rs, u8 cmd_id, u8 param1, u8 param2)
+int t500rs_send_command(struct t500rs_device_entry *t500rs, u8 cmd_type, u8 cmd_id, u8 param)
 {
-    u8 buf[T500RS_FF_LENGTH];
+    struct t500rs_device_data *data = t500rs->data;
+    struct hid_device *hdev = data->hdev;
+    u8 *buf;
+    int ret;
 
-    buf[0] = T500RS_FF_REPORT_ID;
+    if (!data->initialized) {
+        dev_err(&hdev->dev, "T500RS: Device not initialized\n");
+        return -EINVAL;
+    }
+
+    buf = kzalloc(T500RS_REPORT_LENGTH, GFP_KERNEL);
+    if (!buf)
+        return -ENOMEM;
+
+    buf[0] = cmd_type;
     buf[1] = cmd_id;
-    buf[2] = param1;
-    buf[3] = param2;
+    buf[2] = param;
 
-    return t500rs_send_buf(t500rs, buf, sizeof(buf));
+    ret = hid_hw_raw_request(hdev, 0, buf, T500RS_REPORT_LENGTH,
+                            HID_OUTPUT_REPORT, HID_REQ_SET_REPORT);
+
+    kfree(buf);
+    return ret;
 }
-
-MODULE_LICENSE("GPL");
-MODULE_AUTHOR("Your Name");
-MODULE_DESCRIPTION("Force feedback support for Thrustmaster T500RS - USB Communication"); 

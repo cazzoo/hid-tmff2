@@ -51,62 +51,80 @@ const signed short t500rs_supported_effects[] = {
 /* Effect state flags */
 #define EFFECT_STARTED FF_EFFECT_PLAYING
 
+/* Scale 16-bit value to 7-bit range for T500RS */
+static inline u8 scale_param(s16 value)
+{
+    /* Convert to unsigned and scale to 0-127 range */
+    return (u8)((abs(value) >> 9) & 0x7F);
+}
+
 /* Force feedback implementation */
 int t500rs_upload_effect(void *data, struct tmff2_effect_state *state)
 {
     struct t500rs_device_entry *t500rs = data;
     int ret;
+    u8 scaled_param;
     
-    if (!t500rs || !state)
+    if (!t500rs || !state) {
+        tmff2_dbg("T500RS: Invalid data or state\n");
         return -EINVAL;
+    }
         
     switch (state->effect.type) {
     case FF_CONSTANT:
-        ret = t500rs_send_command(t500rs, 0x0e, state->effect.id,
-                                state->effect.u.constant.level >> 8);
+        scaled_param = scale_param(state->effect.u.constant.level);
+        tmff2_dbg("T500RS: Uploading constant force effect id=%d level=%d scaled=%d\n",
+                state->effect.id, state->effect.u.constant.level, scaled_param);
+        ret = t500rs_send_command(t500rs, 0x0e, state->effect.id, scaled_param);
         break;
     case FF_SPRING:
-        ret = t500rs_send_command(t500rs, 0x0e, state->effect.id | 0x20,
-                                state->effect.u.condition[0].right_coeff >> 8);
+        scaled_param = scale_param(state->effect.u.condition[0].right_coeff);
+        tmff2_dbg("T500RS: Uploading spring effect id=%d coeff=%d scaled=%d\n",
+                state->effect.id, state->effect.u.condition[0].right_coeff, scaled_param);
+        ret = t500rs_send_command(t500rs, 0x0e, state->effect.id | 0x20, scaled_param);
         break;
     case FF_DAMPER:
-        ret = t500rs_send_command(t500rs, 0x0e, state->effect.id | 0x40,
-                                state->effect.u.condition[0].right_coeff >> 8);
+        scaled_param = scale_param(state->effect.u.condition[0].right_coeff);
+        tmff2_dbg("T500RS: Uploading damper effect id=%d coeff=%d scaled=%d\n",
+                state->effect.id, state->effect.u.condition[0].right_coeff, scaled_param);
+        ret = t500rs_send_command(t500rs, 0x0e, state->effect.id | 0x40, scaled_param);
         break;
     case FF_FRICTION:
-        ret = t500rs_send_command(t500rs, 0x0e, state->effect.id | 0x60,
-                                state->effect.u.condition[0].right_coeff >> 8);
+        scaled_param = scale_param(state->effect.u.condition[0].right_coeff);
+        tmff2_dbg("T500RS: Uploading friction effect id=%d coeff=%d scaled=%d\n",
+                state->effect.id, state->effect.u.condition[0].right_coeff, scaled_param);
+        ret = t500rs_send_command(t500rs, 0x0e, state->effect.id | 0x60, scaled_param);
         break;
     case FF_PERIODIC:
         switch (state->effect.u.periodic.waveform) {
         case FF_SINE:
-            ret = t500rs_send_command(t500rs, 0x0e, state->effect.id | 0x80,
-                                    state->effect.u.periodic.magnitude >> 8);
+            scaled_param = scale_param(state->effect.u.periodic.magnitude);
+            tmff2_dbg("T500RS: Uploading sine effect id=%d magnitude=%d scaled=%d\n",
+                    state->effect.id, state->effect.u.periodic.magnitude, scaled_param);
+            ret = t500rs_send_command(t500rs, 0x0e, state->effect.id | 0x80, scaled_param);
             break;
         case FF_TRIANGLE:
-            ret = t500rs_send_command(t500rs, 0x0e, state->effect.id | 0x90,
-                                    state->effect.u.periodic.magnitude >> 8);
+            scaled_param = scale_param(state->effect.u.periodic.magnitude);
+            tmff2_dbg("T500RS: Uploading triangle effect id=%d magnitude=%d scaled=%d\n",
+                    state->effect.id, state->effect.u.periodic.magnitude, scaled_param);
+            ret = t500rs_send_command(t500rs, 0x0e, state->effect.id | 0x90, scaled_param);
             break;
         case FF_SQUARE:
-            ret = t500rs_send_command(t500rs, 0x0e, state->effect.id | 0xa0,
-                                    state->effect.u.periodic.magnitude >> 8);
-            break;
-        case FF_SAW_UP:
-            ret = t500rs_send_command(t500rs, 0x0e, state->effect.id | 0xb0,
-                                    state->effect.u.periodic.magnitude >> 8);
-            break;
-        case FF_SAW_DOWN:
-            ret = t500rs_send_command(t500rs, 0x0e, state->effect.id | 0xc0,
-                                    state->effect.u.periodic.magnitude >> 8);
+            scaled_param = scale_param(state->effect.u.periodic.magnitude);
+            tmff2_dbg("T500RS: Uploading square effect id=%d magnitude=%d scaled=%d\n",
+                    state->effect.id, state->effect.u.periodic.magnitude, scaled_param);
+            ret = t500rs_send_command(t500rs, 0x0e, state->effect.id | 0xa0, scaled_param);
             break;
         default:
+            tmff2_dbg("T500RS: Unsupported waveform %d\n", state->effect.u.periodic.waveform);
             return -EINVAL;
         }
         break;
     default:
+        tmff2_dbg("T500RS: Unsupported effect type %d\n", state->effect.type);
         return -EINVAL;
     }
-    
+
     return ret;
 }
 

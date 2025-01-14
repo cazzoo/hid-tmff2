@@ -29,61 +29,192 @@
 #include "../hid-tmff2.h"
 #include "hid-tmt500rs.h"
 
-/* Effect types */
-extern const signed short t500rs_supported_effects[];
+static bool debug;
+module_param(debug, bool, 0644);
+MODULE_PARM_DESC(debug, "Enable debug output");
 
-/* T500RS specific functions */
+#define tmff2_dbg(fmt, ...) \
+    do { if (debug) pr_info("tmff2: " fmt, ##__VA_ARGS__); } while (0)
+
 int t500rs_populate_api(struct tmff2_device_entry *tmff2)
 {
-    struct t500rs_device_entry *t500rs = kzalloc(sizeof(struct t500rs_device_entry),
-                                                GFP_KERNEL);
+    struct t500rs_device_entry *t500rs;
+    
+    t500rs = kzalloc(sizeof(*t500rs), GFP_KERNEL);
     if (!t500rs)
         return -ENOMEM;
 
-    t500rs->hdev = tmff2->hdev;
-    t500rs->input_dev = tmff2->input_dev;
-    t500rs->usbdev = to_usb_device(tmff2->hdev->dev.parent->parent);
-    t500rs->tmff2 = tmff2;
+    t500rs->data = kzalloc(sizeof(struct t500rs_device_data), GFP_KERNEL);
+    if (!t500rs->data) {
+        kfree(t500rs);
+        return -ENOMEM;
+    }
 
-    /* Set device capabilities */
-    tmff2->max_effects = T500RS_MAX_EFFECTS;
+    t500rs->data->hdev = tmff2->hdev;
+    t500rs->data->usbdev = to_usb_device(tmff2->hdev->dev.parent);
+    t500rs->data->state = T500RS_STATE_INIT;
+    t500rs->data->initialized = false;
+
     tmff2->data = t500rs;
-
-    /* Copy supported effects */
-    memcpy(tmff2->supported_effects, t500rs_supported_effects,
-           sizeof(signed short) * (FF_MAX + 1));
-
-    /* Set function pointers */
-    tmff2->upload_effect = t500rs_upload_effect;
-    tmff2->play_effect = t500rs_play_effect;
-    tmff2->set_gain = t500rs_set_gain;
-    tmff2->set_autocenter = t500rs_set_autocenter;
     tmff2->set_range = t500rs_set_range;
     tmff2->wheel_fixup = t500rs_wheel_fixup;
-
     tmff2->open = t500rs_open;
     tmff2->close = t500rs_close;
-
     tmff2->wheel_init = t500rs_wheel_init;
     tmff2->wheel_destroy = t500rs_wheel_destroy;
 
     return 0;
 }
-EXPORT_SYMBOL_GPL(t500rs_populate_api);
 
-/* External function declarations */
-extern int t500rs_wheel_init(struct tmff2_device_entry *tmff2, int open_mode);
-extern int t500rs_wheel_destroy(void *data);
-extern int t500rs_send_command(struct t500rs_device_entry *t500rs, u8 cmd_id, u8 param1, u8 param2);
-extern int t500rs_send_buf(struct t500rs_device_entry *t500rs, const u8 *buf, size_t len);
-extern void t500rs_urb_complete(struct urb *urb);
-extern int t500rs_send_int(struct t500rs_device_entry *t500rs, u8 cmd, u8 id);
-extern int t500rs_interrupts(struct t500rs_device_entry *t500rs);
-extern int t500rs_upload_effect(void *data, struct tmff2_effect_state *effect);
-extern int t500rs_play_effect(void *data, struct tmff2_effect_state *effect);
-extern int t500rs_set_gain(void *data, uint16_t gain);
-extern int t500rs_set_autocenter(void *data, uint16_t magnitude);
-extern int t500rs_set_range(void *data, uint16_t range);
-extern __u8 *t500rs_wheel_fixup(struct hid_device *hdev, __u8 *rdesc, unsigned int *rsize);
-extern int t500rs_open(void *data, int open_mode);
-extern int t500rs_close(void *data, int open_mode);
+int t500rs_set_range(void *data, u16 range)
+{
+    struct t500rs_device_entry *t500rs = data;
+    
+    if (!t500rs || !t500rs->data || !t500rs->data->initialized)
+        return -EINVAL;
+
+    // Range is 270-1080 degrees
+    if (range < 270)
+        range = 270;
+    else if (range > 1080)
+        range = 1080;
+
+    tmff2_dbg("Setting wheel range to %u degrees\n", range);
+    return t500rs_send_command(t500rs, T500RS_CMD_SET_RANGE, range & 0xFF, (range >> 8) & 0xFF);
+}
+
+__u8 *t500rs_wheel_fixup(struct hid_device *hdev, __u8 *rdesc, unsigned int *rsize)
+{
+    tmff2_dbg("Applying wheel fixups\n");
+    // No descriptor modifications needed for now
+    return rdesc;
+}
+
+int t500rs_open(void *data, int open_mode)
+{
+    struct t500rs_device_entry *t500rs = data;
+    
+    if (!t500rs || !t500rs->data)
+        return -EINVAL;
+
+    tmff2_dbg("Opening T500RS device\n");
+    return t500rs_init_wheel(t500rs->data->hdev);
+}
+
+int t500rs_close(void *data, int open_mode)
+{
+    struct t500rs_device_entry *t500rs = data;
+    
+    if (!t500rs || !t500rs->data)
+        return -EINVAL;
+
+    tmff2_dbg("Closing T500RS device\n");
+    t500rs_cleanup_usb(t500rs->data->hdev);
+    return 0;
+}
+
+int t500rs_wheel_init(struct tmff2_device_entry *tmff2, int open_mode)
+{
+    struct t500rs_device_entry *t500rs = tmff2->data;
+    int ret = 0;
+    int retries = 0;
+
+    if (!t500rs || !t500rs->data)
+        return -EINVAL;
+
+    if (t500rs->data->initialized)
+        return 0;
+
+    // Add delay for device stabilization
+    msleep(300);
+
+    // Initialize USB with retries
+    while (retries < 3) {
+        ret = t500rs_init_wheel(t500rs->data->hdev);
+        if (ret == 0)
+            break;
+        if (ret != -19 && ret != -ENODEV)
+            break;
+        msleep(100 * (retries + 1));
+        retries++;
+    }
+
+    if (ret < 0) {
+        dev_err(&t500rs->data->hdev->dev, "Failed to initialize wheel after %d retries: %d\n", 
+                retries, ret);
+        return ret;
+    }
+
+    t500rs->data->initialized = true;
+    return 0;
+}
+
+int t500rs_wheel_destroy(void *data)
+{
+    struct t500rs_device_entry *t500rs = data;
+    
+    if (!t500rs || !t500rs->data)
+        return -EINVAL;
+
+    tmff2_dbg("Destroying T500RS wheel\n");
+    
+    if (t500rs->data->initialized) {
+        t500rs_cleanup_ff(t500rs->data->hdev);
+        t500rs_cleanup_usb(t500rs->data->hdev);
+        t500rs->data->initialized = false;
+    }
+
+    return 0;
+}
+
+static int t500rs_probe(struct hid_device *hdev, const struct hid_device_id *id)
+{
+    struct tmff2_device_entry *tmff2;
+    int ret;
+
+    tmff2 = kzalloc(sizeof(*tmff2), GFP_KERNEL);
+    if (!tmff2)
+        return -ENOMEM;
+
+    tmff2->hdev = hdev;
+    hid_set_drvdata(hdev, tmff2);
+
+    ret = t500rs_populate_api(tmff2);
+    if (ret < 0) {
+        kfree(tmff2);
+        return ret;
+    }
+
+    return 0;
+}
+
+static void t500rs_remove(struct hid_device *hdev)
+{
+    struct tmff2_device_entry *tmff2 = hid_get_drvdata(hdev);
+    struct t500rs_device_entry *t500rs;
+
+    if (tmff2) {
+        t500rs = tmff2->data;
+        if (t500rs) {
+            if (t500rs->data) {
+                t500rs_cleanup_usb(t500rs->data->hdev);
+                kfree(t500rs->data);
+            }
+            kfree(t500rs);
+        }
+    }
+}
+
+static const struct hid_device_id t500rs_devices[] = {
+    { HID_USB_DEVICE(0x044f, 0xb65d) },
+    { }
+};
+MODULE_DEVICE_TABLE(hid, t500rs_devices);
+
+static struct hid_driver t500rs_driver = {
+    .name = "t500rs",
+    .id_table = t500rs_devices,
+    .probe = t500rs_probe,
+    .remove = t500rs_remove,
+};
+module_hid_driver(t500rs_driver);

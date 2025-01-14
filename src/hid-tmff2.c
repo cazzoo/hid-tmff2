@@ -4,7 +4,16 @@
 #include <linux/hid.h>
 #include <linux/version.h>
 #include "hid-tmff2.h"
+#include <linux/slab.h>
+#include <linux/input.h>
+#include <linux/kernel.h>
+#include <linux/init.h>
+#include <linux/usb.h>
+#include <linux/printk.h>
 
+static bool debug;
+module_param(debug, bool, 0644);
+MODULE_PARM_DESC(debug, "Enable debug output");
 
 int open_mode = 1;
 module_param(open_mode, int, 0660);
@@ -805,3 +814,16 @@ static struct hid_driver tmff2_driver = {
 module_hid_driver(tmff2_driver);
 
 MODULE_LICENSE("GPL");
+
+void tmff2_dbg(const char *fmt, ...)
+{
+	va_list args;
+	
+	if (!debug)
+		return;
+		
+	va_start(args, fmt);
+	vprintk(fmt, args);
+	va_end(args);
+}
+EXPORT_SYMBOL_GPL(tmff2_dbg);

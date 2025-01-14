@@ -2,7 +2,27 @@
 #define __HID_TMT500RS_UTILS_H
 
 #include <linux/kernel.h>
+#include <linux/hid.h>
+#include <linux/string.h>
 #include "hid-tmt500rs.h"
+
+/* Command info structure */
+struct t500rs_command_info {
+    u8 cmd;
+    u8 id;
+    const char *name;
+    size_t min_length;
+    size_t max_length;
+    bool requires_init;
+};
+
+/* Error codes */
+#define T500RS_SUCCESS         0
+#define T500RS_ERROR_TIMEOUT   1
+#define T500RS_ERROR_PROTO     2
+#define T500RS_ERROR_STALL     3
+#define T500RS_ERROR_DISCONNECT 4
+#define T500RS_ERROR_INVALID   5
 
 /* Command definitions */
 static const struct t500rs_command_info t500rs_commands[] = {
@@ -20,25 +40,22 @@ static const struct t500rs_command_info t500rs_commands[] = {
 
 static inline void t500rs_info(struct t500rs_device_entry *t500rs, const char *fmt, ...)
 {
-    struct va_format vaf;
     va_list args;
 
     va_start(args, fmt);
-    vaf.fmt = fmt;
-    vaf.va = &args;
-    hid_info(t500rs->hdev, "%pV", &vaf);
+    hid_info(t500rs->data->hdev, fmt, args);
     va_end(args);
 }
 
-static inline const char *t500rs_state_to_string(enum t500rs_device_state state)
+static inline const char *t500rs_state_to_string(enum t500rs_state state)
 {
     switch (state) {
-    case T500RS_STATE_DISCONNECTED:  return "DISCONNECTED";
-    case T500RS_STATE_INITIALIZING:  return "INITIALIZING";
-    case T500RS_STATE_SWITCHING_MODE: return "SWITCHING_MODE";
-    case T500RS_STATE_READY:         return "READY";
-    case T500RS_STATE_ERROR:         return "ERROR";
-    default:                         return "UNKNOWN";
+    case T500RS_STATE_INIT:         return "INIT";
+    case T500RS_STATE_INITIALIZING: return "INITIALIZING";
+    case T500RS_STATE_READY:        return "READY";
+    case T500RS_STATE_ERROR:        return "ERROR";
+    case T500RS_STATE_DISCONNECTED: return "DISCONNECTED";
+    default:                        return "UNKNOWN";
     }
 }
 
@@ -57,7 +74,7 @@ static inline const char *t500rs_error_to_string(int error)
 
 static inline bool t500rs_validate_command(u8 cmd, u8 id, size_t len)
 {
-    int i;
+    size_t i;
     for (i = 0; i < ARRAY_SIZE(t500rs_commands); i++) {
         if (t500rs_commands[i].cmd == cmd && t500rs_commands[i].id == id) {
             return len >= t500rs_commands[i].min_length && 
@@ -69,13 +86,11 @@ static inline bool t500rs_validate_command(u8 cmd, u8 id, size_t len)
 
 static inline bool t500rs_state_allows_command(struct t500rs_device_entry *t500rs, u8 cmd, u8 id)
 {
-    switch (t500rs->state) {
+    switch (t500rs->data->state) {
     case T500RS_STATE_INITIALIZING:
         return true;
     case T500RS_STATE_READY:
         return !(cmd == 0x42 || (cmd == 0x41 && id == 0x03));
-    case T500RS_STATE_SWITCHING_MODE:
-        return false;
     case T500RS_STATE_ERROR:
         return false;
     default:
@@ -84,10 +99,10 @@ static inline bool t500rs_state_allows_command(struct t500rs_device_entry *t500r
 }
 
 static inline void t500rs_set_state(struct t500rs_device_entry *t500rs, 
-                           enum t500rs_device_state new_state)
+                                  enum t500rs_state new_state)
 {
-    enum t500rs_device_state old_state = t500rs->state;
-    t500rs->state = new_state;
+    enum t500rs_state old_state = t500rs->data->state;
+    t500rs->data->state = new_state;
     
     t500rs_info(t500rs, "State changed: %s -> %s\n",
                 t500rs_state_to_string(old_state),

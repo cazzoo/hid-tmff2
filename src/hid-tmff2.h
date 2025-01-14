@@ -5,6 +5,11 @@
 #include <linux/fixp-arith.h>
 #include <linux/ktime.h>
 #include <linux/input.h>
+#include <linux/hid.h>
+#include <linux/module.h>
+#include <linux/slab.h>
+#include <linux/usb.h>
+#include <linux/kernel.h>
 
 extern int timer_msecs;
 extern int spring_level;
@@ -151,5 +156,8 @@ int t300rs_set_autocenter(void *, uint16_t);
 
 int t300rs_send_buf(struct t300rs_device_entry *t300rs, u8 *send_buffer, size_t len);
 int t300rs_send_int(struct t300rs_device_entry *t300rs);
+
+/* Debug logging */
+void tmff2_dbg(const char *fmt, ...);
 
 #endif
