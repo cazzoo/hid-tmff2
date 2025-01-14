@@ -2,8 +2,10 @@
 
 # Colors for output
 GREEN='\033[0;32m'
-RED='\033[0;31m'
+RED='\033[1;31m'
 YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
 # Function to print progress
@@ -19,6 +21,31 @@ print_error() {
     echo -e "${RED}[✗]${NC} $1"
 }
 
+print_info() {
+    echo -e "${BLUE}[i]${NC} $1"
+}
+
+print_phase() {
+    echo -e "\n${CYAN}=== $1 ===${NC}"
+}
+
+# Function to save test logs
+save_test_logs() {
+    local timestamp=$(date +%Y%m%d_%H%M%S)
+    local log_dir="logs"
+    mkdir -p "$log_dir"
+    
+    # Save dmesg output with sudo
+    sudo dmesg | tail -n 1000 > "$log_dir/dmesg_${timestamp}.log"
+    
+    # Save test output
+    if [ -n "$1" ]; then
+        echo "$1" > "$log_dir/test_${timestamp}.log"
+    fi
+    
+    print_info "Logs saved to $log_dir/dmesg_${timestamp}.log and $log_dir/test_${timestamp}.log"
+}
+
 # Function to check if a module is loaded
 is_module_loaded() {
     lsmod | grep -q "^$1"
@@ -27,7 +54,6 @@ is_module_loaded() {
 
 # Function to check module dependencies
 get_module_dependencies() {
-    local module=$1
     lsmod | grep "^$module" | awk '{print $4}' | tr ',' ' '
 }
 
@@ -146,58 +172,6 @@ clear_dmesg() {
     sudo dmesg -C
 }
 
-# Trap for cleanup on script exit
-trap cleanup_modules EXIT
-
-# Change to root directory
-cd ../../
-if [ $? -ne 0 ]; then
-    print_error "Failed to change to root directory"
-    exit 1
-fi
-
-# Clean build
-print_status "Cleaning previous build..."
-make clean
-if [ $? -ne 0 ]; then
-    print_error "Clean failed"
-    exit 1
-fi
-print_success "Clean completed"
-
-# Build modules
-print_status "Building modules..."
-make
-if [ $? -ne 0 ]; then
-    print_error "Build failed"
-    exit 1
-fi
-print_success "Build completed"
-
-# Remove existing modules
-print_status "Removing existing modules..."
-cleanup_modules
-
-# Clear kernel log before starting tests
-print_status "Clearing kernel log..."
-clear_dmesg
-
-# Install modules
-print_status "Installing modules..."
-sudo mkdir -p /lib/modules/$(uname -r)/kernel/drivers/hid
-sudo cp hid-tmff-new.ko /lib/modules/$(uname -r)/kernel/drivers/hid/
-sudo cp test-tmt500rs.ko /lib/modules/$(uname -r)/kernel/drivers/hid/
-sudo depmod -a
-
-# Load main module
-print_status "Loading main module..."
-sudo modprobe hid-tmff-new
-if [ $? -ne 0 ]; then
-    print_error "Failed to load main module"
-    exit 1
-fi
-print_success "Main module loaded"
-
 # Function to display test progress bar
 display_progress() {
     local current=$1
@@ -217,9 +191,9 @@ display_progress() {
     printf "] %d%%" $percentage
 }
 
-# Function to parse and display test results
+# Function to display test results with colors
 display_test_results() {
-    local results=$(dmesg | grep -A 10 "=== T500RS Driver Test Summary ===")
+    local results=$(sudo dmesg | grep -A 15 "TMT500RS Test Summary:")
     local total_tests=$(echo "$results" | grep "Total test phases:" | awk '{print $4}' | cut -d'/' -f2)
     local completed_tests=$(echo "$results" | grep "Total test phases:" | awk '{print $4}' | cut -d'/' -f1)
     local total_assertions=$(echo "$results" | grep "Total assertions:" | awk '{print $3}')
@@ -227,10 +201,11 @@ display_test_results() {
     local failed=$(echo "$results" | grep "Failed:" | awk '{print $2}')
     local success_rate=$(echo "$results" | grep "Success rate:" | awk '{print $3}' | tr -d '%')
 
-    echo -e "\n\n${YELLOW}=== Test Results ===${NC}"
+    echo -e "\n${CYAN}=== Test Results ===${NC}"
     echo -e "Test Phases: ${GREEN}$completed_tests${NC}/$total_tests"
-    echo -e "Assertions: ${GREEN}$total_assertions${NC}"
+    echo -e "Total Assertions: ${GREEN}$total_assertions${NC}"
     echo -e "Passed: ${GREEN}$passed${NC}"
+    
     if [ "$failed" -eq "0" ]; then
         echo -e "Failed: ${GREEN}$failed${NC}"
     else
@@ -244,41 +219,66 @@ display_test_results() {
     else
         echo -e "Success Rate: ${RED}$success_rate%${NC}"
     fi
+
+    # Display test categories
+    echo -e "\n${CYAN}Test Categories:${NC}"
+    echo "$results" | grep -A 4 "Test Categories:" | tail -n +2 | while read -r category; do
+        if [ -n "$category" ]; then
+            echo -e "${BLUE}$category${NC}"
+        fi
+    done
 }
 
-# Function to display test phase details
-display_test_phase() {
-    local phase=$1
-    local message=$2
-    echo -e "\n${YELLOW}Phase $phase:${NC} $message"
-}
+# Main test execution
+print_phase "Starting Test Suite"
+
+# Clean up any existing modules
+cleanup_modules
+
+# Clear kernel log before starting tests
+print_status "Clearing kernel log..."
+clear_dmesg
 
 # Load test module with timeout
-display_test_phase "1" "Loading test module"
-sudo modprobe test-tmt500rs
+print_phase "Loading Test Module"
+
+# First, try to find the module
+if [ -f "../../test-tmt500rs.ko" ]; then
+    print_status "Found test module in root directory"
+    sudo insmod ../../test-tmt500rs.ko
+elif [ -f "test-tmt500rs.ko" ]; then
+    print_status "Found test module in current directory"
+    sudo insmod test-tmt500rs.ko
+else
+    print_error "Could not find test module"
+    exit 1
+fi
+
 if [ $? -ne 0 ]; then
     print_error "Failed to load test module"
+    save_test_logs
     cleanup_modules
     exit 1
 fi
 print_success "Test module loaded"
 
 # Wait for test completion (with timeout)
-display_test_phase "2" "Running tests"
+print_phase "Running Tests"
 timeout=15
 counter=0
 test_started=false
+test_output=""
 
 while [ $counter -lt $timeout ]; do
     # Check for test start
-    if ! $test_started && dmesg | grep -q "=== Starting T500RS Driver Test Suite ==="; then
+    if ! $test_started && sudo dmesg | grep -q "Starting TMT500RS test module"; then
         test_started=true
         echo ""
     fi
     
     # If tests have started, show progress
     if $test_started; then
-        current_test=$(dmesg | grep "T500RS Test \[[0-9]*/[0-9]*\]:" | tail -n 1)
+        current_test=$(sudo dmesg | grep "TMT500RS Test \[[0-9]*/[0-9]*\]:" | tail -n 1)
         if [ -n "$current_test" ]; then
             current=$(echo "$current_test" | grep -o "\[[0-9]*/[0-9]*\]" | cut -d'/' -f1 | tr -d '[]')
             total=$(echo "$current_test" | grep -o "\[[0-9]*/[0-9]*\]" | cut -d'/' -f2 | tr -d '[]')
@@ -287,8 +287,9 @@ while [ $counter -lt $timeout ]; do
     fi
     
     # Check for test completion
-    if dmesg | grep -q "=== T500RS Driver Test Summary ==="; then
+    if sudo dmesg | grep -q "TMT500RS Test Summary:"; then
         echo -e "\n"
+        test_output=$(sudo dmesg | grep -A 20 "TMT500RS Test Summary:")
         display_test_results
         break
     fi
@@ -299,17 +300,17 @@ done
 
 if [ $counter -ge $timeout ]; then
     print_error "Test timeout after ${timeout}s"
-    dmesg | tail -n 30
-fi
-
-# Final status
-if [ $counter -ge $timeout ]; then
-    print_error "Tests did not complete within ${timeout} seconds"
+    save_test_logs "Test timeout after ${timeout}s"
+    cleanup_modules
     exit 1
-elif dmesg | grep -q "Failed: 0"; then
+elif echo "$test_output" | grep -q "Failed: 0"; then
     print_success "All tests passed successfully"
+    save_test_logs "$test_output"
+    cleanup_modules
     exit 0
 else
     print_error "Some tests failed"
+    save_test_logs "$test_output"
+    cleanup_modules
     exit 1
 fi 
