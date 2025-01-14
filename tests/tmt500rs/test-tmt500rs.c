@@ -7,6 +7,7 @@
 #include <linux/platform_device.h>
 #include <linux/mutex.h>
 #include <linux/delay.h>
+#include "test_coverage.h"
 
 /* Device IDs */
 #define TMT500RS_USB_VENDOR_ID  0x044f
@@ -22,6 +23,7 @@ struct test_statistics {
 };
 
 static struct test_statistics test_stats;
+static struct test_coverage_report coverage_report;
 
 /* Forward declarations of release functions */
 static void mock_usb_release(struct device *dev);
@@ -392,6 +394,8 @@ static int __init test_tmt500rs_init(void)
     memset(&test_stats, 0, sizeof(test_stats));
     test_stats.total_phases = 6;  // Device init, FF effects, Invalid params, Resource exhaustion, Effect combinations, Edge cases
 
+    init_test_coverage(&coverage_report);
+
     pr_info("Starting TMT500RS test module\n");
     
     ret = test_device_init();
@@ -406,9 +410,11 @@ static int __init test_tmt500rs_init(void)
     if (test_mock_dev && test_mock_dev->initialized) {
         pr_info("Device initialization test passed\n");
         test_stats.passed_tests++;
+        record_test_result(&coverage_report, TC_DEVICE_INIT, true);
     } else {
         pr_err("Device initialization test failed\n");
         test_stats.failed_tests++;
+        record_test_result(&coverage_report, TC_DEVICE_INIT, false);
         goto cleanup;
     }
 
@@ -425,9 +431,11 @@ static int __init test_tmt500rs_init(void)
     if (ret == 0) {
         pr_info("Force feedback effect test passed\n");
         test_stats.passed_tests++;
+        record_test_result(&coverage_report, TC_FORCE_FEEDBACK, true);
     } else {
         pr_err("Force feedback effect test failed: %d\n", ret);
         test_stats.failed_tests++;
+        record_test_result(&coverage_report, TC_FORCE_FEEDBACK, false);
     }
 
     // Test phase 3: Invalid Parameters
@@ -440,9 +448,11 @@ static int __init test_tmt500rs_init(void)
     if (ret == -EINVAL) {
         pr_info("Invalid effect type test passed\n");
         test_stats.passed_tests++;
+        record_test_result(&coverage_report, TC_ERROR_HANDLING, true);
     } else {
         pr_err("Invalid effect type test failed: %d\n", ret);
         test_stats.failed_tests++;
+        record_test_result(&coverage_report, TC_ERROR_HANDLING, false);
     }
 
     // Test NULL device
@@ -451,9 +461,11 @@ static int __init test_tmt500rs_init(void)
     if (ret == -EINVAL) {
         pr_info("NULL device test passed\n");
         test_stats.passed_tests++;
+        record_test_result(&coverage_report, TC_ERROR_HANDLING, true);
     } else {
         pr_err("NULL device test failed: %d\n", ret);
         test_stats.failed_tests++;
+        record_test_result(&coverage_report, TC_ERROR_HANDLING, false);
     }
 
     // Test NULL effect
@@ -462,9 +474,11 @@ static int __init test_tmt500rs_init(void)
     if (ret == -EINVAL) {
         pr_info("NULL effect test passed\n");
         test_stats.passed_tests++;
+        record_test_result(&coverage_report, TC_ERROR_HANDLING, true);
     } else {
         pr_err("NULL effect test failed: %d\n", ret);
         test_stats.failed_tests++;
+        record_test_result(&coverage_report, TC_ERROR_HANDLING, false);
     }
 
     // Test uninitialized device
@@ -475,9 +489,11 @@ static int __init test_tmt500rs_init(void)
         if (ret == -EINVAL) {
             pr_info("Uninitialized device test passed\n");
             test_stats.passed_tests++;
+            record_test_result(&coverage_report, TC_ERROR_HANDLING, true);
         } else {
             pr_err("Uninitialized device test failed: %d\n", ret);
             test_stats.failed_tests++;
+            record_test_result(&coverage_report, TC_ERROR_HANDLING, false);
         }
         kfree(uninit_dev);
     }
@@ -492,9 +508,11 @@ static int __init test_tmt500rs_init(void)
     if (ret == -ENOMEM) {
         pr_info("Resource exhaustion test passed\n");
         test_stats.passed_tests++;
+        record_test_result(&coverage_report, TC_RESOURCE_MGMT, true);
     } else {
         pr_err("Resource exhaustion test failed: %d\n", ret);
         test_stats.failed_tests++;
+        record_test_result(&coverage_report, TC_RESOURCE_MGMT, false);
     }
 
     // Test phase 5: Effect Combinations
@@ -504,9 +522,11 @@ static int __init test_tmt500rs_init(void)
     if (ret == 0) {
         pr_info("Effect combinations test passed\n");
         test_stats.passed_tests++;
+        record_test_result(&coverage_report, TC_EFFECT_COMBO, true);
     } else {
         pr_err("Effect combinations test failed: %d\n", ret);
         test_stats.failed_tests++;
+        record_test_result(&coverage_report, TC_EFFECT_COMBO, false);
     }
 
     // Test phase 6: Edge Cases
@@ -516,9 +536,11 @@ static int __init test_tmt500rs_init(void)
     if (ret == 0) {
         pr_info("Edge cases test passed\n");
         test_stats.passed_tests++;
+        record_test_result(&coverage_report, TC_EDGE_CASES, true);
     } else {
         pr_err("Edge cases test failed: %d\n", ret);
         test_stats.failed_tests++;
+        record_test_result(&coverage_report, TC_EDGE_CASES, false);
     }
 
 cleanup:
@@ -537,6 +559,8 @@ cleanup:
     pr_info("- Resource Management\n");
     pr_info("- Effect Combinations\n");
     pr_info("- Edge Cases\n");
+
+    print_test_coverage_report(&coverage_report);
 
     return 0;
 }
