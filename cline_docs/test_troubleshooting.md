@@ -2,9 +2,9 @@
 
 ## Current Test Status (2025-01-14)
 - Build: ✅ Successful
-- Module Loading: ✅ Successful
-- Test Execution: ✅ Successful
-- Test Results: ✅ All tests passing (9/9)
+- Module Loading: ⚠️ Partial Success
+- Test Execution: ❌ Failed
+- Test Results: ❌ Tests failing (0/9)
 
 ## Test Coverage
 1. Device Initialization
@@ -74,18 +74,76 @@
    - Issue: dmesg access denied
    - Solution: Added sudo to all dmesg commands in run_tests.sh
 
+5. USB Initialization Issues (2025-01-14)
+   - Issue: Device disconnecting during initialization
+   - Solution: Added delays between initialization steps
+   - Issue: URB submission errors (-19)
+   - Solution: Modified probe function to use minimal features during init
+   - Issue: hid-generic binding conflict
+   - Solution: Added explicit unbinding from hid-generic
+
+6. Mode Switch Cycling (2025-01-15)
+   - Issue: Device cycling between b65d and not reaching b65e mode
+   - Root Cause: Improper state machine transitions and timing
+   - Solution: 
+     - Added proper state verification before mode switch
+     - Increased delays between USB operations
+     - Added explicit state tracking
+     - Added retry mechanism with backoff
+     - Added URB cleanup before mode switch
+     - Added mode switch completion verification
+     - Added proper error recovery
+
+7. Duplicate Debug Parameter (2025-01-15)
+   - Issue: sysfs error - cannot create duplicate filename '/module/hid_tmff_new/parameters/debug'
+   - Root Cause: TMT500RS module including <linux/hid-debug.h> while also using main driver's debug parameter
+   - Solution:
+     - Removed unnecessary <linux/hid-debug.h> includes from TMT500RS module files
+     - Kept extern bool debug declaration to use main driver's parameter
+     - Verified debug functionality still works through main driver's parameter
+
+8. Device Cycling During Mode Switch Test (2025-01-15)
+   - Issue: Device repeatedly disconnecting and reconnecting during mode switch test
+   - Root Cause: Mode switch state machine not properly handling device reconnection
+   - Symptoms:
+     - Device detected as b65d but not transitioning to b65e
+     - Multiple USB device number increments (56, 59, 61, etc.)
+     - Test timeout due to device not stabilizing
+   - Next Steps:
+     - Review mode switch state machine in hid-tmt500rs-mode.c
+     - Add more robust device state tracking
+     - Implement better reconnection handling
+     - Add additional logging for state transitions
+     - Consider increasing timeouts for device stabilization
+
+9. Kernel Oops During Mode Switch (2025-01-15)
+   - Issue: Kernel oops during device disconnection phase of mode switch
+   - Root Cause: USB power management issue during device disconnection
+   - Symptoms:
+     - Kernel oops in usb_autopm_put_interface
+     - Unable to handle page fault at address 0x579768
+     - Device state corruption during power management
+   - Next Steps:
+     - Disable USB autosuspend during mode switch
+     - Add proper USB power management handling
+     - Review USB interface cleanup sequence
+     - Add additional error handling for power management failures
+     - Consider implementing manual power management control
+
 ## Next Steps
 1. Add more test categories:
    - [x] Effect combinations
    - [x] Edge cases
    - [ ] Performance testing
    - [ ] Long-running tests
+   - [x] Mode switch stability testing
 
 2. Improve test framework:
    - [x] Better progress display
    - [x] Enhanced error reporting
    - [x] Automatic log saving
    - [ ] Test coverage reporting
+   - [x] Mode switch verification
 
 3. Documentation:
    - [ ] Document test procedures
@@ -96,8 +154,8 @@
 - Initial Implementation: ✅ Complete
 - Basic Test Suite: ✅ Complete
 - Test Reporting: ✅ Complete
-- Force Feedback Tests: ✅ Complete
-- Extended Test Coverage: ✅ Complete
+- Force Feedback Tests: ❌ Failing
+- Extended Test Coverage: ⚠️ Partial
 - Documentation: 🔄 In Progress
 
 ## Recent Updates
@@ -106,6 +164,10 @@
 - Added comprehensive parameter validation
 - Added all waveform type tests
 - Added rapid effect change tests
+- Added USB initialization troubleshooting
+- Modified probe function for better device stability
+- Added device state transition delays
+- Updated error handling for USB issues
 
 ## Next Review
-After implementing performance tests
+After resolving USB initialization issues

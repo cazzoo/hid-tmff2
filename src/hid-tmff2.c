@@ -10,10 +10,12 @@
 #include <linux/init.h>
 #include <linux/usb.h>
 #include <linux/printk.h>
+#include "tmt500rs/hid-tmt500rs.h"
 
-static bool debug;
+bool debug;
 module_param(debug, bool, 0644);
 MODULE_PARM_DESC(debug, "Enable debug output");
+EXPORT_SYMBOL_GPL(debug);
 
 int open_mode = 1;
 module_param(open_mode, int, 0660);
@@ -653,11 +655,9 @@ err:
 
 static int tmff2_probe(struct hid_device *hdev, const struct hid_device_id *id)
 {
+	int ret;
 	struct tmff2_device_entry *tmff2 =
 		kzalloc(sizeof(struct tmff2_device_entry), GFP_KERNEL);
-
-	int ret;
-
 
 	if (!tmff2) {
 		ret = -ENOMEM;
@@ -748,8 +748,7 @@ static const __u8 *tmff2_report_fixup(struct hid_device *hdev, __u8 *rdesc,
 
 static void tmff2_remove(struct hid_device *hdev)
 {
-	struct tmff2_device_entry *tmff2 = tmff2_from_hdev(hdev);
-	struct device *dev;
+	struct tmff2_device_entry *tmff2 = hid_get_drvdata(hdev);
 
 	if (!tmff2)
 		return;
@@ -757,30 +756,10 @@ static void tmff2_remove(struct hid_device *hdev)
 	tmff2->allow_scheduling = 0;
 	cancel_delayed_work_sync(&tmff2->work);
 
-	dev = &tmff2->hdev->dev;
-	if (tmff2->params & PARAM_FRICTION_LEVEL)
-		device_remove_file(dev, &dev_attr_friction_level);
+	hid_err(hdev, "removing device\n");
 
-	if (tmff2->params & PARAM_DAMPER_LEVEL)
-		device_remove_file(dev, &dev_attr_damper_level);
-
-	if (tmff2->params & PARAM_SPRING_LEVEL)
-		device_remove_file(dev, &dev_attr_spring_level);
-
-	if (tmff2->params & PARAM_RANGE)
-		device_remove_file(dev, &dev_attr_range);
-
-	if (tmff2->params & PARAM_ALT_MODE)
-		device_remove_file(dev, &dev_attr_alternate_modes);
-
-	if (tmff2->params & PARAM_GAIN)
-		device_remove_file(dev, &dev_attr_gain);
-
-	hid_hw_stop(hdev);
-	tmff2->wheel_destroy(tmff2->data);
-
-	kfree(tmff2->states);
 	kfree(tmff2);
+	t500rs_driver_exit();
 }
 
 static const struct hid_device_id tmff2_devices[] = {
@@ -805,13 +784,41 @@ static const struct hid_device_id tmff2_devices[] = {
 MODULE_DEVICE_TABLE(hid, tmff2_devices);
 
 static struct hid_driver tmff2_driver = {
-	.name = "tmff2",
+	.name = "hid-tmff2",
 	.id_table = tmff2_devices,
 	.probe = tmff2_probe,
 	.remove = tmff2_remove,
 	.report_fixup = tmff2_report_fixup,
 };
-module_hid_driver(tmff2_driver);
+
+static int __init tmff2_init(void)
+{
+	int ret;
+
+	ret = t500rs_driver_init();
+	if (ret) {
+		pr_err("tmff2: Failed to initialize T500RS driver\n");
+		return ret;
+	}
+
+	ret = hid_register_driver(&tmff2_driver);
+	if (ret) {
+		pr_err("tmff2: Failed to register driver\n");
+		t500rs_driver_exit();
+		return ret;
+	}
+
+	return 0;
+}
+
+static void __exit tmff2_exit(void)
+{
+	t500rs_driver_exit();
+	hid_unregister_driver(&tmff2_driver);
+}
+
+module_init(tmff2_init);
+module_exit(tmff2_exit);
 
 MODULE_LICENSE("GPL");
 

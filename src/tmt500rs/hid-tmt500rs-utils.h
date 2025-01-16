@@ -38,6 +38,12 @@ static const struct t500rs_command_info t500rs_commands[] = {
     { 0x4A, 0x01, "Upload Effect", 8, 8, false },
 };
 
+/* Function declarations */
+int t500rs_send_cmd_with_retry(struct t500rs_device_entry *t500rs, u8 *buf, size_t len, int max_retries);
+int t500rs_read_response(struct t500rs_device_entry *t500rs, u8 *buf, size_t len);
+int t500rs_send_command(struct t500rs_device_entry *t500rs, u8 cmd_type, u8 cmd_id, u8 param);
+void t500rs_stop_urbs(struct t500rs_device_entry *t500rs);
+
 static inline void t500rs_info(struct t500rs_device_entry *t500rs, const char *fmt, ...)
 {
     va_list args;
@@ -55,6 +61,7 @@ static inline const char *t500rs_state_to_string(enum t500rs_state state)
     case T500RS_STATE_READY:        return "READY";
     case T500RS_STATE_ERROR:        return "ERROR";
     case T500RS_STATE_DISCONNECTED: return "DISCONNECTED";
+    case T500RS_STATE_RECONNECTING: return "RECONNECTING";
     default:                        return "UNKNOWN";
     }
 }
