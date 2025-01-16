@@ -43,7 +43,7 @@ enum t500rs_mode_state {
     T500RS_MODE_STATE_WAIT_DISCONNECT,
     T500RS_MODE_STATE_WAIT_RECONNECT,
     T500RS_MODE_STATE_VERIFY,
-    T500RS_MODE_STATE_COMPLETE,
+    T500RS_MODE_STATE_DONE,
     T500RS_MODE_STATE_ERROR
 };
 
@@ -56,6 +56,7 @@ struct t500rs_mode_switch {
     unsigned long last_attempt;
     unsigned long switch_start_time;
     bool force_retry;
+    bool usb_initialized;  /* Track if USB has been initialized */
 };
 
 /* Device data */
@@ -76,6 +77,7 @@ struct t500rs_device_data {
     struct hid_report *report;
     struct hid_field *ff_field;
     struct t500rs_mode_switch *mode_switch;
+    int urb_error_count;  /* Track consecutive URB errors */
 };
 
 /* Device entry */
@@ -110,7 +112,7 @@ int t500rs_wheel_init(struct tmff2_device_entry *tmff2, int open_mode);
 __u8 *t500rs_wheel_fixup(struct hid_device *hdev, __u8 *rdesc, unsigned int *rsize);
 
 /* Mode switch functions */
-void t500rs_init_mode_switch(struct t500rs_device_entry *t500rs);
+int t500rs_init_mode_switch(struct t500rs_device_entry *t500rs);
 void t500rs_cleanup_mode_switch(struct t500rs_device_entry *t500rs);
 int t500rs_handle_mode_switch(struct t500rs_device_entry *t500rs);
 int t500rs_start_mode_switch(struct t500rs_device_entry *t500rs, u8 target_mode);

@@ -157,6 +157,7 @@ static int t500rs_probe(struct hid_device *hdev, const struct hid_device_id *id)
 {
     struct t500rs_device_entry *t500rs;
     struct tmff2_device_entry *tmff2;
+    struct usb_interface *intf;
     int ret;
 
     /* Check if we can handle this device */
@@ -169,6 +170,9 @@ static int t500rs_probe(struct hid_device *hdev, const struct hid_device_id *id)
         t500rs_dbg("Unbinding from hid-generic\n");
         hid_hw_stop(hdev);
     }
+
+    /* Wait for device to settle after unbinding */
+    msleep(5000);
 
     tmff2 = kzalloc(sizeof(*tmff2), GFP_KERNEL);
     if (!tmff2)
@@ -187,6 +191,15 @@ static int t500rs_probe(struct hid_device *hdev, const struct hid_device_id *id)
     /* Set initial state based on device ID */
     t500rs->data->state = id->driver_data;
     t500rs->data->initialized = false;
+    spin_lock_init(&t500rs->data->lock);
+    init_completion(&t500rs->data->response_completion);
+
+    /* Disable USB autosuspend */
+    intf = to_usb_interface(hdev->dev.parent);
+    if (intf) {
+        usb_autopm_get_interface(intf);
+        msleep(2000);  // Wait for power management
+    }
 
     /* Parse HID report descriptors */
     ret = hid_parse(hdev);
@@ -195,12 +208,18 @@ static int t500rs_probe(struct hid_device *hdev, const struct hid_device_id *id)
         goto err_free_tmff2;
     }
 
+    /* Wait for HID parsing to settle */
+    msleep(2000);
+
     /* Start with minimal features */
     ret = hid_hw_start(hdev, HID_CONNECT_HIDRAW);
     if (ret) {
         hid_err(hdev, "hw start failed\n");
         goto err_free_tmff2;
     }
+
+    /* Wait for HID to start */
+    msleep(5000);
 
     /* Create sysfs attributes */
     ret = sysfs_create_group(&hdev->dev.kobj, &t500rs_attr_group);
@@ -212,61 +231,87 @@ static int t500rs_probe(struct hid_device *hdev, const struct hid_device_id *id)
     /* Initialize based on current state */
     switch (t500rs->data->state) {
     case T500RS_STATE_INIT:
-        /* Wait for device to settle */
-        msleep(100);
+        /* Wait for device to settle after enumeration */
+        msleep(8000);
+
+        /* Initialize USB first */
         ret = t500rs_init_usb(t500rs);
         if (ret) {
             hid_err(hdev, "USB initialization failed\n");
             goto err_remove_sysfs;
         }
+
+        /* Wait for USB initialization to complete */
+        msleep(8000);
+
+        /* Update state */
         t500rs->data->state = T500RS_STATE_INITIALIZING;
-        /* Wait for device to reconnect */
-        msleep(500);
-        /* fallthrough */
-    case T500RS_STATE_INITIALIZING:
+        break;
+
+    case T500RS_STATE_READY:
+        /* Device is already in wheel mode */
+        dev_info(&hdev->dev, "T500RS: Device already in wheel mode\n");
+        
+        /* Wait for device to settle */
+        msleep(8000);
+
+        /* Initialize USB */
+        ret = t500rs_init_usb(t500rs);
+        if (ret) {
+            hid_err(hdev, "USB initialization failed\n");
+            goto err_remove_sysfs;
+        }
+
+        /* Wait for USB to stabilize */
+        msleep(8000);
+
+        /* Mark as initialized */
+        t500rs->data->initialized = true;
+        break;
+
+    default:
+        hid_err(hdev, "Invalid initial state %d\n", t500rs->data->state);
+        ret = -EINVAL;
+        goto err_remove_sysfs;
+    }
+
+    /* Initialize the wheel if needed */
+    if (t500rs->data->state == T500RS_STATE_INITIALIZING) {
         /* Wait for device to settle after USB init */
-        msleep(100);
+        msleep(8000);
+
+        /* Initialize the wheel */
         ret = t500rs_wheel_init(tmff2, 0);
         if (ret) {
             hid_err(hdev, "wheel initialization failed\n");
             goto err_cleanup_usb;
         }
+
         /* Wait for wheel init to complete */
-        msleep(100);
+        msleep(8000);
+
+        /* Initialize force feedback */
         ret = t500rs_init_ff(t500rs);
         if (ret) {
             hid_err(hdev, "force feedback initialization failed\n");
             goto err_cleanup_wheel;
         }
+
+        /* Wait for force feedback to initialize */
+        msleep(8000);
+
+        /* Mark device as ready */
         t500rs->data->state = T500RS_STATE_READY;
         t500rs->data->initialized = true;
-        break;
-    case T500RS_STATE_READY:
-        /* Device already initialized */
-        t500rs->data->initialized = true;
-        break;
-    default:
-        hid_err(hdev, "invalid state %d\n", t500rs->data->state);
-        ret = -EINVAL;
-        goto err_stop_hw;
     }
 
-    /* Enable full features now that initialization is complete */
-    if (t500rs->data->initialized) {
-        ret = hid_hw_open(hdev);
-        if (ret) {
-            hid_err(hdev, "hw open failed\n");
-            goto err_cleanup_wheel;
-        }
-        /* Enable input and force feedback */
-        ret = hid_hw_start(hdev, HID_CONNECT_DEFAULT);
-        if (ret) {
-            hid_err(hdev, "hw start with full features failed\n");
-            hid_hw_close(hdev);
-            goto err_cleanup_wheel;
-        }
+    /* Re-enable USB autosuspend */
+    if (intf) {
+        msleep(2000);  // Wait before re-enabling
+        usb_autopm_put_interface(intf);
     }
 
+    dev_info(&hdev->dev, "T500RS: Device initialized successfully\n");
     return 0;
 
 err_cleanup_wheel:
@@ -278,14 +323,10 @@ err_remove_sysfs:
 err_stop_hw:
     hid_hw_stop(hdev);
 err_free_tmff2:
-    if (tmff2) {
-        if (tmff2->data) {
-            if (t500rs->data)
-                kfree(t500rs->data);
-            kfree(tmff2->data);
-        }
-        kfree(tmff2);
-    }
+    if (intf)
+        usb_autopm_put_interface(intf);
+    kfree(tmff2->data);
+    kfree(tmff2);
     return ret;
 }
 
