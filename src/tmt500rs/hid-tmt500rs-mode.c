@@ -117,7 +117,7 @@ int t500rs_handle_mode_switch(struct t500rs_device_entry *t500rs)
 
         /* Stop all URBs and USB activity before mode switch */
         t500rs_stop_urbs(t500rs);
-        msleep(500);  // Wait longer for URBs to complete
+        msleep(1000);  // Wait longer for URBs to complete
 
         /* Set state before sending command */
         data->state = T500RS_STATE_RECONNECTING;
@@ -127,7 +127,7 @@ int t500rs_handle_mode_switch(struct t500rs_device_entry *t500rs)
         if (ret) {
             if (++mode_switch->retries < 5) {
                 dev_info(&t500rs->data->hdev->dev, "Mode switch command retry %d/5\n", mode_switch->retries);
-                msleep(500 * (mode_switch->retries + 1));  // Longer exponential backoff
+                msleep(1000 * (mode_switch->retries + 1));  // Longer exponential backoff
                 break;
             }
             dev_err(&t500rs->data->hdev->dev, "Mode switch command failed after retries\n");
@@ -138,7 +138,7 @@ int t500rs_handle_mode_switch(struct t500rs_device_entry *t500rs)
         mode_switch->state = T500RS_MODE_STATE_WAIT_DISCONNECT;
         mode_switch->retries = 0;
         mode_switch->last_attempt = current_time;
-        msleep(2000);  // Give device more time to process command
+        msleep(3000);  // Give device more time to process command
         break;
 
     case T500RS_MODE_STATE_WAIT_DISCONNECT:
@@ -148,42 +148,96 @@ int t500rs_handle_mode_switch(struct t500rs_device_entry *t500rs)
             mode_switch->state = T500RS_MODE_STATE_WAIT_RECONNECT;
             mode_switch->retries = 0;
             mode_switch->last_attempt = current_time;
-            msleep(3000);  // Give device more time to settle
+            msleep(5000);  // Give device more time to settle
             break;
         }
 
         /* Wait for device to disconnect with timeout */
-        timeout = mode_switch->last_attempt + msecs_to_jiffies(10000);  // Longer timeout
+        timeout = mode_switch->last_attempt + msecs_to_jiffies(15000);  // Longer timeout
         if (time_after(current_time, timeout)) {
             if (++mode_switch->retries < 3) {
                 dev_info(&t500rs->data->hdev->dev, "Disconnect timeout, retry %d/3\n", mode_switch->retries);
                 mode_switch->state = T500RS_MODE_STATE_SWITCHING;
                 mode_switch->force_retry = true;
-                msleep(1000);  // Longer delay before retry
+                msleep(2000);  // Longer delay before retry
                 break;
             }
             dev_err(&t500rs->data->hdev->dev, "Device disconnect timeout after retries\n");
             mode_switch->state = T500RS_MODE_STATE_ERROR;
             break;
         }
-        msleep(200);  // Check more frequently
+        msleep(500);  // Check less frequently
         break;
 
     case T500RS_MODE_STATE_WAIT_RECONNECT:
         /* Wait for device to reconnect with timeout */
-        timeout = mode_switch->last_attempt + msecs_to_jiffies(15000);  // Longer timeout
+        timeout = mode_switch->last_attempt + msecs_to_jiffies(20000);  // Longer timeout
         if (data->usbdev && data->state == T500RS_STATE_READY) {
-            dev_info(&t500rs->data->hdev->dev, "Device reconnected, verifying mode\n");
+            dev_info(&t500rs->data->hdev->dev, "Device reconnected, waiting for stability\n");
+            
+            /* Disable USB autosuspend during mode switch */
+            struct usb_interface *intf = to_usb_interface(data->hdev->dev.parent);
+            if (intf)
+                usb_autopm_get_interface(intf);
+            
+            /* Wait for device to stabilize */
+            msleep(5000);
+            
+            /* Verify USB device is still present */
+            if (!data->usbdev) {
+                dev_info(&t500rs->data->hdev->dev, "Device disconnected during stabilization\n");
+                if (++mode_switch->retries < 3) {
+                    dev_info(&t500rs->data->hdev->dev, "Retrying reconnection %d/3\n", mode_switch->retries);
+                    msleep(2000);
+                    break;
+                }
+                mode_switch->state = T500RS_MODE_STATE_ERROR;
+                break;
+            }
+            
+            /* Re-initialize USB communication */
+            ret = t500rs_init_usb(t500rs);
+            if (ret) {
+                dev_err(&t500rs->data->hdev->dev, "Failed to reinitialize USB: %d\n", ret);
+                if (++mode_switch->retries < 3) {
+                    dev_info(&t500rs->data->hdev->dev, "Retrying USB initialization %d/3\n", mode_switch->retries);
+                    msleep(2000);
+                    break;
+                }
+                mode_switch->state = T500RS_MODE_STATE_ERROR;
+                break;
+            }
+            
+            /* Wait for USB initialization to complete */
+            msleep(3000);
+            
+            /* Verify USB communication is stable */
+            if (!data->usbdev || !data->urb || data->state != T500RS_STATE_READY) {
+                dev_err(&t500rs->data->hdev->dev, "USB communication not stable after initialization\n");
+                if (++mode_switch->retries < 3) {
+                    dev_info(&t500rs->data->hdev->dev, "Retrying stabilization %d/3\n", mode_switch->retries);
+                    msleep(2000);
+                    break;
+                }
+                mode_switch->state = T500RS_MODE_STATE_ERROR;
+                break;
+            }
+            
+            /* Re-enable USB autosuspend */
+            if (intf)
+                usb_autopm_put_interface(intf);
+            
+            /* Proceed to verification after successful USB initialization */
             mode_switch->state = T500RS_MODE_STATE_VERIFY;
             mode_switch->retries = 0;
-            msleep(2000);  // Give device more time to settle
+            msleep(2000);  // Additional settling time
             break;
         }
 
         /* Check for transitional states */
         if (data->usbdev && data->state == T500RS_STATE_INITIALIZING) {
             dev_info(&t500rs->data->hdev->dev, "Device initializing, waiting...\n");
-            msleep(500);
+            msleep(1000);
             break;
         }
 
@@ -192,24 +246,37 @@ int t500rs_handle_mode_switch(struct t500rs_device_entry *t500rs)
                 dev_info(&t500rs->data->hdev->dev, "Reconnect timeout, retry %d/3\n", mode_switch->retries);
                 mode_switch->state = T500RS_MODE_STATE_SWITCHING;
                 mode_switch->force_retry = true;
-                msleep(1000);  // Longer delay before retry
+                msleep(2000);  // Longer delay before retry
                 break;
             }
             dev_err(&t500rs->data->hdev->dev, "Device reconnect timeout after retries\n");
             mode_switch->state = T500RS_MODE_STATE_ERROR;
             break;
         }
-        msleep(200);  // Check more frequently
+        msleep(500);  // Check less frequently
         break;
 
     case T500RS_MODE_STATE_VERIFY:
         /* Verify mode switch */
         dev_info(&t500rs->data->hdev->dev, "Verifying mode switch\n");
+        
+        /* Ensure USB communication is stable */
+        if (!data->usbdev || !data->urb || data->state != T500RS_STATE_READY) {
+            dev_err(&t500rs->data->hdev->dev, "USB communication not stable\n");
+            if (++mode_switch->retries < 3) {
+                dev_info(&t500rs->data->hdev->dev, "Retrying USB stabilization %d/3\n", mode_switch->retries);
+                msleep(2000);
+                break;
+            }
+            mode_switch->state = T500RS_MODE_STATE_ERROR;
+            break;
+        }
+        
         ret = t500rs_verify_mode(t500rs, mode_switch->target_mode);
         if (ret) {
             if (++mode_switch->retries < 3) {
                 dev_info(&t500rs->data->hdev->dev, "Mode verification retry %d/3\n", mode_switch->retries);
-                msleep(1000);  // Longer delay between retries
+                msleep(2000);  // Longer delay between retries
                 break;
             }
             dev_err(&t500rs->data->hdev->dev, "Mode verification failed after retries\n");
@@ -223,7 +290,7 @@ int t500rs_handle_mode_switch(struct t500rs_device_entry *t500rs)
         if (ret) {
             if (++mode_switch->retries < 3) {
                 dev_info(&t500rs->data->hdev->dev, "Init command retry %d/3\n", mode_switch->retries);
-                msleep(1000);  // Longer delay between retries
+                msleep(2000);  // Longer delay between retries
                 break;
             }
             dev_err(&t500rs->data->hdev->dev, "Init command failed after retries\n");
@@ -232,7 +299,19 @@ int t500rs_handle_mode_switch(struct t500rs_device_entry *t500rs)
         }
 
         /* Wait for initialization to complete */
-        msleep(2000);  // Give device more time to initialize
+        msleep(5000);  // Give device more time to initialize
+        
+        /* Final USB stability check */
+        if (!data->usbdev || !data->urb || data->state != T500RS_STATE_READY) {
+            dev_err(&t500rs->data->hdev->dev, "Lost USB communication after initialization\n");
+            if (++mode_switch->retries < 3) {
+                dev_info(&t500rs->data->hdev->dev, "Retrying initialization %d/3\n", mode_switch->retries);
+                msleep(2000);
+                break;
+            }
+            mode_switch->state = T500RS_MODE_STATE_ERROR;
+            break;
+        }
 
         dev_info(&t500rs->data->hdev->dev, "Mode switch completed successfully\n");
         mode_switch->state = T500RS_MODE_STATE_COMPLETE;

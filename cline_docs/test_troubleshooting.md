@@ -99,8 +99,10 @@
    - Root Cause: TMT500RS module including <linux/hid-debug.h> while also using main driver's debug parameter
    - Solution:
      - Removed unnecessary <linux/hid-debug.h> includes from TMT500RS module files
-     - Kept extern bool debug declaration to use main driver's parameter
+     - Added extern bool debug declaration in main driver's header file (hid-tmff2.h)
+     - Kept extern bool debug declaration in TMT500RS module header file
      - Verified debug functionality still works through main driver's parameter
+   - Status: ✅ Fixed - Verified debug parameter is properly shared between modules
 
 8. Device Cycling During Mode Switch Test (2025-01-15)
    - Issue: Device repeatedly disconnecting and reconnecting during mode switch test
@@ -109,12 +111,14 @@
      - Device detected as b65d but not transitioning to b65e
      - Multiple USB device number increments (56, 59, 61, etc.)
      - Test timeout due to device not stabilizing
-   - Next Steps:
-     - Review mode switch state machine in hid-tmt500rs-mode.c
-     - Add more robust device state tracking
-     - Implement better reconnection handling
-     - Add additional logging for state transitions
-     - Consider increasing timeouts for device stabilization
+   - Solution:
+     - Added proper USB power management handling during mode switch
+     - Disabled USB autosuspend during device reconnection phase
+     - Added explicit USB interface management
+     - Increased stabilization delays
+     - Added additional state verification checks
+     - Added proper error recovery with retries
+   - Status: ⚠️ In Progress - Testing solution effectiveness
 
 9. Kernel Oops During Mode Switch (2025-01-15)
    - Issue: Kernel oops during device disconnection phase of mode switch

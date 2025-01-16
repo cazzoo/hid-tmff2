@@ -28,11 +28,17 @@
 #include "../hid-tmff2.h"
 #include "hid-tmt500rs.h"
 
-/* Use the main driver's debug parameter */
-extern bool debug;
+/* Debug parameter */
+static bool debug;
+module_param(debug, bool, 0644);
+MODULE_PARM_DESC(debug, "Enable debug output for T500RS module");
 
-#define tmff2_dbg(fmt, ...) \
+/* Debug macro */
+#define t500rs_dbg(fmt, ...) \
     do { if (debug) dev_dbg(&hdev->dev, fmt, ##__VA_ARGS__); } while (0)
+
+/* Module dependencies */
+MODULE_SOFTDEP("pre: hid_tmff_new");
 
 int t500rs_populate_api(struct tmff2_device_entry *tmff2)
 {
@@ -160,7 +166,7 @@ static int t500rs_probe(struct hid_device *hdev, const struct hid_device_id *id)
     /* Unbind from hid-generic if it's bound */
     if (hdev->driver && hdev->driver->name && 
         strcmp(hdev->driver->name, "hid-generic") == 0) {
-        tmff2_dbg("Unbinding from hid-generic\n");
+        t500rs_dbg("Unbinding from hid-generic\n");
         hid_hw_stop(hdev);
     }
 

@@ -12,11 +12,6 @@
 #include <linux/printk.h>
 #include "tmt500rs/hid-tmt500rs.h"
 
-bool debug;
-module_param(debug, bool, 0644);
-MODULE_PARM_DESC(debug, "Enable debug output");
-EXPORT_SYMBOL_GPL(debug);
-
 int open_mode = 1;
 module_param(open_mode, int, 0660);
 MODULE_PARM_DESC(open_mode,
@@ -826,9 +821,6 @@ void tmff2_dbg(const char *fmt, ...)
 {
 	va_list args;
 	
-	if (!debug)
-		return;
-		
 	va_start(args, fmt);
 	vprintk(fmt, args);
 	va_end(args);

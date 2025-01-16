@@ -29,7 +29,9 @@ static void t500rs_urb_complete(struct urb *urb)
     case -ECONNRESET:
     case -ENOENT:
     case -ESHUTDOWN:
-        // These errors are expected when unplugging
+    case -ENODEV:
+        // These errors are expected when unplugging or during mode switch
+        dev_dbg(&hdev->dev, "T500RS: Expected URB error during mode switch: %d\n", urb->status);
         spin_unlock_irqrestore(&data->lock, flags);
         return;
 
@@ -48,9 +50,7 @@ static void t500rs_urb_complete(struct urb *urb)
 
     case -ETIMEDOUT:
         dev_dbg(&hdev->dev, "T500RS: URB timeout\n");
-        data->state = T500RS_STATE_ERROR;
-        spin_unlock_irqrestore(&data->lock, flags);
-        return;
+        break;
 
     case -EOVERFLOW:
         dev_dbg(&hdev->dev, "T500RS: URB overflow error\n");
@@ -58,9 +58,7 @@ static void t500rs_urb_complete(struct urb *urb)
 
     default:
         dev_err(&hdev->dev, "T500RS: Unexpected URB status %d\n", urb->status);
-        data->state = T500RS_STATE_ERROR;
-        spin_unlock_irqrestore(&data->lock, flags);
-        return;
+        break;
     }
 
     /* Only resubmit if we're still in ready or initializing state */
@@ -69,10 +67,14 @@ static void t500rs_urb_complete(struct urb *urb)
             int ret = usb_submit_urb(urb, GFP_ATOMIC);
             if (ret == 0)
                 break;
-            if (ret != -ENODEV && ret != -EPIPE)
+            if (ret == -ENODEV) {
+                dev_dbg(&hdev->dev, "T500RS: Device disconnected during URB resubmit\n");
+                break;
+            }
+            if (ret != -EPIPE)
                 break;
             retries++;
-            msleep(50);
+            udelay(50);
         }
     }
 
@@ -87,28 +89,48 @@ int t500rs_init_usb(struct t500rs_device_entry *t500rs)
     struct usb_host_interface *interface;
     struct usb_endpoint_descriptor *endpoint;
     int ret, retries = 0;
+    unsigned long flags;
 
     if (!t500rs || !t500rs->data || !t500rs->data->hdev)
         return -EINVAL;
 
     data = t500rs->data;
+
+    /* Protect against concurrent access */
+    spin_lock_irqsave(&data->lock, flags);
+
+    /* Reset state */
+    data->state = T500RS_STATE_INIT;
+    data->initialized = false;
+
+    spin_unlock_irqrestore(&data->lock, flags);
+
     intf = to_usb_interface(data->hdev->dev.parent);
     if (!intf)
         return -ENODEV;
 
+    /* Disable USB autosuspend during initialization */
+    usb_autopm_get_interface(intf);
+    msleep(100);  // Wait for power management to stabilize
+
     usbdev = interface_to_usbdev(intf);
-    if (!usbdev)
-        return -ENODEV;
+    if (!usbdev) {
+        ret = -ENODEV;
+        goto err_put_interface;
+    }
 
     interface = intf->cur_altsetting;
-    if (!interface)
-        return -ENODEV;
+    if (!interface) {
+        ret = -ENODEV;
+        goto err_put_interface;
+    }
 
     /* Find the interrupt in endpoint */
     endpoint = &interface->endpoint[0].desc;
     if (!endpoint || !usb_endpoint_is_int_in(endpoint)) {
         dev_err(&data->hdev->dev, "T500RS: Could not find interrupt IN endpoint\n");
-        return -ENODEV;
+        ret = -ENODEV;
+        goto err_put_interface;
     }
 
     /* Store the polling interval */
@@ -116,22 +138,17 @@ int t500rs_init_usb(struct t500rs_device_entry *t500rs)
     if (data->interval < 1)
         data->interval = 1;
 
-    // Make sure we're not already initialized
-    if (data->initialized) {
-        t500rs_cleanup_usb(t500rs);
-        msleep(100); // Wait for cleanup to complete
-    }
-
+    spin_lock_irqsave(&data->lock, flags);
     data->state = T500RS_STATE_INITIALIZING;
     data->usbdev = usbdev;
-    data->initialized = false;
+    spin_unlock_irqrestore(&data->lock, flags);
 
 retry_init:
-    // Allocate URB and buffer
+    /* Allocate URB and buffer */
     data->urb = usb_alloc_urb(0, GFP_KERNEL);
     if (!data->urb) {
         ret = -ENOMEM;
-        goto err_free_data;
+        goto err_put_interface;
     }
 
     data->buffer = usb_alloc_coherent(data->usbdev, T500RS_REPORT_LENGTH,
@@ -141,7 +158,7 @@ retry_init:
         goto err_free_urb;
     }
 
-    // Initialize URB with proper interval
+    /* Initialize URB with proper interval */
     usb_fill_int_urb(data->urb, data->usbdev,
                      usb_rcvintpipe(data->usbdev, endpoint->bEndpointAddress),
                      data->buffer, T500RS_REPORT_LENGTH,
@@ -149,13 +166,17 @@ retry_init:
     data->urb->transfer_dma = data->buffer_dma;
     data->urb->transfer_flags |= URB_NO_TRANSFER_DMA_MAP;
 
-    // Wait for device to settle
+    /* Wait for device to settle */
     msleep(200);
 
-    // Submit URB
-    ret = usb_submit_urb(data->urb, GFP_KERNEL);
+    spin_lock_irqsave(&data->lock, flags);
+
+    /* Submit URB */
+    ret = usb_submit_urb(data->urb, GFP_ATOMIC);
     if (ret) {
-        if ((ret == -ENODEV || ret == -EPIPE || ret == -19) && retries < 5) {
+        spin_unlock_irqrestore(&data->lock, flags);
+
+        if ((ret == -ENODEV || ret == -EPIPE) && retries < 5) {
             dev_info(&data->hdev->dev, "T500RS: Device not ready, retrying... (attempt %d)\n", retries + 1);
             usb_free_coherent(data->usbdev, T500RS_REPORT_LENGTH,
                             data->buffer, data->buffer_dma);
@@ -168,28 +189,36 @@ retry_init:
         goto err_free_buffer;
     }
 
-    // Wait for URB to start processing
+    /* Wait for URB to start processing */
     msleep(200);
 
-    // Send initial device state command
+    /* Send initial device state command */
     ret = t500rs_send_command(t500rs, 0x0f, 0x01, 0x00);
     if (ret < 0) {
         dev_err(&data->hdev->dev, "T500RS: Failed to set initial state: %d\n", ret);
+        spin_unlock_irqrestore(&data->lock, flags);
         goto err_kill_urb;
     }
 
-    // Wait for device to process command
+    /* Wait for device to process command */
     msleep(500);
 
-    // Verify device is still connected
+    /* Verify device is still connected */
     if (!data->usbdev || !data->urb) {
         dev_err(&data->hdev->dev, "T500RS: Device disconnected during initialization\n");
         ret = -ENODEV;
+        spin_unlock_irqrestore(&data->lock, flags);
         goto err_kill_urb;
     }
 
     data->state = T500RS_STATE_READY;
     data->initialized = true;
+
+    spin_unlock_irqrestore(&data->lock, flags);
+
+    /* Re-enable USB autosuspend */
+    usb_autopm_put_interface(intf);
+
     return 0;
 
 err_kill_urb:
@@ -204,8 +233,11 @@ err_free_buffer:
 err_free_urb:
     if (data->urb)
         usb_free_urb(data->urb);
-err_free_data:
+err_put_interface:
+    usb_autopm_put_interface(intf);
+    spin_lock_irqsave(&data->lock, flags);
     data->state = T500RS_STATE_ERROR;
+    spin_unlock_irqrestore(&data->lock, flags);
     return ret;
 }
 
@@ -213,6 +245,7 @@ void t500rs_cleanup_usb(struct t500rs_device_entry *t500rs)
 {
     struct t500rs_device_data *data;
     unsigned long flags;
+    struct usb_interface *intf;
 
     if (!t500rs || !t500rs->data)
         return;
@@ -228,6 +261,15 @@ void t500rs_cleanup_usb(struct t500rs_device_entry *t500rs)
 
     spin_unlock_irqrestore(&data->lock, flags);
 
+    /* Disable USB autosuspend */
+    if (data->hdev && data->hdev->dev.parent) {
+        intf = to_usb_interface(data->hdev->dev.parent);
+        if (intf) {
+            usb_autopm_get_interface(intf);
+            msleep(100);  // Wait for power management to stabilize
+        }
+    }
+
     /* Kill URB and wait for completion */
     if (data->urb) {
         usb_kill_urb(data->urb);
@@ -241,12 +283,22 @@ void t500rs_cleanup_usb(struct t500rs_device_entry *t500rs)
         usb_free_urb(data->urb);
         data->urb = NULL;
     }
+
+    /* Re-enable USB autosuspend */
+    if (data->hdev && data->hdev->dev.parent) {
+        intf = to_usb_interface(data->hdev->dev.parent);
+        if (intf) {
+            msleep(100);  // Wait for cleanup to complete
+            usb_autopm_put_interface(intf);
+        }
+    }
 }
 
 void t500rs_stop_urbs(struct t500rs_device_entry *t500rs)
 {
     struct t500rs_device_data *data;
     unsigned long flags;
+    struct usb_interface *intf;
 
     if (!t500rs || !t500rs->data)
         return;
@@ -255,18 +307,32 @@ void t500rs_stop_urbs(struct t500rs_device_entry *t500rs)
 
     /* Protect against concurrent access */
     spin_lock_irqsave(&data->lock, flags);
-    
-    if (data->urb) {
-        /* Mark as disconnecting before killing URB */
-        data->state = T500RS_STATE_DISCONNECTED;
-        spin_unlock_irqrestore(&data->lock, flags);
-        
-        /* Kill URB and wait for completion */
-        usb_kill_urb(data->urb);
-        msleep(100);
-    } else {
-        spin_unlock_irqrestore(&data->lock, flags);
+
+    /* Disable USB autosuspend */
+    if (data->hdev && data->hdev->dev.parent) {
+        intf = to_usb_interface(data->hdev->dev.parent);
+        if (intf) {
+            usb_autopm_get_interface(intf);
+            msleep(100);  // Wait for power management to stabilize
+        }
     }
+
+    /* Kill URB if active */
+    if (data->urb) {
+        usb_kill_urb(data->urb);
+        msleep(100);  // Wait for URB to complete
+    }
+
+    /* Re-enable USB autosuspend */
+    if (data->hdev && data->hdev->dev.parent) {
+        intf = to_usb_interface(data->hdev->dev.parent);
+        if (intf) {
+            msleep(100);  // Wait for cleanup to complete
+            usb_autopm_put_interface(intf);
+        }
+    }
+
+    spin_unlock_irqrestore(&data->lock, flags);
 }
 
 int t500rs_send_cmd_with_retry(struct t500rs_device_entry *t500rs, u8 *buf, size_t len, int max_retries)
