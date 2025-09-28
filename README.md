@@ -70,7 +70,7 @@ sudo pacman -S linux-neptune-68-headers
 
 If none of the above work, please do open up an issue.
 
-Joystick utilities from [linuxconsole tools](http://sf.net/projects/linuxconsole/) are needed for uvdev rules to work:
+Joystick utilities from [linuxconsole tools](http://sf.net/projects/linuxconsole/) are needed for `udev` rules to work:
 ```shell
 sudo apt install joystick          # Debian-based
 sudo pacman -S joyutils            # Arch-based
@@ -86,6 +86,7 @@ sudo yum install linuxconsoletools # Fedora-based
   make
   sudo make install
   sudo make udev-rules # optional but should fix some common issues
+  # sudo make steamdeck-rules # ONLY run if you're on a SteamDeck
   ```
 + Plug wheel back in
 + Reboot *(Optional, yet Recommended)*
@@ -99,6 +100,7 @@ sudo yum install linuxconsoletools # Fedora-based
   cd hid-tmff2
   sudo ./dkms/dkms-install.sh
   sudo make udev-rules # optional but should fix some common issues
+  # sudo make steamdeck-rules # ONLY run if you're on a SteamDeck
   ```
 + Plug wheel back in
 + Reboot *(Optional, yet Recommended)*
@@ -114,6 +116,10 @@ sudo yum install linuxconsoletools # Fedora-based
 > **NOTE:** Thrustmaster TX and TS-XW wheels aren't supported by `hid-tminit` as of yet,
 > meaning that the wheels have to be initialized with `tmdrv`. Please see
 > https://github.com/Kimplul/hid-tmff2/issues/48.
+
+> **NOTE:** When using Secure Boot and DKMS, you need to remember to add DKMS MOK certificate
+> otherwise the module won't be loaded and the wheel might function incorrectly/not at all.
+> You can follow the steps [here](https://github.com/dell/dkms?tab=readme-ov-file#secure-boot) on how to add DKMS MOK certificate.
 
 > **WARNING:** There have been reports that this driver does not work if
 > the wheel's firmware version is older than v. 31. To update the firmware, you
