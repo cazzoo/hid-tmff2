@@ -255,44 +255,72 @@ static int upload_condition_effect(int id, struct ff_effect *effect)
         return -1;
     }
 
-    /* Coefficient - scale to 0-100 (0x64) as seen in captures */
-    int coeff = effect->u.condition[0].right_coeff;
-    unsigned char strength = (abs(coeff) * 100) / 32767;
+    /* Get coefficients for both directions */
+    int right_coeff = effect->u.condition[0].right_coeff;
+    int left_coeff = effect->u.condition[0].left_coeff;
 
-    LOG_DEBUG("Uploading %s effect %d, coeff=%d, strength=0x%02x",
-              type_name, id, coeff, strength);
+    /* Scale to 0-100 (0x64) as seen in captures */
+    unsigned char right_strength = (abs(right_coeff) * 100) / 32767;
+    unsigned char left_strength = (abs(left_coeff) * 100) / 32767;
+
+    /* If coefficients are 0 or very low, use default values */
+    if (right_strength < 10) {
+        right_strength = 50;  /* Default to medium strength */
+        LOG_DEBUG("Right coefficient too low, using default strength");
+    }
+    if (left_strength < 10) {
+        left_strength = 50;  /* Default to medium strength */
+        LOG_DEBUG("Left coefficient too low, using default strength");
+    }
+
+    LOG_DEBUG("Uploading %s effect %d, right_coeff=%d (0x%02x), left_coeff=%d (0x%02x)",
+              type_name, id, right_coeff, right_strength, left_coeff, left_strength);
 
     /* Report 0x05 - Condition parameters (two reports needed) */
-    /* First report - 0x0e */
+    /* First report - 0x0e - Coefficients */
     memset(buf, 0, sizeof(buf));
     buf[0] = 0x05;
     buf[1] = 0x0e;
     buf[2] = 0x00;
-    buf[3] = strength;  /* Right coefficient */
-    buf[4] = strength;  /* Left coefficient */
+    buf[3] = right_strength;  /* Right coefficient */
+    buf[4] = left_strength;   /* Left coefficient */
     buf[5] = 0x00;
     buf[6] = 0x00;
     buf[7] = 0x00;
     buf[8] = 0x00;
-    buf[9] = 0x64;   /* Right saturation */
-    buf[10] = 0x64;  /* Left saturation */
+
+    /* Saturation values - different for spring vs damper */
+    if (effect->type == FF_SPRING) {
+        buf[9] = 0x54;   /* Right saturation (from capture) */
+        buf[10] = 0x54;  /* Left saturation */
+    } else {
+        buf[9] = 0x64;   /* Right saturation (damper/friction) */
+        buf[10] = 0x64;  /* Left saturation */
+    }
     ret = usb_send(buf, 11);
     if (ret) return ret;
     usleep(5000);
 
-    /* Second report - 0x1c */
+    /* Second report - 0x1c - Deadband and center */
     memset(buf, 0, sizeof(buf));
     buf[0] = 0x05;
     buf[1] = 0x1c;
     buf[2] = 0x00;
-    buf[3] = 0x00;
-    buf[4] = 0x00;
+    buf[3] = 0x00;  /* Deadband */
+    buf[4] = 0x00;  /* Center position */
     buf[5] = 0x00;
     buf[6] = 0x00;
     buf[7] = 0x00;
     buf[8] = 0x00;
-    buf[9] = 0x64;   /* Right saturation */
-    buf[10] = 0x64;  /* Left saturation */
+
+    /* Saturation values for second report */
+    if (effect->type == FF_SPRING) {
+        buf[9] = 0x46;   /* Right saturation (from capture) */
+        buf[10] = 0x54;  /* Left saturation */
+    } else {
+        buf[9] = 0x64;   /* Right saturation (damper/friction) */
+        buf[10] = 0x64;  /* Left saturation */
+    }
     ret = usb_send(buf, 11);
     if (ret) return ret;
     usleep(5000);
@@ -318,7 +346,185 @@ static int upload_condition_effect(int id, struct ff_effect *effect)
     ret = usb_send(buf, 15);
     if (ret) return ret;
 
-    LOG_DEBUG("%s effect uploaded: strength=0x%02x", type_name, strength);
+    LOG_DEBUG("%s effect uploaded: right=0x%02x, left=0x%02x",
+              type_name, right_strength, left_strength);
+
+    return 0;
+}
+
+/* Upload periodic effect (sine, square, triangle, sawtooth) */
+static int upload_periodic_effect(int id, struct ff_effect *effect)
+{
+    unsigned char buf[15];
+    int ret;
+    unsigned char effect_type;
+    const char *type_name;
+
+    /* Determine waveform type */
+    switch (effect->u.periodic.waveform) {
+    case FF_SQUARE:
+        effect_type = 0x20;
+        type_name = "square";
+        break;
+    case FF_TRIANGLE:
+        effect_type = 0x21;
+        type_name = "triangle";
+        break;
+    case FF_SINE:
+        effect_type = 0x22;
+        type_name = "sine";
+        break;
+    case FF_SAW_UP:
+        effect_type = 0x23;
+        type_name = "sawtooth_up";
+        break;
+    case FF_SAW_DOWN:
+        effect_type = 0x24;
+        type_name = "sawtooth_down";
+        break;
+    default:
+        LOG_ERROR("Unknown periodic waveform: %d", effect->u.periodic.waveform);
+        return -1;
+    }
+
+    /* Magnitude - scale to 0-127 */
+    int magnitude = effect->u.periodic.magnitude;
+    unsigned char mag = (abs(magnitude) * 127) / 32767;
+
+    /* Ensure minimum magnitude */
+    if (mag < 20) {
+        mag = 50;  /* Default to medium if too low */
+    }
+
+    /* Period (frequency) - Linux uses milliseconds, convert appropriately */
+    /* From capture: 0x03e8 = 1000ms = 1 Hz */
+    unsigned short period = effect->u.periodic.period;
+    if (period == 0) {
+        period = 100;  /* Default to 100ms = 10 Hz */
+    }
+
+    LOG_DEBUG("Uploading %s effect %d, magnitude=%d (0x%02x), period=%dms",
+              type_name, id, magnitude, mag, period);
+
+    /* Report 0x02 - Envelope */
+    memset(buf, 0, sizeof(buf));
+    buf[0] = 0x02;
+    buf[1] = 0x1c;
+    buf[2] = 0x00;
+    buf[3] = 0x00;
+    buf[4] = 0x00;
+    buf[5] = 0x00;
+    buf[6] = 0x00;
+    buf[7] = 0x00;
+    buf[8] = 0x00;
+    ret = usb_send(buf, 9);
+    if (ret) return ret;
+    usleep(5000);
+
+    /* Report 0x04 - Periodic parameters */
+    memset(buf, 0, sizeof(buf));
+    buf[0] = 0x04;
+    buf[1] = 0x0e;
+    buf[2] = 0x00;
+    buf[3] = mag;  /* Magnitude */
+    buf[4] = 0x00;  /* Offset */
+    buf[5] = 0x00;  /* Phase */
+    buf[6] = period & 0xff;  /* Period low byte */
+    buf[7] = (period >> 8) & 0xff;  /* Period high byte */
+    ret = usb_send(buf, 8);
+    if (ret) return ret;
+    usleep(5000);
+
+    /* Report 0x01 - Main effect upload */
+    memset(buf, 0, sizeof(buf));
+    buf[0] = 0x01;
+    buf[1] = id;
+    buf[2] = effect_type;  /* Waveform type */
+    buf[3] = 0x40;
+    buf[4] = 0x17;
+    buf[5] = 0x25;
+    buf[6] = 0x00;
+    buf[7] = 0xff;
+    buf[8] = 0xff;
+    buf[9] = 0x0e;
+    buf[10] = 0x00;
+    buf[11] = 0x1c;
+    buf[12] = 0x00;
+    buf[13] = 0x00;
+    buf[14] = 0x00;
+
+    ret = usb_send(buf, 15);
+    if (ret) return ret;
+
+    LOG_DEBUG("%s effect uploaded: magnitude=0x%02x, period=%d", type_name, mag, period);
+
+    return 0;
+}
+
+/* Upload ramp effect */
+static int upload_ramp_effect(int id, struct ff_effect *effect)
+{
+    unsigned char buf[15];
+    int ret;
+
+    /* Start and end levels */
+    int start_level = effect->u.ramp.start_level;
+    int end_level = effect->u.ramp.end_level;
+
+    LOG_DEBUG("Uploading ramp effect %d, start=%d, end=%d",
+              id, start_level, end_level);
+
+    /* Report 0x02 - Envelope */
+    memset(buf, 0, sizeof(buf));
+    buf[0] = 0x02;
+    buf[1] = 0x1c;
+    buf[2] = 0x00;
+    buf[3] = 0x00;
+    buf[4] = 0x00;
+    buf[5] = 0x00;
+    buf[6] = 0x00;
+    buf[7] = 0x00;
+    buf[8] = 0x00;
+    ret = usb_send(buf, 9);
+    if (ret) return ret;
+    usleep(5000);
+
+    /* Report 0x04 - Ramp parameters */
+    memset(buf, 0, sizeof(buf));
+    buf[0] = 0x04;
+    buf[1] = 0x0e;
+    buf[2] = 0x00;
+    buf[3] = (abs(start_level) * 127) / 32767;  /* Start magnitude */
+    buf[4] = (abs(end_level) * 127) / 32767;    /* End magnitude */
+    buf[5] = 0x00;
+    buf[6] = 0x69;  /* From your capture */
+    buf[7] = 0x23;
+    ret = usb_send(buf, 8);
+    if (ret) return ret;
+    usleep(5000);
+
+    /* Report 0x01 - Main effect upload */
+    memset(buf, 0, sizeof(buf));
+    buf[0] = 0x01;
+    buf[1] = id;
+    buf[2] = 0x24;  /* Ramp type (same as sawtooth down) */
+    buf[3] = 0x40;
+    buf[4] = 0x69;
+    buf[5] = 0x23;
+    buf[6] = 0x00;
+    buf[7] = 0xff;
+    buf[8] = 0xff;
+    buf[9] = 0x0e;
+    buf[10] = 0x00;
+    buf[11] = 0x1c;
+    buf[12] = 0x00;
+    buf[13] = 0x00;
+    buf[14] = 0x00;
+
+    ret = usb_send(buf, 15);
+    if (ret) return ret;
+
+    LOG_DEBUG("Ramp effect uploaded");
 
     return 0;
 }
@@ -328,16 +534,21 @@ static int start_effect(int id)
 {
     unsigned char buf[4];
     int is_constant = 0;
+    int is_periodic = 0;
     int force = 0;
+    int magnitude = 0;
     int ret;
 
     LOG_DEBUG("Starting effect %d", id);
 
-    /* Check if this is a constant force (mutex already locked by caller) */
+    /* Check effect type (mutex already locked by caller) */
     if (id >= 0 && id < MAX_EFFECTS) {
         if (effects[id].effect.type == FF_CONSTANT) {
             is_constant = 1;
             force = effects[id].effect.u.constant.level;
+        } else if (effects[id].effect.type == FF_PERIODIC) {
+            is_periodic = 1;
+            magnitude = effects[id].effect.u.periodic.magnitude;
         }
     }
 
@@ -358,18 +569,32 @@ static int start_effect(int id)
         LOG_DEBUG("Set constant force level to 0x%02x", level);
     }
 
+    /* For periodic effects, also set magnitude via Report 0x03 */
+    if (is_periodic) {
+        unsigned char mag = (abs(magnitude) * 127) / 32767;
+
+        /* Report 0x03 - Set magnitude */
+        buf[0] = 0x03;
+        buf[1] = 0x0e;
+        buf[2] = 0x00;
+        buf[3] = mag;
+        ret = usb_send(buf, 4);
+        if (ret) return ret;
+        usleep(5000);
+
+        LOG_DEBUG("Set periodic magnitude to 0x%02x", mag);
+    }
+
     /* Send start command */
     buf[0] = 0x41;
     buf[1] = id;
+    buf[2] = 0x41;  /* Default: 0x41 for all effects */
+    buf[3] = 0x01;
 
-    /* For negative constant force, use different direction code */
+    /* For constant force, use 0x00 for negative direction */
     if (is_constant && force < 0) {
-        buf[2] = 0x00;  /* Left/negative direction */
-        buf[3] = 0x01;
-        LOG_DEBUG("Starting negative constant force (left)");
-    } else {
-        buf[2] = 0x41;  /* Right/positive direction */
-        buf[3] = 0x01;
+        buf[2] = 0x00;  /* Negative direction */
+        LOG_DEBUG("Starting negative constant force");
     }
 
     return usb_send(buf, 4);
@@ -424,14 +649,18 @@ static int handle_ff_upload(struct uinput_ff_upload *upload)
         ret = upload_condition_effect(id, &upload->effect);
         break;
     case FF_PERIODIC:
-        /* Periodic effects not yet implemented - would need Report 0x04 */
-        LOG_ERROR("Periodic effects not yet supported");
-        ret = -ENOSYS;
+        ret = upload_periodic_effect(id, &upload->effect);
         break;
     case FF_RAMP:
-        /* Ramp effects not yet implemented */
-        LOG_ERROR("Ramp effects not yet supported");
-        ret = -ENOSYS;
+        ret = upload_ramp_effect(id, &upload->effect);
+        break;
+    case FF_RUMBLE:
+        /* Rumble is like a periodic effect - convert to constant force */
+        LOG_DEBUG("Rumble effect - converting to constant force");
+        /* Use strong motor value as force level */
+        upload->effect.type = FF_CONSTANT;
+        upload->effect.u.constant.level = upload->effect.u.rumble.strong_magnitude / 2;
+        ret = upload_constant_effect(id, &upload->effect);
         break;
     default:
         LOG_ERROR("Unsupported effect type: %d", upload->effect.type);
@@ -526,6 +755,23 @@ static void process_uinput_events(void)
         case EV_FF:
             /* Effect play/stop */
             LOG_DEBUG("EV_FF event: code=%d, value=%d", ev.code, ev.value);
+
+            /* Handle special codes */
+            if (ev.code == FF_GAIN) {
+                /* Gain control - scale is 0-65535 */
+                LOG_DEBUG("Gain control: %d (ignoring for now)", ev.value);
+                /* TODO: Implement gain control with Report 0x43 */
+                break;
+            }
+
+            if (ev.code == FF_AUTOCENTER) {
+                /* Autocenter control */
+                LOG_DEBUG("Autocenter control: %d (ignoring for now)", ev.value);
+                /* TODO: Implement autocenter with Report 0x14 */
+                break;
+            }
+
+            /* Normal effect play/stop */
             pthread_mutex_lock(&effects_lock);
             if (ev.code < MAX_EFFECTS) {
                 if (ev.value > 0) {
@@ -537,6 +783,8 @@ static void process_uinput_events(void)
                     stop_effect(ev.code);
                     effects[ev.code].active = 0;
                 }
+            } else {
+                LOG_DEBUG("Invalid effect code: %d (max is %d)", ev.code, MAX_EFFECTS - 1);
             }
             pthread_mutex_unlock(&effects_lock);
             break;
@@ -581,6 +829,9 @@ static int setup_uinput(void)
     ioctl(uinput_fd, UI_SET_FFBIT, FF_DAMPER);
     ioctl(uinput_fd, UI_SET_FFBIT, FF_FRICTION);
     ioctl(uinput_fd, UI_SET_FFBIT, FF_INERTIA);
+    ioctl(uinput_fd, UI_SET_FFBIT, FF_PERIODIC);
+    ioctl(uinput_fd, UI_SET_FFBIT, FF_RAMP);
+    ioctl(uinput_fd, UI_SET_FFBIT, FF_RUMBLE);
     ioctl(uinput_fd, UI_SET_FFBIT, FF_GAIN);
     ioctl(uinput_fd, UI_SET_FFBIT, FF_AUTOCENTER);
 
