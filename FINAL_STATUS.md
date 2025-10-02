@@ -23,9 +23,10 @@ We have successfully created the **first fully functional force feedback driver*
 | **Friction** | ✅ WORKING | Same as damper on T500RS |
 | **Inertia** | ✅ WORKING | Same as damper on T500RS |
 | **Rumble** | ✅ WORKING | Converted to constant force (no separate motors) |
-| **Periodic (Sine)** | ⚠️ IMPLEMENTED | Code complete, needs more testing |
-| **Periodic (Square/Triangle/Sawtooth)** | ⚠️ IMPLEMENTED | Code complete, needs more testing |
-| **Ramp** | ⚠️ IMPLEMENTED | Code complete, needs more testing |
+| **Periodic (Sine)** | ✅ WORKING | Smooth vibration/oscillation |
+| **Periodic (Square)** | ✅ WORKING | Sharp on/off pulses |
+| **Periodic (Triangle/Sawtooth)** | ✅ WORKING | Various waveforms |
+| **Ramp** | ❌ DISABLED | Causes kernel crash - needs fix |
 
 ### Driver Features
 
@@ -149,7 +150,7 @@ Based on **25,813 USB packets** captured from Windows:
 
 ## Known Limitations
 
-1. **Periodic Effects** - Sine wave implemented but doesn't vibrate yet (needs investigation)
+1. **Ramp Effects** - DISABLED due to kernel crash bug (causes page fault)
 2. **Gain Control** - Not yet implemented (Report 0x43)
 3. **Autocenter** - Not yet implemented (Report 0x14)
 4. **Negative Constant Force** - Direction code implemented but needs more testing
@@ -159,9 +160,9 @@ Based on **25,813 USB packets** captured from Windows:
 ## Future Enhancements
 
 ### High Priority
-- [ ] Fix periodic effects (sine vibration)
-- [ ] Implement gain control
-- [ ] Implement autocenter
+- [ ] Fix ramp effects kernel crash bug
+- [ ] Implement gain control (Report 0x43)
+- [ ] Implement autocenter (Report 0x14)
 - [ ] Test with actual racing games
 
 ### Medium Priority
