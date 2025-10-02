@@ -60,6 +60,7 @@ static int current_gain = 0xffff;  /* Default: maximum (0-65535) */
 
 /* Autocenter state */
 static int current_autocenter = 0;  /* Default: off (0-65535) */
+#define AUTOCENTER_EFFECT_ID 15  /* Reserve slot 15 for autocenter spring */
 
 /* Logging */
 #define LOG_INFO(fmt, ...) fprintf(stdout, "[INFO] " fmt "\n", ##__VA_ARGS__)
@@ -654,45 +655,146 @@ static int stop_effect(int id)
 /* Set gain (overall force feedback strength) */
 static int set_gain(int gain)
 {
-    unsigned char buf[4];
+    unsigned char buf[2];
+    int ret;
 
     /* Gain is 0-65535, scale to 0-255 */
     unsigned char scaled_gain = (gain * 255) / 65535;
 
-    LOG_DEBUG("Setting gain: %d (0x%04x) -> scaled: %d (0x%02x)",
-              gain, gain, scaled_gain, scaled_gain);
+    LOG_INFO("Setting gain: %d%% (raw=%d, scaled=0x%02x)",
+             (gain * 100) / 65535, gain, scaled_gain);
 
-    /* Report 0x43 - Set gain */
+    /* Report 0x43 - Set gain (only 2 bytes based on Windows capture) */
     buf[0] = 0x43;
     buf[1] = scaled_gain;
-    buf[2] = 0x00;
-    buf[3] = 0x00;
 
-    current_gain = gain;
+    ret = usb_send(buf, 2);
+    if (ret == 0) {
+        current_gain = gain;
+        LOG_INFO("✅ Gain set successfully");
+    } else {
+        LOG_ERROR("❌ Failed to set gain");
+    }
 
-    return usb_send(buf, 4);
+    return ret;
 }
 
 /* Set autocenter (self-centering force when no effects playing) */
 static int set_autocenter(int autocenter)
 {
-    unsigned char buf[4];
+    unsigned char buf[64];
+    int ret;
 
-    /* Autocenter is 0-65535, scale to 0-15 (T500RS uses 4-bit value) */
-    unsigned char scaled_autocenter = (autocenter * 15) / 65535;
+    LOG_INFO("Autocenter requested: %d%% (raw=%d)",
+             (autocenter * 100) / 65535, autocenter);
 
-    LOG_DEBUG("Setting autocenter: %d (0x%04x) -> scaled: %d (0x%01x)",
-              autocenter, autocenter, scaled_autocenter, scaled_autocenter);
+    /* Autocenter is implemented as a spring effect on T500RS */
+    /* Scale autocenter (0-65535) to spring coefficient (0-32767) */
+    int spring_coefficient = (autocenter * 32767) / 65535;
 
-    /* Report 0x14 - Set autocenter */
-    buf[0] = 0x14;
-    buf[1] = scaled_autocenter;
+    if (autocenter == 0) {
+        /* Stop and remove autocenter spring effect */
+        LOG_INFO("Disabling autocenter (stopping spring effect)");
+
+        /* Stop effect */
+        buf[0] = 0x41;
+        buf[1] = AUTOCENTER_EFFECT_ID;
+        buf[2] = 0x00;
+        buf[3] = 0x01;
+        usb_send(buf, 4);
+
+        /* Mark as inactive */
+        pthread_mutex_lock(&effects_lock);
+        effects[AUTOCENTER_EFFECT_ID].active = 0;
+        pthread_mutex_unlock(&effects_lock);
+
+        current_autocenter = 0;
+        LOG_INFO("✅ Autocenter disabled");
+        return 0;
+    }
+
+    /* Upload spring effect for autocenter */
+    /* Use EXACT same format as working spring effects */
+
+    /* Scale to 0-100 like working spring effects */
+    unsigned char strength = (abs(spring_coefficient) * 100) / 32767;
+    if (strength < 10) strength = 10;  /* Minimum strength */
+
+    LOG_INFO("Enabling autocenter with strength=%d (0x%02x)", strength, strength);
+
+    /* Report 0x05 - First report (0x0e) - Coefficients */
+    memset(buf, 0, sizeof(buf));
+    buf[0] = 0x05;
+    buf[1] = 0x0e;
     buf[2] = 0x00;
-    buf[3] = 0x00;
+    buf[3] = strength;  /* Right coefficient */
+    buf[4] = strength;  /* Left coefficient */
+    buf[5] = 0x00;
+    buf[6] = 0x00;
+    buf[7] = 0x00;
+    buf[8] = 0x00;
+    buf[9] = 0x54;   /* Right saturation (from working spring) */
+    buf[10] = 0x54;  /* Left saturation */
+    ret = usb_send(buf, 11);  /* Only 11 bytes! */
+    if (ret) return ret;
+    usleep(5000);
+
+    /* Report 0x05 - Second report (0x1c) - Deadband and center */
+    memset(buf, 0, sizeof(buf));
+    buf[0] = 0x05;
+    buf[1] = 0x1c;
+    buf[2] = 0x00;
+    buf[3] = 0x00;  /* Deadband */
+    buf[4] = 0x00;  /* Center position */
+    buf[5] = 0x00;
+    buf[6] = 0x00;
+    buf[7] = 0x00;
+    buf[8] = 0x00;
+    buf[9] = 0x46;   /* Right saturation (from working spring) */
+    buf[10] = 0x54;  /* Left saturation */
+    ret = usb_send(buf, 11);  /* Only 11 bytes! */
+    if (ret) return ret;
+    usleep(5000);
+
+    /* Report 0x01 - Effect upload (EXACT format from working spring) */
+    memset(buf, 0, sizeof(buf));
+    buf[0] = 0x01;
+    buf[1] = AUTOCENTER_EFFECT_ID;
+    buf[2] = 0x40;  /* Spring type (0x40, not 0x26!) */
+    buf[3] = 0x40;
+    buf[4] = 0x17;  /* From working spring */
+    buf[5] = 0x25;  /* From working spring */
+    buf[6] = 0x00;
+    buf[7] = 0xff;  /* Infinite duration */
+    buf[8] = 0xff;
+    buf[9] = 0x0e;
+    buf[10] = 0x00;
+    buf[11] = 0x1c;
+    buf[12] = 0x00;
+    buf[13] = 0x00;
+    buf[14] = 0x00;
+    ret = usb_send(buf, 15);
+    if (ret) return ret;
+    usleep(5000);
+
+    /* Start effect */
+    buf[0] = 0x41;
+    buf[1] = AUTOCENTER_EFFECT_ID;
+    buf[2] = 0x41;
+    buf[3] = 0x01;
+    ret = usb_send(buf, 4);
+    if (ret) return ret;
+
+    /* Mark as active */
+    pthread_mutex_lock(&effects_lock);
+    effects[AUTOCENTER_EFFECT_ID].active = 1;
+    effects[AUTOCENTER_EFFECT_ID].effect.type = FF_SPRING;
+    pthread_mutex_unlock(&effects_lock);
 
     current_autocenter = autocenter;
+    LOG_INFO("✅ Autocenter enabled as spring effect");
 
-    return usb_send(buf, 4);
+    return 0;
 }
 
 /* Send ramp level update (Report 0x04) */

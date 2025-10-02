@@ -237,8 +237,8 @@ int main(void)
             printf(">>> Release the wheel - it should VERY strongly self-center <<<\n");
             break;
         case 10:
-            printf("Testing constant force with current gain setting...\n");
-            test_constant_force(fd, 16384);  /* Medium force */
+            printf("Testing WEAK constant force with current gain setting...\n");
+            test_constant_force(fd, 4096);  /* Weak force - 1/8 of maximum */
             break;
         default:
             printf("Invalid choice!\n");
