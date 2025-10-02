@@ -55,6 +55,12 @@ static int ramp_thread_running = 0;
 /* TEMPORARY: Disable ramp effects due to kernel crash bug */
 #define ENABLE_RAMP_EFFECTS 0
 
+/* Gain control state */
+static int current_gain = 0xffff;  /* Default: maximum (0-65535) */
+
+/* Autocenter state */
+static int current_autocenter = 0;  /* Default: off (0-65535) */
+
 /* Logging */
 #define LOG_INFO(fmt, ...) fprintf(stdout, "[INFO] " fmt "\n", ##__VA_ARGS__)
 #define LOG_ERROR(fmt, ...) fprintf(stderr, "[ERROR] " fmt "\n", ##__VA_ARGS__)
@@ -645,6 +651,50 @@ static int stop_effect(int id)
     return usb_send(buf, 4);
 }
 
+/* Set gain (overall force feedback strength) */
+static int set_gain(int gain)
+{
+    unsigned char buf[4];
+
+    /* Gain is 0-65535, scale to 0-255 */
+    unsigned char scaled_gain = (gain * 255) / 65535;
+
+    LOG_DEBUG("Setting gain: %d (0x%04x) -> scaled: %d (0x%02x)",
+              gain, gain, scaled_gain, scaled_gain);
+
+    /* Report 0x43 - Set gain */
+    buf[0] = 0x43;
+    buf[1] = scaled_gain;
+    buf[2] = 0x00;
+    buf[3] = 0x00;
+
+    current_gain = gain;
+
+    return usb_send(buf, 4);
+}
+
+/* Set autocenter (self-centering force when no effects playing) */
+static int set_autocenter(int autocenter)
+{
+    unsigned char buf[4];
+
+    /* Autocenter is 0-65535, scale to 0-15 (T500RS uses 4-bit value) */
+    unsigned char scaled_autocenter = (autocenter * 15) / 65535;
+
+    LOG_DEBUG("Setting autocenter: %d (0x%04x) -> scaled: %d (0x%01x)",
+              autocenter, autocenter, scaled_autocenter, scaled_autocenter);
+
+    /* Report 0x14 - Set autocenter */
+    buf[0] = 0x14;
+    buf[1] = scaled_autocenter;
+    buf[2] = 0x00;
+    buf[3] = 0x00;
+
+    current_autocenter = autocenter;
+
+    return usb_send(buf, 4);
+}
+
 /* Send ramp level update (Report 0x04) */
 static int send_ramp_update(int id, unsigned short level, unsigned short duration_ms)
 {
@@ -901,15 +951,15 @@ static void process_uinput_events(void)
             /* Handle special codes */
             if (ev.code == FF_GAIN) {
                 /* Gain control - scale is 0-65535 */
-                LOG_DEBUG("Gain control: %d (ignoring for now)", ev.value);
-                /* TODO: Implement gain control with Report 0x43 */
+                LOG_INFO("Gain control: %d (%.1f%%)", ev.value, (ev.value * 100.0) / 65535);
+                set_gain(ev.value);
                 break;
             }
 
             if (ev.code == FF_AUTOCENTER) {
                 /* Autocenter control */
-                LOG_DEBUG("Autocenter control: %d (ignoring for now)", ev.value);
-                /* TODO: Implement autocenter with Report 0x14 */
+                LOG_INFO("Autocenter control: %d (%.1f%%)", ev.value, (ev.value * 100.0) / 65535);
+                set_autocenter(ev.value);
                 break;
             }
 
