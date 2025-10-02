@@ -830,6 +830,11 @@ static int setup_uinput(void)
     ioctl(uinput_fd, UI_SET_FFBIT, FF_FRICTION);
     ioctl(uinput_fd, UI_SET_FFBIT, FF_INERTIA);
     ioctl(uinput_fd, UI_SET_FFBIT, FF_PERIODIC);
+    ioctl(uinput_fd, UI_SET_FFBIT, FF_SINE);
+    ioctl(uinput_fd, UI_SET_FFBIT, FF_SQUARE);
+    ioctl(uinput_fd, UI_SET_FFBIT, FF_TRIANGLE);
+    ioctl(uinput_fd, UI_SET_FFBIT, FF_SAW_UP);
+    ioctl(uinput_fd, UI_SET_FFBIT, FF_SAW_DOWN);
     ioctl(uinput_fd, UI_SET_FFBIT, FF_RAMP);
     ioctl(uinput_fd, UI_SET_FFBIT, FF_RUMBLE);
     ioctl(uinput_fd, UI_SET_FFBIT, FF_GAIN);
