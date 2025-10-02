@@ -37,10 +37,23 @@ static int running = 1;
 struct effect_state {
     int active;
     struct ff_effect effect;
+    /* Ramp-specific state */
+    int is_ramp;
+    int ramp_start_level;
+    int ramp_end_level;
+    unsigned long ramp_duration_ms;
+    struct timespec ramp_start_time;
 };
 
 static struct effect_state effects[MAX_EFFECTS];
 static pthread_mutex_t effects_lock = PTHREAD_MUTEX_INITIALIZER;
+
+/* Ramp update thread */
+static pthread_t ramp_thread;
+static int ramp_thread_running = 0;
+
+/* TEMPORARY: Disable ramp effects due to kernel crash bug */
+#define ENABLE_RAMP_EFFECTS 0
 
 /* Logging */
 #define LOG_INFO(fmt, ...) fprintf(stdout, "[INFO] " fmt "\n", ##__VA_ARGS__)
@@ -632,6 +645,113 @@ static int stop_effect(int id)
     return usb_send(buf, 4);
 }
 
+/* Send ramp level update (Report 0x04) */
+static int send_ramp_update(int id, unsigned short level, unsigned short duration_ms)
+{
+    unsigned char buf[9];
+
+    buf[0] = 0x04;
+    buf[1] = 0x0e;
+    buf[2] = level & 0xff;
+    buf[3] = (level >> 8) & 0xff;
+    buf[4] = level & 0xff;
+    buf[5] = (level >> 8) & 0xff;
+    buf[6] = duration_ms & 0xff;
+    buf[7] = (duration_ms >> 8) & 0xff;
+    buf[8] = 0x00;
+
+    return usb_send(buf, 9);
+}
+
+/* Ramp update thread - continuously updates ramp effects */
+static void *ramp_update_thread_func(void *arg)
+{
+    LOG_DEBUG("Ramp update thread started");
+
+    while (ramp_thread_running) {
+        /* Check if we should continue */
+        if (!ramp_thread_running) break;
+
+        /* Try to lock with timeout to avoid deadlock */
+        if (pthread_mutex_trylock(&effects_lock) != 0) {
+            usleep(10000);  /* Wait 10ms and try again */
+            continue;
+        }
+
+        /* Check USB handle is valid */
+        if (!usb_handle) {
+            pthread_mutex_unlock(&effects_lock);
+            break;
+        }
+
+        struct timespec now;
+        clock_gettime(CLOCK_MONOTONIC, &now);
+
+        for (int i = 0; i < MAX_EFFECTS; i++) {
+            /* Safety check */
+            if (!ramp_thread_running) break;
+
+            if (effects[i].active && effects[i].is_ramp) {
+                /* Validate duration to avoid division by zero */
+                if (effects[i].ramp_duration_ms == 0) {
+                    LOG_ERROR("Ramp effect %d has zero duration, stopping", i);
+                    effects[i].active = 0;
+                    effects[i].is_ramp = 0;
+                    continue;
+                }
+
+                /* Calculate elapsed time in milliseconds */
+                unsigned long elapsed_ms =
+                    (now.tv_sec - effects[i].ramp_start_time.tv_sec) * 1000 +
+                    (now.tv_nsec - effects[i].ramp_start_time.tv_nsec) / 1000000;
+
+                /* Calculate progress (0.0 to 1.0) */
+                float progress = (float)elapsed_ms / effects[i].ramp_duration_ms;
+                if (progress >= 1.0f) {
+                    progress = 1.0f;
+                    /* Ramp complete - deactivate */
+                    effects[i].active = 0;
+                    effects[i].is_ramp = 0;
+                    stop_effect(i);
+                    LOG_DEBUG("Ramp effect %d complete", i);
+                    continue;
+                }
+
+                /* Calculate current level */
+                int start = effects[i].ramp_start_level;
+                int end = effects[i].ramp_end_level;
+                int current_level = start + (int)((end - start) * progress);
+
+                /* Scale to 0-255 range */
+                unsigned short scaled_level = (abs(current_level) * 0x00ff) / 32767;
+
+                /* Clamp to valid range */
+                if (scaled_level > 0xff) scaled_level = 0xff;
+
+                /* Send update - check return value */
+                int ret = send_ramp_update(i, scaled_level, effects[i].ramp_duration_ms);
+                if (ret != 0) {
+                    LOG_ERROR("Failed to send ramp update for effect %d, stopping", i);
+                    effects[i].active = 0;
+                    effects[i].is_ramp = 0;
+                    continue;
+                }
+
+                LOG_DEBUG("Ramp effect %d: progress=%.2f%%, level=%d (0x%04x)",
+                          i, progress * 100, current_level, scaled_level);
+            }
+        }
+
+        pthread_mutex_unlock(&effects_lock);
+
+        /* Update every 100ms for smooth ramp */
+        usleep(100000);
+    }
+
+    LOG_DEBUG("Ramp update thread stopped");
+    return NULL;
+}
+
 
 
 
@@ -669,7 +789,12 @@ static int handle_ff_upload(struct uinput_ff_upload *upload)
         ret = upload_periodic_effect(id, &upload->effect);
         break;
     case FF_RAMP:
+#if ENABLE_RAMP_EFFECTS
         ret = upload_ramp_effect(id, &upload->effect);
+#else
+        LOG_ERROR("Ramp effects temporarily disabled due to kernel crash bug");
+        ret = -ENOSYS;
+#endif
         break;
     case FF_RUMBLE:
         /* Rumble is like a periodic effect - convert to constant force */
@@ -793,12 +918,27 @@ static void process_uinput_events(void)
             if (ev.code < MAX_EFFECTS) {
                 if (ev.value > 0) {
                     LOG_DEBUG("Playing effect %d", ev.code);
+
+                    /* Initialize ramp state if this is a ramp effect */
+                    if (effects[ev.code].effect.type == FF_RAMP) {
+                        effects[ev.code].is_ramp = 1;
+                        effects[ev.code].ramp_start_level = effects[ev.code].effect.u.ramp.start_level;
+                        effects[ev.code].ramp_end_level = effects[ev.code].effect.u.ramp.end_level;
+                        effects[ev.code].ramp_duration_ms = effects[ev.code].effect.replay.length;
+                        clock_gettime(CLOCK_MONOTONIC, &effects[ev.code].ramp_start_time);
+                        LOG_DEBUG("Ramp effect initialized: start=%d, end=%d, duration=%lums",
+                                  effects[ev.code].ramp_start_level,
+                                  effects[ev.code].ramp_end_level,
+                                  effects[ev.code].ramp_duration_ms);
+                    }
+
                     start_effect(ev.code);
                     effects[ev.code].active = 1;
                 } else {
                     LOG_DEBUG("Stopping effect %d", ev.code);
                     stop_effect(ev.code);
                     effects[ev.code].active = 0;
+                    effects[ev.code].is_ramp = 0;
                 }
             } else {
                 LOG_DEBUG("Invalid effect code: %d (max is %d)", ev.code, MAX_EFFECTS - 1);
@@ -918,14 +1058,39 @@ static void cleanup(void)
 {
     LOG_INFO("Cleaning up...");
 
+    /* Stop ramp update thread */
+    if (ramp_thread_running) {
+        ramp_thread_running = 0;
+        pthread_join(ramp_thread, NULL);
+        LOG_DEBUG("Ramp update thread stopped");
+    }
+
     /* Stop all active effects */
     pthread_mutex_lock(&effects_lock);
     for (int i = 0; i < MAX_EFFECTS; i++) {
         if (effects[i].active) {
             stop_effect(i);
+            effects[i].active = 0;
+            effects[i].is_ramp = 0;
         }
     }
     pthread_mutex_unlock(&effects_lock);
+
+    /* Send stop commands for ALL effect slots to be sure */
+    unsigned char buf[4];
+    for (int i = 0; i < MAX_EFFECTS; i++) {
+        buf[0] = 0x41;
+        buf[1] = i;
+        buf[2] = 0x00;
+        buf[3] = 0x01;
+        usb_send(buf, 4);
+    }
+
+    /* Clear any ramp state with zero Report 0x04 */
+    memset(buf, 0, sizeof(buf));
+    buf[0] = 0x04;
+    buf[1] = 0x0e;
+    usb_send(buf, 9);
 
     /* Destroy uinput device */
     if (uinput_fd >= 0) {
@@ -1022,6 +1187,19 @@ int main(int argc, char **argv)
     LOG_INFO("Device: /dev/input/eventX (check dmesg for exact number)");
     LOG_INFO("Press Ctrl+C to stop");
     LOG_INFO("");
+
+    /* Start ramp update thread */
+#if ENABLE_RAMP_EFFECTS
+    ramp_thread_running = 1;
+    if (pthread_create(&ramp_thread, NULL, ramp_update_thread_func, NULL) != 0) {
+        LOG_ERROR("Failed to create ramp update thread");
+        cleanup();
+        return 1;
+    }
+    LOG_DEBUG("Ramp update thread created");
+#else
+    LOG_INFO("Ramp effects disabled (ENABLE_RAMP_EFFECTS=0)");
+#endif
 
     /* Main event loop */
     process_uinput_events();
