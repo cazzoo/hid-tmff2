@@ -1,0 +1,6 @@
+    bNumInterfaces          1
+      bInterfaceNumber        0
+      bInterfaceClass         3 Human Interface Device
+      bInterfaceSubClass      0 [unknown]
+      bInterfaceProtocol      0 
+      iInterface              0 

@@ -758,7 +758,6 @@ static void tmff2_remove(struct hid_device *hdev)
 	hid_err(hdev, "removing device\n");
 
 	kfree(tmff2);
-	t500rs_driver_exit();
 }
 
 static const struct hid_device_id tmff2_devices[] = {
@@ -794,16 +793,9 @@ static int __init tmff2_init(void)
 {
 	int ret;
 
-	ret = t500rs_driver_init();
-	if (ret) {
-		pr_err("tmff2: Failed to initialize T500RS driver\n");
-		return ret;
-	}
-
 	ret = hid_register_driver(&tmff2_driver);
 	if (ret) {
 		pr_err("tmff2: Failed to register driver\n");
-		t500rs_driver_exit();
 		return ret;
 	}
 
@@ -812,7 +804,6 @@ static int __init tmff2_init(void)
 
 static void __exit tmff2_exit(void)
 {
-	t500rs_driver_exit();
 	hid_unregister_driver(&tmff2_driver);
 }
 

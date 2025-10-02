@@ -27,10 +27,27 @@ hid-tmt500rs-usb.o: \
  include/asm-generic/bitops/generic-non-atomic.h \
  arch/x86/include/asm/barrier.h arch/x86/include/asm/alternative.h \
  arch/x86/include/asm/asm.h arch/x86/include/asm/extable_fixup_types.h \
- arch/x86/include/asm/nops.h include/asm-generic/barrier.h \
- arch/x86/include/asm/bitops.h arch/x86/include/asm/rmwcc.h \
- include/linux/args.h include/asm-generic/bitops/sched.h \
- arch/x86/include/asm/arch_hweight.h arch/x86/include/asm/cpufeatures.h \
+ arch/x86/include/asm/bug.h include/linux/instrumentation.h \
+ include/linux/objtool.h include/linux/objtool_types.h \
+ include/asm-generic/bug.h include/linux/once_lite.h \
+ include/linux/panic.h include/linux/printk.h include/linux/init.h \
+ include/linux/kern_levels.h include/linux/ratelimit_types.h \
+ include/uapi/linux/param.h arch/x86/include/generated/uapi/asm/param.h \
+ include/asm-generic/param.h include/uapi/asm-generic/param.h \
+ include/linux/spinlock_types_raw.h arch/x86/include/asm/spinlock_types.h \
+ include/asm-generic/qspinlock_types.h \
+ include/asm-generic/qrwlock_types.h \
+ arch/x86/include/uapi/asm/byteorder.h \
+ include/linux/byteorder/little_endian.h \
+ include/uapi/linux/byteorder/little_endian.h include/linux/swab.h \
+ include/uapi/linux/swab.h arch/x86/include/uapi/asm/swab.h \
+ include/linux/byteorder/generic.h include/linux/lockdep_types.h \
+ include/linux/dynamic_debug.h include/linux/jump_label.h \
+ arch/x86/include/asm/jump_label.h arch/x86/include/asm/nops.h \
+ include/asm-generic/barrier.h arch/x86/include/asm/bitops.h \
+ arch/x86/include/asm/rmwcc.h include/linux/args.h \
+ include/asm-generic/bitops/sched.h arch/x86/include/asm/arch_hweight.h \
+ arch/x86/include/asm/cpufeatures.h \
  arch/x86/include/asm/required-features.h \
  arch/x86/include/asm/disabled-features.h \
  include/asm-generic/bitops/const_hweight.h \
@@ -38,41 +55,25 @@ hid-tmt500rs-usb.o: \
  include/linux/instrumented.h include/linux/kmsan-checks.h \
  include/asm-generic/bitops/instrumented-non-atomic.h \
  include/asm-generic/bitops/instrumented-lock.h \
- include/asm-generic/bitops/le.h arch/x86/include/uapi/asm/byteorder.h \
- include/linux/byteorder/little_endian.h \
- include/uapi/linux/byteorder/little_endian.h include/linux/swab.h \
- include/uapi/linux/swab.h arch/x86/include/uapi/asm/swab.h \
- include/linux/byteorder/generic.h \
+ include/asm-generic/bitops/le.h \
  include/asm-generic/bitops/ext2-atomic-setbit.h include/linux/hex.h \
  include/linux/kstrtox.h include/linux/log2.h include/linux/math.h \
  arch/x86/include/asm/div64.h include/asm-generic/div64.h \
- include/linux/minmax.h include/linux/panic.h include/linux/printk.h \
- include/linux/init.h include/linux/kern_levels.h \
- include/linux/ratelimit_types.h include/uapi/linux/param.h \
- arch/x86/include/generated/uapi/asm/param.h include/asm-generic/param.h \
- include/uapi/asm-generic/param.h include/linux/spinlock_types_raw.h \
- arch/x86/include/asm/spinlock_types.h \
- include/asm-generic/qspinlock_types.h \
- include/asm-generic/qrwlock_types.h include/linux/lockdep_types.h \
- include/linux/once_lite.h include/linux/dynamic_debug.h \
- include/linux/jump_label.h arch/x86/include/asm/jump_label.h \
- include/linux/sprintf.h include/linux/static_call_types.h \
- include/linux/instruction_pointer.h include/linux/slab.h \
- include/linux/cache.h arch/x86/include/asm/cache.h include/linux/gfp.h \
- include/linux/gfp_types.h include/linux/mmzone.h \
+ include/linux/minmax.h include/linux/sprintf.h \
+ include/linux/static_call_types.h include/linux/instruction_pointer.h \
+ include/linux/slab.h include/linux/cache.h arch/x86/include/asm/cache.h \
+ include/linux/gfp.h include/linux/gfp_types.h include/linux/mmzone.h \
  include/linux/spinlock.h include/linux/preempt.h include/linux/cleanup.h \
  include/linux/list.h include/linux/poison.h \
  arch/x86/include/asm/preempt.h arch/x86/include/asm/percpu.h \
  include/asm-generic/percpu.h include/linux/threads.h \
  include/linux/percpu-defs.h arch/x86/include/asm/current.h \
  include/linux/thread_info.h include/linux/bug.h \
- arch/x86/include/asm/bug.h include/linux/instrumentation.h \
- include/linux/objtool.h include/linux/objtool_types.h \
- include/asm-generic/bug.h include/linux/restart_block.h \
- include/linux/time64.h include/linux/math64.h include/vdso/math64.h \
- include/vdso/time64.h include/uapi/linux/time.h \
- include/uapi/linux/time_types.h include/linux/errno.h \
- include/uapi/linux/errno.h arch/x86/include/generated/uapi/asm/errno.h \
+ include/linux/restart_block.h include/linux/time64.h \
+ include/linux/math64.h include/vdso/math64.h include/vdso/time64.h \
+ include/uapi/linux/time.h include/uapi/linux/time_types.h \
+ include/linux/errno.h include/uapi/linux/errno.h \
+ arch/x86/include/generated/uapi/asm/errno.h \
  include/uapi/asm-generic/errno.h include/uapi/asm-generic/errno-base.h \
  arch/x86/include/asm/thread_info.h arch/x86/include/asm/page.h \
  arch/x86/include/asm/page_types.h include/linux/mem_encrypt.h \

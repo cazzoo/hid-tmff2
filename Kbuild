@@ -6,16 +6,10 @@ hid_tmff_new-objs := src/hid-tmff2.o \
                      src/tmtx/hid-tmtx.o \
                      src/tmtsxw/hid-tmtsxw.o \
                      src/tmt500rs/hid-tmt500rs.o \
-                     src/tmt500rs/hid-tmt500rs-usb.o \
-                     src/tmt500rs/hid-tmt500rs-ff.o \
-                     src/tmt500rs/hid-tmt500rs-init.o \
-                     src/tmt500rs/hid-tmt500rs-mode.o
+                     src/tmt500rs/hid-tmt500rs-simple.o
 
 test-tmt500rs-objs := tests/tmt500rs/test-tmt500rs.o \
                       src/tmt500rs/hid-tmt500rs.o \
-                      src/tmt500rs/hid-tmt500rs-usb.o \
-                      src/tmt500rs/hid-tmt500rs-ff.o \
-                      src/tmt500rs/hid-tmt500rs-init.o \
-                      src/tmt500rs/hid-tmt500rs-mode.o
+                      src/tmt500rs/hid-tmt500rs-simple.o
 
 ccflags-y := -I$(src)/src

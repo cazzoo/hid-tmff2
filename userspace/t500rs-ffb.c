@@ -490,28 +490,38 @@ static int upload_ramp_effect(int id, struct ff_effect *effect)
     usleep(5000);
 
     /* Report 0x04 - Ramp parameters */
+    /* NOTE: T500RS doesn't support native ramp - needs continuous updates */
+    /* For now, just set the start level (Option 1 - simple implementation) */
+    unsigned short duration_ms = effect->replay.length;
+    unsigned short start_scaled = (abs(start_level) * 0x00ff) / 32767;  /* Scale to 0-255 */
+
     memset(buf, 0, sizeof(buf));
     buf[0] = 0x04;
     buf[1] = 0x0e;
-    buf[2] = 0x00;
-    buf[3] = (abs(start_level) * 127) / 32767;  /* Start magnitude */
-    buf[4] = (abs(end_level) * 127) / 32767;    /* End magnitude */
-    buf[5] = 0x00;
-    buf[6] = 0x69;  /* From your capture */
-    buf[7] = 0x23;
-    ret = usb_send(buf, 8);
+    buf[2] = start_scaled & 0xff;        /* Start level low byte */
+    buf[3] = (start_scaled >> 8) & 0xff; /* Start level high byte */
+    buf[4] = start_scaled & 0xff;        /* Current level (same as start) */
+    buf[5] = (start_scaled >> 8) & 0xff; /* Current level high byte */
+    buf[6] = duration_ms & 0xff;         /* Duration low byte */
+    buf[7] = (duration_ms >> 8) & 0xff;  /* Duration high byte */
+    buf[8] = 0x00;
+    ret = usb_send(buf, 9);
     if (ret) return ret;
     usleep(5000);
 
+    LOG_DEBUG("Ramp Report 0x04: start=0x%04x, duration=%dms (simple mode - no gradual ramp)",
+              start_scaled, duration_ms);
+
     /* Report 0x01 - Main effect upload */
+    /* Simple implementation - just upload as ramp type */
     memset(buf, 0, sizeof(buf));
     buf[0] = 0x01;
     buf[1] = id;
-    buf[2] = 0x24;  /* Ramp type (same as sawtooth down) */
+    buf[2] = 0x24;  /* Ramp type (0x24 = sawtooth down / ramp) */
     buf[3] = 0x40;
-    buf[4] = 0x69;
-    buf[5] = 0x23;
-    buf[6] = 0x00;
+    buf[4] = duration_ms & 0xff;         /* Duration low byte */
+    buf[5] = (duration_ms >> 8) & 0xff;  /* Duration high byte */
+    buf[6] = 0x00;  /* Will be set by Report 0x04 */
     buf[7] = 0xff;
     buf[8] = 0xff;
     buf[9] = 0x0e;
@@ -524,7 +534,7 @@ static int upload_ramp_effect(int id, struct ff_effect *effect)
     ret = usb_send(buf, 15);
     if (ret) return ret;
 
-    LOG_DEBUG("Ramp effect uploaded");
+    LOG_DEBUG("Ramp effect uploaded (simple mode - holds start level)");
 
     return 0;
 }
@@ -535,8 +545,10 @@ static int start_effect(int id)
     unsigned char buf[4];
     int is_constant = 0;
     int is_periodic = 0;
+    int is_ramp = 0;
     int force = 0;
     int magnitude = 0;
+    int ramp_start = 0;
     int ret;
 
     LOG_DEBUG("Starting effect %d", id);
@@ -549,6 +561,9 @@ static int start_effect(int id)
         } else if (effects[id].effect.type == FF_PERIODIC) {
             is_periodic = 1;
             magnitude = effects[id].effect.u.periodic.magnitude;
+        } else if (effects[id].effect.type == FF_RAMP) {
+            is_ramp = 1;
+            ramp_start = effects[id].effect.u.ramp.start_level;
         }
     }
 
@@ -584,6 +599,8 @@ static int start_effect(int id)
 
         LOG_DEBUG("Set periodic magnitude to 0x%02x", mag);
     }
+
+    /* Ramp effects don't need Report 0x03 - the ramp is in Report 0x04 */
 
     /* Send start command */
     buf[0] = 0x41;

@@ -18,11 +18,57 @@
 - Always use modprobe to insert/load or remove the modules.
 - When you encounter several time the same problem, use the test_troubleshooting.md file in the cline_docs folder.
 
+## T500RS Development Protocol (MANDATORY)
+
+### Primary Reference Document
+- **MANDATORY**: `cline_docs/t500rs_implementation_plan.md` is the authoritative source for ALL T500RS development
+- **BEFORE ANY T500RS TASK**: Read the implementation plan to understand current phase, safety requirements, and objectives
+- **NO T500RS WORK** may proceed without consulting this document first
+- All T500RS development decisions must reference and update this document
+
+### Real-Time Documentation Requirements
+- **IMMEDIATE UPDATES**: Update implementation plan during development, not after
+- **PROGRESS TRACKING**: Document phase completion percentages and milestone achievements
+- **BUG DOCUMENTATION**: Record all discovered issues with detailed descriptions, severity levels, and resolution status
+- **TASK MANAGEMENT**: Maintain active task lists with priority levels and dependencies
+- **TROUBLESHOOTING LOG**: Document all attempted solutions with timestamps and outcomes (success/failure)
+- **SAFETY VALIDATION**: Record all safety checks, system stability tests, and error handling validations
+- **USB PROTOCOL FINDINGS**: Document all USB communication analysis results and protocol discoveries
+
 ## Critical Documentation and Workflow
+
+### T500RS Status Tracking System (MANDATORY)
+The implementation plan must maintain comprehensive status tracking:
+
+#### Development Phase Tracking
+- **Current Phase**: Clearly identify active development phase (1-6) with completion percentage
+- **Phase Objectives**: List specific objectives for current phase with completion status
+- **Milestone Progress**: Track major milestones with timestamps and validation results
+- **Next Phase Readiness**: Document criteria met/pending for phase advancement
+
+#### Issue and Resolution Tracking
+- **Active Issues**: Maintain current issue list with severity levels (Critical/High/Medium/Low)
+- **Issue Details**: For each issue, document symptoms, reproduction steps, and impact assessment
+- **Resolution Attempts**: Log all attempted solutions with timestamps, methods used, and outcomes
+- **Resolution Status**: Track issue status (Open/In Progress/Resolved/Blocked) with responsible party
+- **Known Limitations**: Document discovered constraints or limitations with workaround strategies
+
+#### Safety and Stability Monitoring
+- **System Stability Tests**: Document all stability test results with duration and conditions
+- **Safety Validation Results**: Record USB disconnect tests, driver reload tests, and error recovery tests
+- **Performance Metrics**: Track USB communication latency, effect response times, and resource usage
+- **Hardware Validation**: When available, document physical device test results and compatibility
+
+#### Integration Requirements
+- **Workflow Integration**: T500RS plan integrates with but does not replace existing documentation hierarchy
+- **Cross-References**: Maintain bidirectional references between implementation plan and other docs
+- **Authority**: Implementation plan is authoritative for T500RS-specific decisions and status
+- **Consistency**: Ensure implementation plan updates are reflected in projectRoadmap.md and currentTask.md
 
 ### Documentation Management
 - Maintain and a 'cline_docs' folder in the root directory (create if it doesn't exist) with the following essential files:
 - Review Every time you start a new task, read the files in 'cline_docs' folder.
+- **FOR T500RS WORK**: ALWAYS read t500rs_implementation_plan.md FIRST before any other documentation
 
 1. projectRoadmap.md
    - Purpose: High-level goals, features, completion criteria, and progress tracker
@@ -72,12 +118,37 @@
 - Do not remove code that is already written, it is already tested and working.
 - Commit each major successful step to the repository.
 - When troubleshoting issues, in cline_docs folder, create a tracking file you will follow every time you try a new solution so you don't do twice the same attempts.
-- At the beginning of every task when instructed to "follow the plan", read the essential documents in this order:
-  1. projectRoadmap.md (for high-level context and goals)
-  2. currentTask.md (for specific current objectives)
-  3. techStack.md
-  4. codebaseSummary.md
+
+### Document Reading Protocol
+#### For T500RS Development Tasks:
+1. **MANDATORY FIRST**: t500rs_implementation_plan.md (current phase, safety requirements, objectives)
+2. projectRoadmap.md (for high-level context and goals)
+3. currentTask.md (for specific current objectives)
+4. techStack.md
+5. codebaseSummary.md
+
+#### For Non-T500RS Tasks:
+1. projectRoadmap.md (for high-level context and goals)
+2. currentTask.md (for specific current objectives)
+3. techStack.md
+4. codebaseSummary.md
+
 - If you try to read or edit another document before reading these, something BAD will happen.
+- **T500RS EXCEPTION**: For T500RS work, failure to read implementation plan first will result in incomplete or unsafe development
+
+### T500RS Development Workflow (MANDATORY)
+- **Phase Validation**: Before starting work, confirm current phase objectives and safety requirements
+- **Real-Time Updates**: Update implementation plan immediately when:
+  - Discovering new issues or bugs
+  - Completing phase objectives or milestones
+  - Attempting troubleshooting solutions
+  - Observing system stability changes
+  - Finding USB protocol insights
+  - Validating safety mechanisms
+- **Safety First**: All T500RS development must prioritize system stability over feature completion
+- **Documentation Integrity**: Implementation plan must always reflect current project state
+
+### General Workflow
 - Update documents based on significant changes, not minor steps
 - If conflicting information is found between documents, ask the user for clarification
 - Create files in the userInstructions folder for tasks that require user action

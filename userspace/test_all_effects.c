@@ -304,6 +304,9 @@ int upload_and_play_ramp(int fd, int start_level, int end_level)
     effect.replay.delay = 0;
     effect.direction = 0x4000;
 
+    printf("DEBUG: Sending ramp with start_level=%d (0x%04x), end_level=%d (0x%04x)\n",
+           start_level, start_level & 0xffff, end_level, end_level & 0xffff);
+
     if (ioctl(fd, EVIOCSFF, &effect) < 0) {
         perror("Upload ramp effect failed");
         return -1;
@@ -406,7 +409,7 @@ void show_menu(void)
     printf(" 13. Sine Wave - Fast (100ms, gentle)\n");
     printf(" 14. Square Wave (200ms, gentle)\n\n");
     printf("Ramp Tests:\n");
-    printf(" 15. Ramp - Weak to Strong (8s)\n");
+    printf(" 15. Ramp - Very Weak to Strong (8s)\n");
     printf(" 16. Ramp - Strong to Weak (8s)\n\n");
     printf("Special:\n");
     printf("  0. Run ALL tests\n");
@@ -474,8 +477,8 @@ void run_test(int fd, int test_num)
         upload_and_play_square(fd, 4096, 200);  /* Reduced magnitude, slower */
         break;
     case 15:
-        print_test_header("Test 15: Ramp - Weak to Strong (8 seconds)");
-        upload_and_play_ramp(fd, 2048, 16384);  /* Weak to strong ramp */
+        print_test_header("Test 15: Ramp - Very Weak to Strong (8 seconds)");
+        upload_and_play_ramp(fd, 512, 16384);  /* Very weak start to strong */
         break;
     case 16:
         print_test_header("Test 16: Ramp - Strong to Weak (8 seconds)");
