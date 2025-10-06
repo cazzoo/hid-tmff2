@@ -14,24 +14,32 @@
 #include <fcntl.h>
 #include <errno.h>
 #include <signal.h>
+#include <sys/time.h>
 #include <linux/input.h>
 #include <linux/uinput.h>
 #include <libusb-1.0/libusb.h>
 #include <pthread.h>
 
-#define VENDOR_ID  0x044f
-#define PRODUCT_ID 0xb65e
-#define EP_OUT     0x01
-#define EP_IN      0x82
-#define INTERFACE  0
+#define VENDOR_ID       0x044f
+#define PRODUCT_ID_BOOT 0xb65d  /* Boot mode - before initialization */
+#define PRODUCT_ID      0xb65e  /* Normal mode - after initialization */
+#define EP_OUT          0x01
+#define EP_IN           0x82
+#define INTERFACE       0
 
 #define MAX_EFFECTS 16
+
+/* Configuration parameters */
+static int invert_throttle = 1;  /* 1 = invert, 0 = normal */
+static int invert_brake = 1;
+static int invert_clutch = 1;
 
 /* Global state */
 static libusb_context *usb_ctx = NULL;
 static libusb_device_handle *usb_handle = NULL;
 static int uinput_fd = -1;
 static int running = 1;
+static pthread_t input_thread;
 
 /* Effect state */
 struct effect_state {
@@ -58,9 +66,33 @@ static int ramp_thread_running = 0;
 /* Gain control state */
 static int current_gain = 0xffff;  /* Default: maximum (0-65535) */
 
+/* Per-effect-type gains (custom event codes 0x70-0x75) */
+#define FF_GAIN_CONSTANT 0x70
+#define FF_GAIN_PERIODIC 0x71
+#define FF_GAIN_SPRING   0x72
+#define FF_GAIN_DAMPER   0x73
+#define FF_GAIN_FRICTION 0x74
+#define FF_GAIN_INERTIA  0x75
+
+static int constant_gain = 0xffff;  /* Constant force gain */
+static int periodic_gain = 0xffff;  /* Periodic force gain */
+static int spring_gain = 0xffff;    /* Spring force gain */
+static int damper_gain = 0xffff;    /* Damper force gain */
+static int friction_gain = 0xffff;  /* Friction force gain */
+static int inertia_gain = 0xffff;   /* Inertia force gain */
+
 /* Autocenter state */
 static int current_autocenter = 0;  /* Default: off (0-65535) */
 #define AUTOCENTER_EFFECT_ID 15  /* Reserve slot 15 for autocenter spring */
+
+/* Rotation angle state */
+static int current_rotation_angle = 1080;  /* Default: 1080 degrees */
+#define FF_ROTATION_ANGLE 0x76  /* Custom event code for rotation angle */
+
+/* Forward declarations */
+static int apply_effect_gain(int value, int effect_type);
+static int set_effect_type_gain(int effect_type, int gain);
+static int set_rotation_angle(int angle);
 
 /* Logging */
 #define LOG_INFO(fmt, ...) fprintf(stdout, "[INFO] " fmt "\n", ##__VA_ARGS__)
@@ -78,15 +110,6 @@ static void signal_handler(int sig)
 static int usb_send(unsigned char *data, int len)
 {
     int ret, transferred;
-    char hex_str[128];
-    int pos = 0;
-
-    /* Build hex string for debug */
-    for (int i = 0; i < len && pos < sizeof(hex_str) - 3; i++) {
-        pos += snprintf(hex_str + pos, sizeof(hex_str) - pos, "%02x ", data[i]);
-    }
-
-    LOG_DEBUG("USB SEND: [%s]", hex_str);
 
     ret = libusb_interrupt_transfer(usb_handle, EP_OUT, data, len, &transferred, 1000);
     if (ret < 0) {
@@ -180,8 +203,72 @@ static int t500rs_initialize(void)
     buf[3] = 0x00;
     ret = usb_send(buf, 4);
     if (ret) return ret;
+    usleep(10000);
 
-    LOG_INFO("Initialization complete");
+    /* Additional commands from pcap to trigger mode switch */
+    /* Report 0x42 - Query */
+    memset(buf, 0, sizeof(buf));
+    buf[0] = 0x42;
+    buf[1] = 0x00;
+    buf[2] = 0x00;
+    buf[3] = 0x00;
+    buf[4] = 0x00;
+    buf[5] = 0x08;
+    ret = usb_send(buf, 6);
+    if (ret) return ret;
+    usleep(10000);
+
+    /* Report 0x42 - Set value */
+    memset(buf, 0, sizeof(buf));
+    buf[0] = 0x42;
+    buf[1] = 0xe8;
+    buf[2] = 0x03;
+    ret = usb_send(buf, 3);
+    if (ret) return ret;
+    usleep(10000);
+
+    /* Report 0x4e - Query */
+    memset(buf, 0, sizeof(buf));
+    buf[0] = 0x4e;
+    buf[1] = 0x00;
+    buf[2] = 0x00;
+    buf[3] = 0x00;
+    buf[4] = 0x00;
+    buf[5] = 0x08;
+    ret = usb_send(buf, 6);
+    if (ret) return ret;
+    usleep(10000);
+
+    /* Report 0x4e - Set value */
+    memset(buf, 0, sizeof(buf));
+    buf[0] = 0x4e;
+    buf[1] = 0x14;
+    ret = usb_send(buf, 2);
+    if (ret) return ret;
+    usleep(10000);
+
+    /* Report 0x56 - Query */
+    memset(buf, 0, sizeof(buf));
+    buf[0] = 0x56;
+    buf[1] = 0x00;
+    buf[2] = 0x00;
+    buf[3] = 0x00;
+    buf[4] = 0x00;
+    buf[5] = 0x08;
+    ret = usb_send(buf, 6);
+    if (ret) return ret;
+    usleep(10000);
+
+    /* Report 0x56 - Set value */
+    memset(buf, 0, sizeof(buf));
+    buf[0] = 0x56;
+    buf[1] = 0x00;
+    buf[2] = 0x2f;
+    ret = usb_send(buf, 3);
+    if (ret) return ret;
+    usleep(100000);
+
+    LOG_INFO("Initialization complete (mode switch commands sent)");
     return 0;
 }
 
@@ -191,8 +278,11 @@ static int upload_constant_effect(int id, struct ff_effect *effect)
     unsigned char buf[15];
     int ret;
 
-    LOG_DEBUG("Uploading constant effect %d, force=%d",
-              id, effect->u.constant.level);
+    /* Apply per-effect gain */
+    int level = apply_effect_gain(effect->u.constant.level, FF_CONSTANT);
+
+    LOG_DEBUG("Uploading constant effect %d, force=%d (after gain: %d)",
+              id, effect->u.constant.level, level);
 
     /* Report 0x02 - Envelope (attack/fade) - use defaults */
     memset(buf, 0, sizeof(buf));
@@ -275,9 +365,9 @@ static int upload_condition_effect(int id, struct ff_effect *effect)
         return -1;
     }
 
-    /* Get coefficients for both directions */
-    int right_coeff = effect->u.condition[0].right_coeff;
-    int left_coeff = effect->u.condition[0].left_coeff;
+    /* Get coefficients for both directions and apply per-effect gain */
+    int right_coeff = apply_effect_gain(effect->u.condition[0].right_coeff, effect->type);
+    int left_coeff = apply_effect_gain(effect->u.condition[0].left_coeff, effect->type);
 
     /* Scale to 0-100 (0x64) as seen in captures */
     unsigned char right_strength = (abs(right_coeff) * 100) / 32767;
@@ -380,6 +470,9 @@ static int upload_periodic_effect(int id, struct ff_effect *effect)
     unsigned char effect_type;
     const char *type_name;
 
+    /* Apply per-effect gain to magnitude */
+    int magnitude = apply_effect_gain(effect->u.periodic.magnitude, FF_PERIODIC);
+
     /* Determine waveform type */
     switch (effect->u.periodic.waveform) {
     case FF_SQUARE:
@@ -407,8 +500,7 @@ static int upload_periodic_effect(int id, struct ff_effect *effect)
         return -1;
     }
 
-    /* Magnitude - scale to 0-127 */
-    int magnitude = effect->u.periodic.magnitude;
+    /* Magnitude - scale to 0-127 (already has gain applied) */
     unsigned char mag = (abs(magnitude) * 127) / 32767;
 
     /* Ensure minimum magnitude */
@@ -652,6 +744,48 @@ static int stop_effect(int id)
     return usb_send(buf, 4);
 }
 
+/* Apply per-effect gain to a value */
+static int apply_effect_gain(int value, int effect_type)
+{
+    int gain = 0xffff;
+
+    switch (effect_type) {
+        case FF_CONSTANT:
+            gain = constant_gain;
+            break;
+        case FF_PERIODIC:
+        case FF_SINE:
+        case FF_SQUARE:
+        case FF_TRIANGLE:
+        case FF_SAW_UP:
+        case FF_SAW_DOWN:
+            gain = periodic_gain;
+            break;
+        case FF_SPRING:
+            gain = spring_gain;
+            break;
+        case FF_DAMPER:
+            gain = damper_gain;
+            break;
+        case FF_FRICTION:
+            gain = friction_gain;
+            break;
+        case FF_INERTIA:
+            gain = inertia_gain;
+            break;
+        default:
+            gain = 0xffff;
+    }
+
+    /* Apply gain: value * gain / 65535 */
+    if (gain != 0xffff) {
+        long long scaled = ((long long)value * gain) / 65535;
+        return (int)scaled;
+    }
+
+    return value;
+}
+
 /* Set gain (overall force feedback strength) */
 static int set_gain(int gain)
 {
@@ -677,6 +811,123 @@ static int set_gain(int gain)
     }
 
     return ret;
+}
+
+/* Set per-effect-type gain */
+static int set_effect_type_gain(int effect_type, int gain)
+{
+    const char *type_name = "Unknown";
+
+    switch (effect_type) {
+        case FF_CONSTANT:
+            constant_gain = gain;
+            type_name = "Constant";
+            break;
+        case FF_PERIODIC:
+            periodic_gain = gain;
+            type_name = "Periodic";
+            break;
+        case FF_SPRING:
+            spring_gain = gain;
+            type_name = "Spring";
+            break;
+        case FF_DAMPER:
+            damper_gain = gain;
+            type_name = "Damper";
+            break;
+        case FF_FRICTION:
+            friction_gain = gain;
+            type_name = "Friction";
+            break;
+        case FF_INERTIA:
+            inertia_gain = gain;
+            type_name = "Inertia";
+            break;
+        default:
+            LOG_ERROR("Unknown effect type for gain: %d", effect_type);
+            return -1;
+    }
+
+    LOG_INFO("Set %s gain: %d%% (raw=%d)", type_name, (gain * 100) / 65535, gain);
+    return 0;
+}
+
+/* Set rotation angle (90-1080 degrees) */
+static int set_rotation_angle(int angle)
+{
+    unsigned char buf[15];
+    int ret;
+    unsigned char angle_code;
+    int actual_angle;
+
+    /* T500RS only supports these discrete angles - round to nearest */
+    /* Mapping from Windows capture: 90°=0x01, 180°=0x02, 360°=0x03, 500°=0x04, 900°=0x05, 1080°=0x06 */
+
+    if (angle <= 135) {
+        angle_code = 0x01;
+        actual_angle = 90;
+    } else if (angle <= 270) {
+        angle_code = 0x02;
+        actual_angle = 180;
+    } else if (angle <= 430) {
+        angle_code = 0x03;
+        actual_angle = 360;
+    } else if (angle <= 700) {
+        angle_code = 0x04;
+        actual_angle = 500;
+    } else if (angle <= 990) {
+        angle_code = 0x05;
+        actual_angle = 900;
+    } else {
+        angle_code = 0x06;
+        actual_angle = 1080;
+    }
+
+    LOG_INFO("🔄 Setting rotation angle: requested=%d°, actual=%d° (code=0x%02x)",
+             angle, actual_angle, angle_code);
+
+    /* Report 0x42 - Set rotation angle */
+    buf[0] = 0x42;
+    buf[1] = angle_code;
+
+    ret = usb_send(buf, 2);
+    if (ret != 0) {
+        LOG_ERROR("❌ Failed to send Report 0x42");
+        return ret;
+    }
+
+    usleep(10000);  /* Wait 10ms */
+
+    /* Report 0x40 - Follow-up command (from Windows capture) */
+    buf[0] = 0x40;
+    buf[1] = angle_code;
+    buf[2] = 0x00;
+    buf[3] = 0x00;
+
+    ret = usb_send(buf, 4);
+    if (ret != 0) {
+        LOG_ERROR("❌ Failed to send Report 0x40 (first)");
+        return ret;
+    }
+
+    usleep(8000);  /* Wait 8ms */
+
+    /* Report 0x40 - Second follow-up (from Windows capture frame 206) */
+    buf[0] = 0x40;
+    buf[1] = 0x03;
+    buf[2] = 0x0d;
+    buf[3] = 0x00;
+
+    ret = usb_send(buf, 4);
+    if (ret != 0) {
+        LOG_ERROR("❌ Failed to send Report 0x40 (second)");
+        return ret;
+    }
+
+    current_rotation_angle = actual_angle;
+    LOG_INFO("✅ Rotation angle set successfully to %d°", actual_angle);
+
+    return 0;
 }
 
 /* Set autocenter (self-centering force when no effects playing) */
@@ -993,6 +1244,207 @@ static int handle_ff_erase(struct uinput_ff_erase *erase)
     return 0;
 }
 
+/* Input reading thread - reads from USB and forwards to uinput */
+static void *input_reading_thread(void *arg)
+{
+    unsigned char buf[64];
+    int transferred;
+    int ret;
+    struct input_event ev;
+
+    while (running) {
+        /* Read from USB interrupt endpoint */
+        ret = libusb_interrupt_transfer(usb_handle, EP_IN, buf, sizeof(buf), &transferred, 100);
+
+        if (ret == LIBUSB_ERROR_TIMEOUT) {
+            /* Timeout is normal, just continue */
+            continue;
+        }
+
+        if (ret < 0) {
+            if (ret != LIBUSB_ERROR_INTERRUPTED) {
+                LOG_ERROR("USB read failed: %s", libusb_error_name(ret));
+            }
+            usleep(10000);
+            continue;
+        }
+
+        if (transferred < 15) {
+            /* Too short, ignore */
+            continue;
+        }
+
+        /* Debug: Print first packet */
+        static int first_packet = 1;
+        if (first_packet) {
+            LOG_INFO("First HID packet (15 bytes):");
+            fprintf(stderr, "  ");
+            for (int i = 0; i < 15; i++) {
+                fprintf(stderr, "%02x ", buf[i]);
+            }
+            fprintf(stderr, "\n");
+            first_packet = 0;
+        }
+
+        /* Parse HID input report
+         * T500RS actual format (from USB captures):
+         * Byte 0: Report ID (0x07)
+         * Bytes 1-2: Steering (16-bit little-endian)
+         * Bytes 3-4: Throttle (16-bit little-endian, 0-1023)
+         * Bytes 5-6: Brake (16-bit little-endian, 0-1023)
+         * Bytes 7-8: Clutch (16-bit little-endian, 0-1023)
+         * Bytes 9-10: Unknown
+         * Byte 11: Buttons (bit-packed)
+         * Bytes 12-14: More buttons/data
+         */
+
+        if (buf[0] == 0x07 && transferred >= 15) {
+            /* Steering - bytes 1-2 (little-endian 16-bit) */
+            uint16_t steering_raw = buf[1] | (buf[2] << 8);
+            /* Convert to signed -32768 to 32767 */
+            int16_t steering = (int16_t)steering_raw - 32768;
+
+            memset(&ev, 0, sizeof(ev));
+            gettimeofday((struct timeval *)&ev.time, NULL);
+            ev.type = EV_ABS;
+            ev.code = ABS_X;
+            ev.value = steering;
+            write(uinput_fd, &ev, sizeof(ev));
+
+            /* Throttle - bytes 3-4 (little-endian 16-bit, 0-1023) */
+            uint16_t throttle = buf[3] | (buf[4] << 8);
+            int throttle_scaled = (throttle * 255) / 1023;
+            if (invert_throttle) {
+                throttle_scaled = 255 - throttle_scaled;
+            }
+            ev.code = ABS_Y;
+            ev.value = throttle_scaled;
+            write(uinput_fd, &ev, sizeof(ev));
+
+            /* Brake - bytes 5-6 (little-endian 16-bit, 0-1023) */
+            uint16_t brake = buf[5] | (buf[6] << 8);
+            int brake_scaled = (brake * 255) / 1023;
+            if (invert_brake) {
+                brake_scaled = 255 - brake_scaled;
+            }
+            ev.code = ABS_Z;
+            ev.value = brake_scaled;
+            write(uinput_fd, &ev, sizeof(ev));
+
+            /* Clutch - bytes 7-8 (little-endian 16-bit, 0-1023) */
+            uint16_t clutch = buf[7] | (buf[8] << 8);
+            int clutch_scaled = (clutch * 255) / 1023;
+            if (invert_clutch) {
+                clutch_scaled = 255 - clutch_scaled;
+            }
+            ev.code = ABS_RZ;
+            ev.value = clutch_scaled;
+            write(uinput_fd, &ev, sizeof(ev));
+
+            /* D-pad is in byte 14 (last byte)
+             * T500RS D-pad encoding (verified from real hardware):
+             * 0x0F = centered (released)
+             * 0x00 = up (swapped with 0x01)
+             * 0x01 = up-right (diagonal) (swapped with 0x00)
+             * 0x02 = right
+             * 0x03 = down-right (diagonal)
+             * 0x04 = down
+             * 0x05 = down-left (diagonal)
+             * 0x06 = left
+             * 0x07 = up-left (diagonal)
+             */
+            uint8_t dpad = buf[14];
+            int hat_x = 0, hat_y = 0;
+
+            switch (dpad) {
+                case 0x0F:
+                    /* Centered */
+                    hat_x = 0;
+                    hat_y = 0;
+                    break;
+                case 0x00:
+                    /* Up */
+                    hat_y = -1;
+                    break;
+                case 0x01:
+                    /* Up-Right */
+                    hat_x = 1;
+                    hat_y = -1;
+                    break;
+                case 0x02:
+                    /* Right */
+                    hat_x = 1;
+                    break;
+                case 0x03:
+                    /* Down-Right */
+                    hat_x = 1;
+                    hat_y = 1;
+                    break;
+                case 0x04:
+                    /* Down */
+                    hat_y = 1;
+                    break;
+                case 0x05:
+                    /* Down-Left */
+                    hat_x = -1;
+                    hat_y = 1;
+                    break;
+                case 0x06:
+                    /* Left */
+                    hat_x = -1;
+                    break;
+                case 0x07:
+                    /* Up-Left */
+                    hat_x = -1;
+                    hat_y = -1;
+                    break;
+                default:
+                    /* Unknown value, treat as centered */
+                    hat_x = 0;
+                    hat_y = 0;
+                    break;
+            }
+
+            ev.code = ABS_HAT0X;
+            ev.value = hat_x;
+            write(uinput_fd, &ev, sizeof(ev));
+
+            ev.code = ABS_HAT0Y;
+            ev.value = hat_y;
+            write(uinput_fd, &ev, sizeof(ev));
+
+            /* Buttons - byte 11 and possibly 12-14 */
+            static uint32_t last_buttons = 0;
+            uint32_t buttons = buf[11] | (buf[12] << 8) | (buf[13] << 16);
+
+            /* Only send events for changed buttons */
+            if (buttons != last_buttons) {
+                for (int bit = 0; bit < 24; bit++) {
+                    int old_state = (last_buttons >> bit) & 1;
+                    int new_state = (buttons >> bit) & 1;
+
+                    if (old_state != new_state) {
+                        ev.type = EV_KEY;
+                        ev.code = BTN_JOYSTICK + bit;
+                        ev.value = new_state;
+                        write(uinput_fd, &ev, sizeof(ev));
+                    }
+                }
+                last_buttons = buttons;
+            }
+
+            /* Send sync event */
+            ev.type = EV_SYN;
+            ev.code = SYN_REPORT;
+            ev.value = 0;
+            write(uinput_fd, &ev, sizeof(ev));
+        }
+    }
+
+    LOG_INFO("Input reading thread stopped");
+    return NULL;
+}
+
 /* Process uinput events */
 static void process_uinput_events(void)
 {
@@ -1065,6 +1517,39 @@ static void process_uinput_events(void)
                 break;
             }
 
+            /* Per-effect-type gains */
+            if (ev.code == FF_GAIN_CONSTANT) {
+                set_effect_type_gain(FF_CONSTANT, ev.value);
+                break;
+            }
+            if (ev.code == FF_GAIN_PERIODIC) {
+                set_effect_type_gain(FF_PERIODIC, ev.value);
+                break;
+            }
+            if (ev.code == FF_GAIN_SPRING) {
+                set_effect_type_gain(FF_SPRING, ev.value);
+                break;
+            }
+            if (ev.code == FF_GAIN_DAMPER) {
+                set_effect_type_gain(FF_DAMPER, ev.value);
+                break;
+            }
+            if (ev.code == FF_GAIN_FRICTION) {
+                set_effect_type_gain(FF_FRICTION, ev.value);
+                break;
+            }
+            if (ev.code == FF_GAIN_INERTIA) {
+                set_effect_type_gain(FF_INERTIA, ev.value);
+                break;
+            }
+
+            /* Rotation angle */
+            if (ev.code == FF_ROTATION_ANGLE) {
+                /* Value is in degrees (90-1080) */
+                set_rotation_angle(ev.value);
+                break;
+            }
+
             /* Normal effect play/stop */
             pthread_mutex_lock(&effects_lock);
             if (ev.code < MAX_EFFECTS) {
@@ -1131,6 +1616,8 @@ static int setup_uinput(void)
     ioctl(uinput_fd, UI_SET_ABSBIT, ABS_Y);
     ioctl(uinput_fd, UI_SET_ABSBIT, ABS_Z);
     ioctl(uinput_fd, UI_SET_ABSBIT, ABS_RZ);
+    ioctl(uinput_fd, UI_SET_ABSBIT, ABS_HAT0X);  /* D-pad X */
+    ioctl(uinput_fd, UI_SET_ABSBIT, ABS_HAT0Y);  /* D-pad Y */
 
     /* Enable force feedback effects */
     ioctl(uinput_fd, UI_SET_FFBIT, FF_CONSTANT);
@@ -1155,7 +1642,7 @@ static int setup_uinput(void)
     usetup.id.vendor = VENDOR_ID;
     usetup.id.product = PRODUCT_ID;
     usetup.id.version = 1;
-    strcpy(usetup.name, "Thrustmaster T500RS (FFB)");
+    strcpy(usetup.name, "T500RS Force Feedback Wheel");
     usetup.ff_effects_max = MAX_EFFECTS;
 
     if (ioctl(uinput_fd, UI_DEV_SETUP, &usetup) < 0) {
@@ -1180,6 +1667,15 @@ static int setup_uinput(void)
     ioctl(uinput_fd, UI_ABS_SETUP, &abs_setup);
 
     abs_setup.code = ABS_RZ;
+    ioctl(uinput_fd, UI_ABS_SETUP, &abs_setup);
+
+    /* D-pad axes */
+    abs_setup.code = ABS_HAT0X;
+    abs_setup.absinfo.minimum = -1;
+    abs_setup.absinfo.maximum = 1;
+    ioctl(uinput_fd, UI_ABS_SETUP, &abs_setup);
+
+    abs_setup.code = ABS_HAT0Y;
     ioctl(uinput_fd, UI_ABS_SETUP, &abs_setup);
 
     /* Create device */
@@ -1210,11 +1706,17 @@ static void cleanup(void)
 {
     LOG_INFO("Cleaning up...");
 
+    /* Stop input reading thread (only if it was created) */
+    running = 0;
+    if (input_thread) {
+        pthread_join(input_thread, NULL);
+        input_thread = 0;
+    }
+
     /* Stop ramp update thread */
     if (ramp_thread_running) {
         ramp_thread_running = 0;
         pthread_join(ramp_thread, NULL);
-        LOG_DEBUG("Ramp update thread stopped");
     }
 
     /* Stop all active effects */
@@ -1228,21 +1730,23 @@ static void cleanup(void)
     }
     pthread_mutex_unlock(&effects_lock);
 
-    /* Send stop commands for ALL effect slots to be sure */
-    unsigned char buf[4];
-    for (int i = 0; i < MAX_EFFECTS; i++) {
-        buf[0] = 0x41;
-        buf[1] = i;
-        buf[2] = 0x00;
-        buf[3] = 0x01;
-        usb_send(buf, 4);
-    }
+    /* Send stop commands for ALL effect slots to be sure (only if USB is connected) */
+    if (usb_handle) {
+        unsigned char buf[4];
+        for (int i = 0; i < MAX_EFFECTS; i++) {
+            buf[0] = 0x41;
+            buf[1] = i;
+            buf[2] = 0x00;
+            buf[3] = 0x01;
+            usb_send(buf, 4);
+        }
 
-    /* Clear any ramp state with zero Report 0x04 */
-    memset(buf, 0, sizeof(buf));
-    buf[0] = 0x04;
-    buf[1] = 0x0e;
-    usb_send(buf, 9);
+        /* Clear any ramp state with zero Report 0x04 */
+        memset(buf, 0, sizeof(buf));
+        buf[0] = 0x04;
+        buf[1] = 0x0e;
+        usb_send(buf, 9);
+    }
 
     /* Destroy uinput device */
     if (uinput_fd >= 0) {
@@ -1253,7 +1757,8 @@ static void cleanup(void)
     /* Release USB interface */
     if (usb_handle) {
         libusb_release_interface(usb_handle, INTERFACE);
-        libusb_attach_kernel_driver(usb_handle, INTERFACE);
+        /* Don't reattach kernel driver - we want userspace driver to handle everything */
+        /* libusb_attach_kernel_driver(usb_handle, INTERFACE); */
         libusb_close(usb_handle);
     }
 
@@ -1285,27 +1790,36 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    /* Open device */
+    /* Open device - try normal mode first, then boot mode */
     LOG_INFO("Opening T500RS device...");
     usb_handle = libusb_open_device_with_vid_pid(usb_ctx, VENDOR_ID, PRODUCT_ID);
     if (!usb_handle) {
-        LOG_ERROR("Cannot open device (VID=%04x, PID=%04x)", VENDOR_ID, PRODUCT_ID);
-        LOG_ERROR("Make sure the device is connected and you have permissions");
-        cleanup();
-        return 1;
-    }
-    LOG_INFO("Device opened successfully");
-
-    /* Detach kernel driver */
-    if (libusb_kernel_driver_active(usb_handle, INTERFACE) == 1) {
-        LOG_INFO("Detaching kernel driver...");
-        ret = libusb_detach_kernel_driver(usb_handle, INTERFACE);
-        if (ret < 0) {
-            LOG_ERROR("Failed to detach kernel driver: %s", libusb_error_name(ret));
-            LOG_ERROR("Try: sudo rmmod hid_tmff_new");
+        LOG_INFO("Normal mode device not found, trying boot mode...");
+        usb_handle = libusb_open_device_with_vid_pid(usb_ctx, VENDOR_ID, PRODUCT_ID_BOOT);
+        if (!usb_handle) {
+            LOG_ERROR("Cannot open device (tried VID=%04x, PID=%04x and %04x)",
+                     VENDOR_ID, PRODUCT_ID, PRODUCT_ID_BOOT);
+            LOG_ERROR("Make sure the device is connected and you have permissions");
             cleanup();
             return 1;
         }
+        LOG_INFO("Opened in boot mode (will initialize to normal mode)");
+    }
+    LOG_INFO("Device opened successfully");
+
+    /* Detach kernel driver - try even if libusb doesn't think it's active */
+    LOG_INFO("Detaching kernel driver...");
+    ret = libusb_detach_kernel_driver(usb_handle, INTERFACE);
+    if (ret < 0 && ret != LIBUSB_ERROR_NOT_FOUND) {
+        LOG_ERROR("Failed to detach kernel driver: %s", libusb_error_name(ret));
+        LOG_ERROR("Try manually: echo '2-1.3:1.0' | sudo tee /sys/bus/usb/drivers/usbhid/unbind");
+        cleanup();
+        return 1;
+    }
+    if (ret == LIBUSB_ERROR_NOT_FOUND) {
+        LOG_INFO("No kernel driver was attached");
+    } else {
+        LOG_INFO("Kernel driver detached successfully");
     }
 
     /* Claim interface */
@@ -1317,12 +1831,182 @@ int main(int argc, char **argv)
         return 1;
     }
 
+    /* Check if we opened in boot mode */
+    struct libusb_device_descriptor desc;
+    libusb_device *dev = libusb_get_device(usb_handle);
+    if (!dev) {
+        LOG_ERROR("Failed to get device");
+        cleanup();
+        return 1;
+    }
+
+    ret = libusb_get_device_descriptor(dev, &desc);
+    if (ret < 0) {
+        LOG_ERROR("Failed to get device descriptor: %s", libusb_error_name(ret));
+        cleanup();
+        return 1;
+    }
+
+    int was_boot_mode = (desc.idProduct == PRODUCT_ID_BOOT);
+
+    /* If in boot mode, try to trigger mode switch */
+    if (was_boot_mode) {
+        LOG_INFO("Device in boot mode, attempting mode switch...");
+
+        /* Try USB reset - this sometimes triggers mode switch */
+        LOG_INFO("Attempting USB reset...");
+        ret = libusb_reset_device(usb_handle);
+        if (ret < 0) {
+            LOG_ERROR("USB reset failed: %s", libusb_error_name(ret));
+            /* Continue anyway */
+        } else {
+            LOG_INFO("USB reset successful, waiting for re-enumeration...");
+            /* After reset, device handle is invalid */
+            usb_handle = NULL;
+            sleep(3);
+
+            /* Try to reopen in normal mode */
+            LOG_INFO("Trying to open in normal mode after reset...");
+            usb_handle = libusb_open_device_with_vid_pid(usb_ctx, VENDOR_ID, PRODUCT_ID);
+            if (usb_handle) {
+                LOG_INFO("Device switched to normal mode after reset!");
+                was_boot_mode = 0;  /* Update flag */
+
+                /* Detach kernel driver */
+                ret = libusb_detach_kernel_driver(usb_handle, INTERFACE);
+                if (ret < 0 && ret != LIBUSB_ERROR_NOT_FOUND) {
+                    LOG_ERROR("Failed to detach kernel driver: %s", libusb_error_name(ret));
+                    cleanup();
+                    return 1;
+                }
+
+                /* Claim interface */
+                ret = libusb_claim_interface(usb_handle, INTERFACE);
+                if (ret < 0) {
+                    LOG_ERROR("Failed to claim interface: %s", libusb_error_name(ret));
+                    cleanup();
+                    return 1;
+                }
+            } else {
+                LOG_INFO("Device still in boot mode after reset, will try init sequence");
+                /* Reopen in boot mode */
+                usb_handle = libusb_open_device_with_vid_pid(usb_ctx, VENDOR_ID, PRODUCT_ID_BOOT);
+                if (!usb_handle) {
+                    LOG_ERROR("Failed to reopen device after reset");
+                    cleanup();
+                    return 1;
+                }
+
+                /* Reclaim interface */
+                ret = libusb_claim_interface(usb_handle, INTERFACE);
+                if (ret < 0) {
+                    LOG_ERROR("Failed to claim interface: %s", libusb_error_name(ret));
+                    cleanup();
+                    return 1;
+                }
+            }
+        }
+    }
+
     /* Initialize device */
     ret = t500rs_initialize();
     if (ret < 0) {
         LOG_ERROR("Device initialization failed");
         cleanup();
         return 1;
+    }
+
+    /* If we were in boot mode, the device should have switched to normal mode */
+    /* The device will disconnect and reconnect with new USB ID */
+    if (was_boot_mode) {
+        LOG_INFO("Device was in boot mode - it should now re-enumerate as normal mode");
+        LOG_INFO("Waiting for device to disconnect and reconnect...");
+
+        /* The device will disconnect after init sequence */
+        /* We need to wait and detect the reconnection */
+
+        /* Try to detect disconnection by attempting a simple USB operation */
+        int disconnected = 0;
+        for (int i = 0; i < 10; i++) {
+            unsigned char test_buf[1];
+            int test_ret = libusb_control_transfer(usb_handle,
+                LIBUSB_ENDPOINT_IN | LIBUSB_REQUEST_TYPE_STANDARD | LIBUSB_RECIPIENT_DEVICE,
+                LIBUSB_REQUEST_GET_STATUS,
+                0, 0, test_buf, 1, 100);
+
+            if (test_ret < 0) {
+                LOG_INFO("Device disconnected (attempt %d/10)", i+1);
+                disconnected = 1;
+                break;
+            }
+            usleep(100000);  /* Wait 100ms between checks */
+        }
+
+        if (!disconnected) {
+            LOG_INFO("Device did not disconnect as expected");
+            LOG_INFO("Trying to reopen anyway...");
+        }
+
+        /* Close current handle */
+        if (usb_handle) {
+            libusb_close(usb_handle);
+            usb_handle = NULL;
+        }
+
+        /* Wait for device to re-enumerate */
+        LOG_INFO("Waiting for device to re-enumerate in normal mode...");
+        sleep(1);
+
+        /* Try to open in normal mode with retries */
+        int max_retries = 10;
+        for (int retry = 0; retry < max_retries; retry++) {
+            usb_handle = libusb_open_device_with_vid_pid(usb_ctx, VENDOR_ID, PRODUCT_ID);
+            if (usb_handle) {
+                LOG_INFO("Device switched to normal mode successfully! (attempt %d/%d)", retry+1, max_retries);
+                break;
+            }
+
+            if (retry < max_retries - 1) {
+                LOG_INFO("Normal mode device not found yet, waiting... (attempt %d/%d)", retry+1, max_retries);
+                sleep(1);
+            }
+        }
+
+        if (!usb_handle) {
+            LOG_ERROR("Device did not switch to normal mode after %d attempts!", max_retries);
+            LOG_ERROR("Current device status:");
+            system("lsusb | grep -i thrust");
+            LOG_ERROR("");
+            LOG_ERROR("If device shows as 044f:b65d, the mode switch failed.");
+            LOG_ERROR("Please try:");
+            LOG_ERROR("  1. Unplug the wheel USB cable");
+            LOG_ERROR("  2. Wait 10 seconds");
+            LOG_ERROR("  3. Plug it back in");
+            LOG_ERROR("  4. Run: lsusb | grep -i thrust");
+            LOG_ERROR("  5. If it shows 044f:b65e, start the driver again");
+            cleanup();
+            return 1;
+        }
+
+        /* Detach kernel driver from normal mode device */
+        LOG_INFO("Detaching kernel driver from normal mode device...");
+        ret = libusb_detach_kernel_driver(usb_handle, INTERFACE);
+        if (ret < 0 && ret != LIBUSB_ERROR_NOT_FOUND) {
+            LOG_ERROR("Failed to detach kernel driver: %s", libusb_error_name(ret));
+            cleanup();
+            return 1;
+        }
+
+        /* Claim interface */
+        LOG_INFO("Claiming USB interface...");
+        ret = libusb_claim_interface(usb_handle, INTERFACE);
+        if (ret < 0) {
+            LOG_ERROR("Failed to claim interface: %s", libusb_error_name(ret));
+            cleanup();
+            return 1;
+        }
+
+        LOG_INFO("Normal mode device ready!");
     }
 
     /* Setup uinput */
@@ -1352,6 +2036,14 @@ int main(int argc, char **argv)
 #else
     LOG_INFO("Ramp effects disabled (ENABLE_RAMP_EFFECTS=0)");
 #endif
+
+    /* Start input reading thread */
+    if (pthread_create(&input_thread, NULL, input_reading_thread, NULL) != 0) {
+        LOG_ERROR("Failed to create input reading thread");
+        cleanup();
+        return 1;
+    }
+    LOG_INFO("Input reading thread created");
 
     /* Main event loop */
     process_uinput_events();

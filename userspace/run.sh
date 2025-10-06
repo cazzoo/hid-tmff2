@@ -25,7 +25,7 @@ if [ ! -f "t500rs-ffb" ]; then
 fi
 
 # Check if device is connected
-if ! lsusb -d 044f:b65e > /dev/null 2>&1; then
+if ! lsusb -d 044f:b65e -d 044f:b65d > /dev/null 2>&1; then
     echo "Error: T500RS not found!"
     echo "Please connect the device and try again."
     exit 1

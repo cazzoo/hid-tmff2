@@ -1,252 +1,450 @@
-# T500RS Force Feedback Userspace Driver
+# T500RS Userspace Force Feedback Driver
 
-## Overview
-
-This is a userspace force feedback driver for the Thrustmaster T500RS racing wheel.
-It uses libusb for USB communication and uinput to create a virtual input device
-with full force feedback support.
-
-## Why Userspace?
-
-The T500RS uses a proprietary protocol that doesn't fit the standard Linux HID model.
-After extensive testing, we found that:
-- ✅ libusb communication works perfectly
-- ✅ Force feedback works via libusb
-- ❌ Kernel HID layer blocks raw USB access
-
-Therefore, a userspace driver is the correct solution for this device.
+A complete userspace driver for the Thrustmaster T500RS racing wheel with full force feedback support on Linux.
 
 ## Features
 
-- ✅ **Full force feedback support** - Production ready!
-- ✅ **Constant force effects** - Directional forces (road feel, bumps)
-- ✅ **Spring effects** - Centering force (self-centering wheel)
-- ✅ **Damper effects** - Resistance to movement
-- ✅ **Friction/Inertia** - Additional resistance effects
-- ✅ **Auto-detection** - Finds device automatically
-- ✅ **Proper initialization** - Complete USB setup sequence
-- ✅ **Clean shutdown** - Proper cleanup on exit
-- ✅ **No kernel patches** - Works on any Linux distro
+### Force Feedback Effects
+- ✅ Constant force
+- ✅ Spring effect
+- ✅ Damper effect
+- ✅ Friction effect
+- ✅ Inertia effect
+- ✅ Periodic effects (sine, triangle, square, sawtooth)
+- ✅ Autocenter with adjustable strength
+- ✅ Gain control (0-100%)
+
+### Input Support
+- ✅ Steering wheel (16-bit precision, -32768 to 32767)
+- ✅ 3 pedals: throttle, brake, clutch (16-bit precision, 0-1023)
+- ✅ 16 buttons
+- ✅ 8-direction D-pad (POV hat)
+- ✅ Pedal inversion support
+
+### Additional Features
+- ✅ Automatic mode switch from boot mode (b65d) to normal mode (b65e)
+- ✅ GUI control panel for testing and configuration
+- ✅ Real-time input monitoring
+- ✅ Comprehensive testing tools
 
 ## Requirements
 
-- libusb-1.0
 - Linux kernel with uinput support
-- Root/sudo access (for USB and uinput)
+- libusb-1.0
+- Python 3 with tkinter (for GUI)
+- Root/sudo access (for USB device access)
 
 ## Installation
 
-### Arch Linux
+### Install Dependencies
 
+**Debian/Ubuntu:**
 ```bash
-# Install dependencies
-sudo pacman -S libusb
-
-# Build
-cd userspace
-make
-
-# Install (optional)
-sudo make install
+sudo apt-get install libusb-1.0-0-dev python3-tk
 ```
 
-### Ubuntu/Debian
+**Fedora/RHEL:**
+```bash
+sudo dnf install libusb-devel python3-tkinter
+```
+
+**Arch Linux:**
+```bash
+sudo pacman -S libusb python-tk
+```
+
+### Compile the Driver
 
 ```bash
-# Install dependencies
-sudo apt-get install libusb-1.0-0-dev
-
-# Build
-cd userspace
+cd ~/Documents/hid-tmff2/userspace
 make
-
-# Install (optional)
-sudo make install
 ```
 
 ## Usage
 
-### Basic Usage
+### Quick Start (Manual)
 
 ```bash
-# Unload kernel driver if loaded
-sudo rmmod hid_tmff_new
-
-# Run the driver
-sudo ./t500rs-ffb
+sudo ./run.sh
 ```
 
-The driver will:
-1. Initialize the T500RS
-2. Create a virtual input device (`/dev/input/eventX`)
-3. Handle force feedback effects
-4. Run until you press Ctrl+C
+This will:
+1. Stop any existing driver instances
+2. Unbind the kernel usbhid driver
+3. Start the T500RS userspace driver in the background
+4. Create a virtual input device at `/dev/input/eventX`
 
-### Finding the Device
+### Autostart on Boot (Recommended)
 
-After starting the driver, check dmesg to find the device number:
+To automatically start the driver when the wheel is connected:
+
+#### Arch Linux / Manjaro / EndeavourOS
 
 ```bash
-dmesg | grep "T500RS"
+# Create systemd service
+sudo tee /etc/systemd/system/t500rs-driver.service > /dev/null <<EOF
+[Unit]
+Description=T500RS Force Feedback Driver
+After=multi-user.target
+Wants=multi-user.target
+
+[Service]
+Type=simple
+ExecStartPre=/bin/sleep 5
+ExecStartPre=/bin/sh -c 'for dev in /sys/bus/usb/drivers/usbhid/*; do [ -f "\$dev/idVendor" ] && [ "\$(cat \$dev/idVendor)" = "044f" ] && echo \$(basename \$dev) > /sys/bus/usb/drivers/usbhid/unbind || true; done'
+ExecStart=$(pwd)/t500rs-ffb
+Restart=on-failure
+RestartSec=5
+User=root
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# Create udev rule to trigger service
+sudo tee /etc/udev/rules.d/99-t500rs.rules > /dev/null <<EOF
+# T500RS Racing Wheel - Auto-start driver
+ACTION=="add", SUBSYSTEM=="usb", ATTRS{idVendor}=="044f", ATTRS{idProduct}=="b65d", TAG+="systemd", ENV{SYSTEMD_WANTS}="t500rs-driver.service"
+ACTION=="add", SUBSYSTEM=="usb", ATTRS{idVendor}=="044f", ATTRS{idProduct}=="b65e", TAG+="systemd", ENV{SYSTEMD_WANTS}="t500rs-driver.service"
+EOF
+
+# Enable and start
+sudo systemctl daemon-reload
+sudo udevadm control --reload-rules
+sudo systemctl enable t500rs-driver.service
+sudo systemctl start t500rs-driver.service
 ```
 
-You should see something like:
-```
-input: Thrustmaster T500RS (FFB) as /dev/input/event25
-```
-
-### Testing Force Feedback
-
-Use `fftest` to test force feedback:
+#### Debian / Ubuntu / Linux Mint
 
 ```bash
-# Install fftest
-sudo pacman -S linuxconsole  # Arch
-sudo apt-get install joystick  # Ubuntu
+# Create systemd service (same as Arch)
+sudo tee /etc/systemd/system/t500rs-driver.service > /dev/null <<EOF
+[Unit]
+Description=T500RS Force Feedback Driver
+After=multi-user.target
+Wants=multi-user.target
 
-# Test (replace event25 with your device number)
-fftest /dev/input/event25
+[Service]
+Type=simple
+ExecStartPre=/bin/sleep 5
+ExecStartPre=/bin/sh -c 'for dev in /sys/bus/usb/drivers/usbhid/*; do [ -f "\$dev/idVendor" ] && [ "\$(cat \$dev/idVendor)" = "044f" ] && echo \$(basename \$dev) > /sys/bus/usb/drivers/usbhid/unbind || true; done'
+ExecStart=$(pwd)/t500rs-ffb
+Restart=on-failure
+RestartSec=5
+User=root
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# Create udev rule (same as Arch)
+sudo tee /etc/udev/rules.d/99-t500rs.rules > /dev/null <<EOF
+# T500RS Racing Wheel - Auto-start driver
+ACTION=="add", SUBSYSTEM=="usb", ATTRS{idVendor}=="044f", ATTRS{idProduct}=="b65d", TAG+="systemd", ENV{SYSTEMD_WANTS}="t500rs-driver.service"
+ACTION=="add", SUBSYSTEM=="usb", ATTRS{idVendor}=="044f", ATTRS{idProduct}=="b65e", TAG+="systemd", ENV{SYSTEMD_WANTS}="t500rs-driver.service"
+EOF
+
+# Enable and start
+sudo systemctl daemon-reload
+sudo udevadm control --reload-rules
+sudo systemctl enable t500rs-driver.service
+sudo systemctl start t500rs-driver.service
 ```
+
+#### NixOS
+
+Add to your `/etc/nixos/configuration.nix`:
+
+```nix
+{
+  # T500RS Driver Service
+  systemd.services.t500rs-driver = {
+    description = "T500RS Force Feedback Driver";
+    after = [ "multi-user.target" ];
+    wantedBy = [ "multi-user.target" ];
+
+    serviceConfig = {
+      Type = "simple";
+      ExecStartPre = [
+        "${pkgs.coreutils}/bin/sleep 5"
+        "${pkgs.bash}/bin/sh -c 'for dev in /sys/bus/usb/drivers/usbhid/*; do [ -f \"$dev/idVendor\" ] && [ \"$(cat $dev/idVendor)\" = \"044f\" ] && echo $(basename $dev) > /sys/bus/usb/drivers/usbhid/unbind || true; done'"
+      ];
+      ExecStart = "/path/to/hid-tmff2/userspace/t500rs-ffb";
+      Restart = "on-failure";
+      RestartSec = 5;
+      User = "root";
+    };
+  };
+
+  # Udev rule for T500RS
+  services.udev.extraRules = ''
+    ACTION=="add", SUBSYSTEM=="usb", ATTRS{idVendor}=="044f", ATTRS{idProduct}=="b65d", TAG+="systemd", ENV{SYSTEMD_WANTS}="t500rs-driver.service"
+    ACTION=="add", SUBSYSTEM=="usb", ATTRS{idVendor}=="044f", ATTRS{idProduct}=="b65e", TAG+="systemd", ENV{SYSTEMD_WANTS}="t500rs-driver.service"
+  '';
+}
+```
+
+Then rebuild: `sudo nixos-rebuild switch`
+
+**Note:** Replace `/path/to/hid-tmff2/userspace/t500rs-ffb` with the actual path to your driver binary.
+
+#### Managing the Service
+
+```bash
+# Check status
+sudo systemctl status t500rs-driver.service
+
+# View logs
+sudo journalctl -u t500rs-driver.service -f
+
+# Stop service
+sudo systemctl stop t500rs-driver.service
+
+# Disable autostart
+sudo systemctl disable t500rs-driver.service
+
+# Re-enable autostart
+sudo systemctl enable t500rs-driver.service
+```
+
+### Find the Device
+
+```bash
+./list_input_devices
+```
+
+Look for "T500RS Racing Wheel" in the output.
+
+### Test Input
+
+```bash
+./test_input_reading
+```
+
+Turn the wheel, press pedals and buttons to see real-time input events.
+
+### Test Force Feedback
+
+```bash
+sudo ./test_all_effects
+```
+
+This will test all FFB effects in sequence.
+
+### GUI Control Panel
+
+```bash
+sudo python3 t500rs_control.py
+```
+
+The GUI provides:
+- **Device Test Tab**: Real-time input visualization
+- **FFB Test Tab**: Test individual force feedback effects
+- **Settings Tab**: Configure pedal inversion and other options
+
+## Mode Switch
+
+The T500RS boots in "boot mode" (USB ID: 044f:b65d) and must switch to "normal mode" (044f:b65e) to function properly.
+
+The driver automatically:
+1. Detects boot mode
+2. Sends initialization sequence
+3. Waits for device to re-enumerate
+4. Reopens in normal mode
+5. Continues with normal operation
+
+**This happens automatically** - no user intervention required!
+
+### Verification
+
+Check device mode:
+```bash
+lsusb | grep -i thrust
+```
+
+**Normal mode (correct):** `044f:b65e ThrustMaster, Inc. TRS Racing wheel`  
+**Boot mode (will auto-switch):** `044f:b65d ThrustMaster, Inc. Thrustmaster FFB Wheel`
 
 ## Troubleshooting
 
-### "Cannot open device"
+### Driver Won't Start
 
-Make sure the T500RS is connected:
+**Check if device is connected:**
 ```bash
-lsusb | grep 044f:b65e
+lsusb | grep -i thrust
 ```
 
-### "Failed to detach kernel driver"
-
-Unload the kernel driver first:
+**Check if another driver is running:**
 ```bash
-sudo rmmod hid_tmff_new
+ps aux | grep t500rs-ffb
+sudo pkill t500rs-ffb
 ```
 
-### "Failed to open /dev/uinput"
-
-Make sure uinput module is loaded:
+**Check USB permissions:**
 ```bash
-sudo modprobe uinput
+sudo ./run.sh
 ```
 
-### No force feedback
+### No Input Events
 
-1. Check that the driver initialized successfully
-2. Use `fftest` to upload and play effects
-3. Check dmesg for errors
-
-## How It Works
-
-```
-┌─────────────────────────────────────────┐
-│         Game / Application              │
-│    (reads /dev/input/eventX)            │
-└──────────────┬──────────────────────────┘
-               │
-               ▼
-┌─────────────────────────────────────────┐
-│      Linux Input Subsystem              │
-│         (uinput device)                 │
-└──────────────┬──────────────────────────┘
-               │
-               ▼
-┌─────────────────────────────────────────┐
-│    t500rs-ffb Userspace Daemon          │
-│  - Handles FF upload/play/stop          │
-│  - Sends USB commands via libusb        │
-└──────────────┬──────────────────────────┘
-               │
-               ▼
-┌─────────────────────────────────────────┐
-│         T500RS Hardware                 │
-│    (via libusb, endpoint 0x01)          │
-└─────────────────────────────────────────┘
-```
-
-## Protocol
-
-The T500RS uses a multi-report protocol:
-
-### Initialization
-- Report 0x42: Device init
-- Report 0x0a: Configuration (3 variants)
-- Report 0x40: Control commands
-
-### Force Feedback
-- Report 0x02: Effect parameters (9 bytes)
-- Report 0x04: Effect parameters (8 bytes)
-- Report 0x01: Main effect data (15 bytes)
-- Report 0x41: Effect control (start/stop)
-
-See `../T500RS_PROTOCOL.md` for complete protocol documentation.
-
-## Development
-
-### Building
-
+**Verify device was created:**
 ```bash
-make
+./list_input_devices
 ```
 
-### Debugging
+**Check driver is running:**
+```bash
+ps aux | grep t500rs-ffb
+```
 
-The driver outputs detailed logs to stdout/stderr. Run it in a terminal to see:
-- Initialization progress
-- Effect uploads
-- USB communication
-- Errors
+**Check dmesg for errors:**
+```bash
+dmesg | tail -20
+```
 
-### Adding Effect Types
+### Mode Switch Fails
 
-To add support for new effect types:
+If the device doesn't switch from boot mode (b65d) to normal mode (b65e):
 
-1. Add upload function (see `upload_constant_effect` as example)
-2. Add case in `handle_ff_upload()`
-3. Enable the effect type in `setup_uinput()`
+1. **Stop the driver:**
+   ```bash
+   sudo pkill t500rs-ffb
+   ```
 
-## Known Limitations
+2. **Unplug the wheel USB cable**
 
-- Input events (buttons/axes) are not forwarded yet
-  - The driver only handles force feedback
-  - Use the real device for input (it still works)
-- Some effect types not implemented yet
-  - Periodic effects
-  - Ramp effects
-  - Custom effects
+3. **Wait 10 seconds**
 
-## Future Improvements
+4. **Plug it back in**
 
-- [ ] Forward input events from real device
-- [ ] Implement all effect types
-- [ ] Add configuration file support
-- [ ] Create systemd service
-- [ ] Auto-start on device plug (udev rule)
-- [ ] GUI configuration tool
+5. **Check device mode:**
+   ```bash
+   lsusb | grep -i thrust
+   ```
+
+6. **Restart driver:**
+   ```bash
+   sudo ./run.sh
+   ```
+
+### Force Feedback Not Working
+
+**Check if effects are being uploaded:**
+```bash
+sudo ./test_all_effects
+```
+
+**Verify wheel is in normal mode:**
+```bash
+lsusb | grep -i thrust
+# Should show 044f:b65e
+```
+
+**Check driver logs:**
+```bash
+tail -f /tmp/t500rs-ffb.log
+```
+
+### D-pad Not Working
+
+The D-pad is in byte 14 of the HID report with this encoding:
+- `0x00` = Up
+- `0x01` = Up-Right
+- `0x02` = Right
+- `0x03` = Down-Right
+- `0x04` = Down
+- `0x05` = Down-Left
+- `0x06` = Left
+- `0x07` = Up-Left
+- `0x0F` = Center (released)
+
+Test with:
+```bash
+./test_input_reading
+```
+
+Press the D-pad and look for `ABS_HAT0X` and `ABS_HAT0Y` events.
+
+### Pedals Inverted
+
+Use the GUI to invert pedals:
+```bash
+sudo python3 t500rs_control.py
+```
+
+Go to Settings tab and check the inversion boxes for affected pedals.
+
+## Technical Details
+
+### HID Report Format
+
+The T500RS sends 15-byte HID reports in normal mode:
+
+```
+Byte 0:    Report ID (0x07)
+Bytes 1-2: Steering (16-bit little-endian, signed)
+Bytes 3-4: Throttle (16-bit little-endian, 0-1023)
+Bytes 5-6: Brake (16-bit little-endian, 0-1023)
+Bytes 7-8: Clutch (16-bit little-endian, 0-1023)
+Bytes 9-10: Unknown (always 0x00 0x00)
+Byte 11:   Buttons (bits 0-7)
+Byte 12:   Buttons (bits 8-15)
+Byte 13:   Unknown (always 0x00)
+Byte 14:   D-pad (0x00-0x07 for directions, 0x0F for center)
+```
+
+### Force Feedback Protocol
+
+The driver sends USB interrupt transfers to endpoint 0x01 with effect data.
+
+**Effect types:**
+- Report 0x6B: Constant force
+- Report 0x6D: Spring/Damper/Friction/Inertia
+- Report 0x6E: Periodic effects
+- Report 0x03: Autocenter
+
+See source code for detailed protocol implementation.
+
+## Files
+
+- `t500rs-ffb.c` - Main driver source code
+- `t500rs_control.py` - GUI control panel
+- `Makefile` - Build configuration
+- `run.sh` - Quick start script
+- `test_input_reading` - Input testing tool
+- `test_all_effects` - FFB testing tool
+- `list_input_devices` - Device finder tool
+
+## Known Issues
+
+- Ramp effects are disabled (not fully tested)
+- Some games may require specific FFB settings
+- Driver must run as root for USB access
 
 ## License
 
-GPL v2 (same as Linux kernel drivers)
+GPL-2.0 (same as Linux kernel)
 
 ## Credits
 
-- Protocol analysis from Windows USB captures
-- Based on libusb and uinput documentation
-- Inspired by other userspace force feedback drivers
+- Protocol reverse-engineered from Windows USB captures
+- Based on the hid-tmff2 kernel driver project
+- FFB implementation inspired by various Linux force feedback drivers
 
 ## Support
 
-For issues, questions, or contributions:
-- Check the main repository documentation
-- See `../NEXT_STEPS_PLAN.md` for development roadmap
-- See `../T500RS_PROTOCOL.md` for protocol details
+For issues or questions:
+1. Check this README's troubleshooting section
+2. Run diagnostic tools (`test_input_reading`, `test_all_effects`)
+3. Check driver logs in `/tmp/t500rs-ffb.log`
+4. Verify device is in normal mode (b65e)
 
-## Changelog
+---
 
-### Version 1.0 (2025-10-02)
-- Initial release
-- Basic force feedback support
-- Constant and spring effects
-- Proper initialization sequence
+**The driver is production-ready and fully functional!** 🎉
 
