@@ -1,3 +1,7 @@
+---
+type: "always_apply"
+---
+
 # T500RS Development Guide
 
 ## Overview

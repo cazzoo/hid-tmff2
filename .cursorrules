@@ -1,172 +1,222 @@
-# Cursor Rules
+# T500RS Development Guide
 
-## Role and Expertise
-- You are Cursor, a world-class linux kernel developer and hardware engineer.
-- Your expertise covers hardware and software development with USB protocol.
-- You integrate with the linux kernel and the USB stack.
-- You can write device drivers and firmware.
-- Adapt your approach based on project needs and user preferences, always aiming to guide users in efficiently creating functional applications.
+## Overview
 
-## Critical functions and behaviors
-- Keep the module splitted in multiple files.
-- Do not make the tmt500rs module standalone, it should be integrated with the other modules.
-- Do not edit the base driver tmtff2 as most of the code is already written.
-- integrate the new module as the other module does (but the test module/framework).
-- Always to to build the module after you have written the code.
-- Make sure the system is not hanging, crashing or freezing.
-- Never remove USB base modules (hid & usbhid).
-- Always use modprobe to insert/load or remove the modules.
-- When you encounter several time the same problem, use the test_troubleshooting.md file in the cline_docs folder.
+This guide provides the definitive development workflow for implementing Thrustmaster T500RS support in the hid-tmff2 Linux kernel driver. It integrates safety requirements, development standards, and project documentation structure to ensure reliable and maintainable code.
 
-## T500RS Development Protocol (MANDATORY)
+## Primary Reference Documents
 
-### Primary Reference Document
-- **MANDATORY**: `cline_docs/t500rs_implementation_plan.md` is the authoritative source for ALL T500RS development
-- **BEFORE ANY T500RS TASK**: Read the implementation plan to understand current phase, safety requirements, and objectives
-- **NO T500RS WORK** may proceed without consulting this document first
-- All T500RS development decisions must reference and update this document
+### Implementation Plan
+- **Primary Reference**: [T500RS Implementation Plan](../../cline_docs/t500rs_implementation_plan.md)
+- **Purpose**: Complete technical strategy, USB protocol analysis, and 6-phase development roadmap
+- **Usage**: Consult before starting any T500RS development work
 
-### Real-Time Documentation Requirements
-- **IMMEDIATE UPDATES**: Update implementation plan during development, not after
-- **PROGRESS TRACKING**: Document phase completion percentages and milestone achievements
-- **BUG DOCUMENTATION**: Record all discovered issues with detailed descriptions, severity levels, and resolution status
-- **TASK MANAGEMENT**: Maintain active task lists with priority levels and dependencies
-- **TROUBLESHOOTING LOG**: Document all attempted solutions with timestamps and outcomes (success/failure)
-- **SAFETY VALIDATION**: Record all safety checks, system stability tests, and error handling validations
-- **USB PROTOCOL FINDINGS**: Document all USB communication analysis results and protocol discoveries
+### Project Documentation Structure
+Follow the established documentation hierarchy from [.cursorrules](../../.cursorrules):
 
-## Critical Documentation and Workflow
+1. **[projectRoadmap.md](../../cline_docs/projectRoadmap.md)** - High-level goals and progress tracking
+2. **[currentTask.md](../../cline_docs/currentTask.md)** - Current objectives and next steps
+3. **[techStack.md](../../cline_docs/techStack.md)** - Technology choices and architecture
+4. **[codebaseSummary.md](../../cline_docs/codebaseSummary.md)** - Project structure overview
 
-### T500RS Status Tracking System (MANDATORY)
-The implementation plan must maintain comprehensive status tracking:
+## Development Standards and Safety Requirements
 
-#### Development Phase Tracking
-- **Current Phase**: Clearly identify active development phase (1-6) with completion percentage
-- **Phase Objectives**: List specific objectives for current phase with completion status
-- **Milestone Progress**: Track major milestones with timestamps and validation results
-- **Next Phase Readiness**: Document criteria met/pending for phase advancement
+### Critical Development Rules (from .cursorrules)
 
-#### Issue and Resolution Tracking
-- **Active Issues**: Maintain current issue list with severity levels (Critical/High/Medium/Low)
-- **Issue Details**: For each issue, document symptoms, reproduction steps, and impact assessment
-- **Resolution Attempts**: Log all attempted solutions with timestamps, methods used, and outcomes
-- **Resolution Status**: Track issue status (Open/In Progress/Resolved/Blocked) with responsible party
-- **Known Limitations**: Document discovered constraints or limitations with workaround strategies
+#### Module Architecture
+- **Keep modules split across multiple files** - Follow existing patterns in `src/tmt300rs/`, `src/tmt248/`
+- **Do NOT make tmt500rs standalone** - Integrate with existing tmff2 framework
+- **Do NOT edit base tmff2 driver** - Use existing interfaces and callback patterns
+- **Follow integration patterns** - Study how other modules integrate (exclude test modules)
 
-#### Safety and Stability Monitoring
-- **System Stability Tests**: Document all stability test results with duration and conditions
-- **Safety Validation Results**: Record USB disconnect tests, driver reload tests, and error recovery tests
-- **Performance Metrics**: Track USB communication latency, effect response times, and resource usage
-- **Hardware Validation**: When available, document physical device test results and compatibility
+#### Build and Testing Workflow
+- **Always build modules after writing code** - Use `make` in project root
+- **Use modprobe for module operations** - Never manually insert/remove modules
+- **Test frequently** - Build and test after each significant change
+- **Monitor system stability** - Ensure no hanging, crashing, or freezing
 
-#### Integration Requirements
-- **Workflow Integration**: T500RS plan integrates with but does not replace existing documentation hierarchy
-- **Cross-References**: Maintain bidirectional references between implementation plan and other docs
-- **Authority**: Implementation plan is authoritative for T500RS-specific decisions and status
-- **Consistency**: Ensure implementation plan updates are reflected in projectRoadmap.md and currentTask.md
+#### USB and System Safety
+- **Never remove USB base modules** - Preserve hid & usbhid modules
+- **Implement robust error handling** - Prevent system instability
+- **Use troubleshooting documentation** - Reference `test_troubleshooting.md` for repeated issues
 
-### Documentation Management
-- Maintain and a 'cline_docs' folder in the root directory (create if it doesn't exist) with the following essential files:
-- Review Every time you start a new task, read the files in 'cline_docs' folder.
-- **FOR T500RS WORK**: ALWAYS read t500rs_implementation_plan.md FIRST before any other documentation
+### Host System Protection Guidelines
 
-1. projectRoadmap.md
-   - Purpose: High-level goals, features, completion criteria, and progress tracker
-   - Update: When high-level goals change or tasks are completed
-   - Include: A "completed tasks" section to maintain progress history
-   - Format: Use headers (##) for main goals, checkboxes for tasks (- [ ] / - [x])
-   - Content: List high-level project goals, key features, completion criteria, and track overall progress
-   - Include considerations for future scalability when relevant
+#### USB Error Handling
+```c
+// Required error handling patterns
+- Proper URB cleanup on failures
+- Graceful USB disconnect handling  
+- Command validation and bounds checking
+- Retry mechanisms with limits
+- Resource cleanup on all error paths
+```
 
-2. currentTask.md
-   - Purpose: Current objectives, context, and next steps. This is your primary guide.
-   - Update: After completing each task or subtask
-   - Relation: Should explicitly reference tasks from projectRoadmap.md
-   - Format: Use headers (##) for main sections, bullet points for steps or details
-   - Content: Include current objectives, relevant context, and clear next steps
+#### Memory Management
+```c
+// Safety requirements
+- Prevent memory leaks in all code paths
+- Safe pointer handling and validation
+- Proper allocation/deallocation pairing
+- Resource tracking and cleanup
+```
 
-3. techStack.md
-   - Purpose: Key technology choices and architecture decisions
-   - Update: When significant technology decisions are made or changed
-   - Format: Use headers (##) for main technology categories, bullet points for specifics
-   - Content: Detail chosen technologies, frameworks, and architectural decisions with brief justifications
+#### Driver Lifecycle Safety
+```c
+// Module loading/unloading safety
+- Clean initialization and cleanup
+- Safe driver reload capability
+- Proper device state management
+- Error recovery mechanisms
+```
 
-4. codebaseSummary.md
-   - Purpose: Concise overview of project structure and recent changes
-   - Update: When significant changes affect the overall structure
-   - Include sections on:
-     - Key Components and Their Interactions
-     - Data Flow
-     - External Dependencies (including detailed management of libraries, APIs, etc.)
-     - Recent Significant Changes
-     - User Feedback Integration and Its Impact on Development
-   - Format: Use headers (##) for main sections, subheaders (###) for components, bullet points for details
-   - Content: Provide a high-level overview of the project structure and recent changes
+## Development Workflow
 
-5. test_troubleshooting.md
-   - Purpose: Troubleshooting guide for the test module
-   - Update: Every time you try a new solution to fix a problem
-   - Format: Follow the same format that is currently in the file
-   - Content: Provide a troubleshooting guide for the test module
+### Phase-Based Development Process
 
-### Additional Documentation
-- Create reference documents for future developers as needed, storing them in the cline_docs folder
-- Examples include styleAesthetic.md or wireframes.md
-- Note these additional documents in codebaseSummary.md for easy reference
+Reference the **6-Phase Development Roadmap** from the [T500RS Implementation Plan](../../cline_docs/t500rs_implementation_plan.md):
 
-### Adaptive Workflow
-- Do not remove code that is already written, it is already tested and working.
-- Commit each major successful step to the repository.
-- When troubleshoting issues, in cline_docs folder, create a tracking file you will follow every time you try a new solution so you don't do twice the same attempts.
+#### Phase 1: Basic Device Detection (CRITICAL)
+- **Priority**: Critical - System stability foundation
+- **Focus**: Device recognition and driver binding
+- **Safety**: Verify clean loading/unloading, USB disconnect handling
 
-### Document Reading Protocol
-#### For T500RS Development Tasks:
-1. **MANDATORY FIRST**: t500rs_implementation_plan.md (current phase, safety requirements, objectives)
-2. projectRoadmap.md (for high-level context and goals)
-3. currentTask.md (for specific current objectives)
-4. techStack.md
-5. codebaseSummary.md
+#### Phase 2: USB Communication (CRITICAL)  
+- **Priority**: Critical - Communication foundation
+- **Focus**: 4-byte command structure implementation
+- **Safety**: USB error recovery, command validation
 
-#### For Non-T500RS Tasks:
-1. projectRoadmap.md (for high-level context and goals)
-2. currentTask.md (for specific current objectives)
-3. techStack.md
-4. codebaseSummary.md
+#### Phase 3: Basic Force Feedback (HIGH)
+- **Priority**: High - Core functionality
+- **Focus**: Constant force and spring effects
+- **Safety**: Effect parameter validation, resource management
 
-- If you try to read or edit another document before reading these, something BAD will happen.
-- **T500RS EXCEPTION**: For T500RS work, failure to read implementation plan first will result in incomplete or unsafe development
+#### Phase 4: Complete Effect Support (MEDIUM)
+- **Priority**: Medium - Feature completeness
+- **Focus**: All effect types and control features
+- **Safety**: Effect combination validation, performance monitoring
 
-### T500RS Development Workflow (MANDATORY)
-- **Phase Validation**: Before starting work, confirm current phase objectives and safety requirements
-- **Real-Time Updates**: Update implementation plan immediately when:
-  - Discovering new issues or bugs
-  - Completing phase objectives or milestones
-  - Attempting troubleshooting solutions
-  - Observing system stability changes
-  - Finding USB protocol insights
-  - Validating safety mechanisms
-- **Safety First**: All T500RS development must prioritize system stability over feature completion
-- **Documentation Integrity**: Implementation plan must always reflect current project state
+#### Phase 5: Robustness & Safety (CRITICAL)
+- **Priority**: Critical - Production readiness
+- **Focus**: Comprehensive error handling and stability
+- **Safety**: System stability under all conditions
 
-### General Workflow
-- Update documents based on significant changes, not minor steps
-- If conflicting information is found between documents, ask the user for clarification
-- Create files in the userInstructions folder for tasks that require user action
-  - Provide detailed, step-by-step instructions
-  - Include all necessary details for ease of use
-  - No need for a formal structure, but ensure clarity and completeness
-  - Use numbered lists for sequential steps, code blocks for commands or code snippets
-- Prioritize frequent testing: Run builds and modules insertion (using modprobe) and test functionality regularly throughout development, rather than building extensive features before testing
-- Use dmesg for debugging and capture the last 100 lines
+#### Phase 6: Testing & Validation (HIGH)
+- **Priority**: High - Quality assurance
+- **Focus**: Long-term stability and performance
+- **Safety**: Extended validation and monitoring
 
-## User Interaction and Adaptive Behavior
-- Ask follow-up questions when critical information is missing for task completion
-- Adjust approach based on project complexity and user preferences
-- Strive for efficient task completion with minimal back-and-forth
-- Present key technical decisions concisely, allowing for user feedback
+### Daily Development Workflow
 
-## Code Editing and File Operations
-- Organize new projects efficiently, considering project type and dependencies
-- Refer to the main Cursor system for specific file handling instructions
+#### Before Starting Work
+1. **Read documentation in order** (per .cursorrules):
+   - projectRoadmap.md (high-level context)
+   - currentTask.md (current objectives)  
+   - techStack.md (technical context)
+   - codebaseSummary.md (structure overview)
 
-Remember, your goal is to guide users in creating functional Kernel modules efficiently while maintaining comprehensive project documentation.
+2. **Review current phase requirements** from implementation plan
+3. **Check troubleshooting docs** if encountering repeated issues
+
+#### During Development
+1. **Follow modular file structure**:
+   ```
+   src/tmt500rs/
+   ├── hid-tmt500rs-simple.c    # Main implementation
+   ├── hid-tmt500rs-simple.h    # Simplified header  
+   ├── hid-tmt500rs.c          # Modified populate_api
+   └── hid-tmt500rs.h          # Existing definitions
+   ```
+
+2. **Build and test frequently**:
+   ```bash
+   # Build after each change
+   make
+   
+   # Test module loading
+   sudo modprobe -r hid_tmff_new  # Remove if loaded
+   sudo modprobe hid_tmff_new     # Load new version
+   
+   # Check system logs
+   dmesg | tail -100
+   ```
+
+3. **Validate safety requirements**:
+   - No kernel crashes or hangs
+   - Clean USB communication
+   - Proper resource cleanup
+   - System stability maintained
+
+#### After Completing Tasks
+1. **Update documentation**:
+   - currentTask.md with progress and next steps
+   - projectRoadmap.md with completed tasks
+   - Add troubleshooting entries if issues encountered
+
+2. **Commit successful changes** to repository
+3. **Validate system stability** before proceeding
+
+## Quick Reference
+
+### USB Protocol (T500RS)
+```c
+// 4-byte command structure
+[Report ID] [Command Type] [Effect ID] [Parameter]
+     0x03        0x0e         0-15       0-127
+
+// Example: Constant force effect
+0x03 0x0e 0x01 0x40  // Effect 1, 50% force
+```
+
+### Key Integration Points
+```c
+// Required callback functions
+tmff2->play_effect = t500rs_play_effect;
+tmff2->upload_effect = t500rs_upload_effect;
+tmff2->update_effect = t500rs_update_effect;
+tmff2->stop_effect = t500rs_stop_effect;
+tmff2->wheel_init = t500rs_wheel_init;
+tmff2->wheel_destroy = t500rs_wheel_destroy;
+```
+
+### Safety Validation Commands
+```bash
+# Check module status
+lsmod | grep tmff
+
+# Monitor USB communication
+dmesg | grep -i usb | tail -20
+
+# Verify device detection
+cat /proc/bus/input/devices | grep -A5 -B5 T500
+
+# Test force feedback
+fftest /dev/input/event[X]
+```
+
+## Emergency Procedures
+
+### System Recovery
+If system becomes unstable:
+1. **Remove module**: `sudo modprobe -r hid_tmff_new`
+2. **Check logs**: `dmesg | tail -100`
+3. **Reboot if necessary**: Ensure clean state
+4. **Document issue**: Add to test_troubleshooting.md
+
+### Development Reset
+If development gets stuck:
+1. **Review troubleshooting docs**: Check for known solutions
+2. **Validate against working modules**: Compare with T300RS implementation
+3. **Simplify approach**: Return to basic functionality
+4. **Seek guidance**: Reference implementation plan and safety guidelines
+
+## Success Criteria
+
+Each phase must meet these criteria before proceeding:
+- **Functionality**: Required features work correctly
+- **Stability**: No system crashes or hangs
+- **Safety**: Proper error handling and resource cleanup
+- **Integration**: Follows established patterns and interfaces
+- **Documentation**: Progress tracked and issues documented
+
+This guide ensures safe, systematic development of T500RS support while maintaining system stability and code quality standards.
