@@ -1,0 +1,27 @@
+#!/bin/bash
+
+echo "=== T500RS Driver Build Verification ==="
+echo ""
+echo "Binary location: /home/caz/Documents/hid-tmff2/userspace/t500rs-ffb"
+echo "Binary size: $(ls -lh /home/caz/Documents/hid-tmff2/userspace/t500rs-ffb | awk '{print $5}')"
+echo "Binary timestamp: $(ls -l --time-style='+%Y-%m-%d %H:%M:%S' /home/caz/Documents/hid-tmff2/userspace/t500rs-ffb | awk '{print $6, $7}')"
+echo ""
+echo "Source file timestamp: $(ls -l --time-style='+%Y-%m-%d %H:%M:%S' /home/caz/Documents/hid-tmff2/userspace/t500rs-ffb.c | awk '{print $6, $7}')"
+echo ""
+echo "Makefile CFLAGS:"
+grep "^CFLAGS" /home/caz/Documents/hid-tmff2/userspace/Makefile
+echo ""
+echo "Source file #define:"
+grep "define USE_WINDOWS_PROTOCOL" /home/caz/Documents/hid-tmff2/userspace/t500rs-ffb.c | head -1
+echo ""
+echo "Strings in binary related to protocol:"
+strings /home/caz/Documents/hid-tmff2/userspace/t500rs-ffb | grep -c "Windows protocol"
+echo "  (Found $(strings /home/caz/Documents/hid-tmff2/userspace/t500rs-ffb | grep -c 'Windows protocol') instances of 'Windows protocol')"
+echo ""
+echo "To test the driver:"
+echo "  sudo /home/caz/Documents/hid-tmff2/userspace/t500rs-ffb"
+echo ""
+echo "Expected behavior with USE_WINDOWS_PROTOCOL=0:"
+echo "  - Should NOT see 'Initializing Windows-compatible protocol layer'"
+echo "  - Should see legacy protocol effect uploads"
+echo "  - Effects should work!"

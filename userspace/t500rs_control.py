@@ -2,26 +2,35 @@
 """
 T500RS Control Panel v2.0 - Complete GUI
 """
-import sys, os, struct, glob, json, subprocess, select
+import sys, os, struct, glob, json, subprocess, select, fcntl
 from pathlib import Path
 from datetime import datetime
+import time
 
 try:
     from PyQt5.QtWidgets import *
     from PyQt5.QtCore import Qt, QTimer
-    from PyQt5.QtGui import QFont
+    from PyQt5.QtGui import QFont, QIcon, QPixmap, QPainter, QColor, QPen
+    from PyQt5.QtSvg import QSvgRenderer
 except ImportError:
-    print("Install PyQt5: sudo apt install python3-pyqt5")
+    print("Install PyQt5: sudo apt install python3-pyqt5 python3-pyqt5.qtsvg")
     sys.exit(1)
 
 # Constants
 EV_FF = 0x15
 FF_GAIN = 0x60
 FF_AUTOCENTER = 0x61
-FF_CONSTANT = 0x50
+
+# Effect types (CORRECT values from linux/input.h)
+FF_RUMBLE = 0x50
 FF_PERIODIC = 0x51
-FF_SPRING = 0x52
-FF_DAMPER = 0x53
+FF_CONSTANT = 0x52
+FF_SPRING = 0x53
+FF_FRICTION = 0x54
+FF_DAMPER = 0x55
+FF_INERTIA = 0x56
+FF_RAMP = 0x57
+FF_SINE = 0x58
 
 # Per-effect-type gain codes (custom)
 FF_GAIN_CONSTANT = 0x70
@@ -53,11 +62,19 @@ class T500RSControl(QMainWindow):
             'damper_gain': 100, 'friction_gain': 100, 'inertia_gain': 100,
             'combined_pedals': False
         }
+        
+        # Effect slot management (since EVIOCRMFF doesn't work)
+        self.effect_slots = {}  # Maps effect_id -> (timestamp, effect_name)
+        self.max_effects = 16
+        self.next_slot_id = 0  # Track next available slot to manually assign
 
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)
         self.load_profiles()
         self.load_settings()
 
+        # Set window icon
+        self.set_wheel_icon()
+        
         self.init_ui()
         self.find_device()
 
@@ -71,6 +88,50 @@ class T500RSControl(QMainWindow):
         self.device_timer.timeout.connect(self.check_device)
         self.device_timer.start(5000)
 
+    def set_wheel_icon(self):
+        """Create and set steering wheel icon"""
+        try:
+            # Create a 128x128 pixmap (larger for better quality)
+            pixmap = QPixmap(128, 128)
+            pixmap.fill(QColor(0, 0, 0, 0))  # Transparent background
+            
+            painter = QPainter(pixmap)
+            painter.setRenderHint(QPainter.Antialiasing)
+            
+            # Draw steering wheel - scale everything by 2
+            pen = QPen(QColor(33, 150, 243), 8)  # Blue color, thicker
+            painter.setPen(pen)
+            
+            # Outer rim
+            painter.drawEllipse(8, 8, 112, 112)
+            
+            # Center hub
+            painter.setBrush(QColor(33, 150, 243))
+            painter.drawEllipse(52, 52, 24, 24)
+            
+            # Spokes
+            pen.setWidth(6)
+            painter.setPen(pen)
+            painter.drawLine(64, 30, 64, 56)  # Top spoke
+            painter.drawLine(64, 72, 64, 98)  # Bottom spoke
+            painter.drawLine(30, 64, 56, 64)  # Left spoke
+            painter.drawLine(72, 64, 98, 64)  # Right spoke
+            
+            painter.end()
+            
+            # Create icon and save to temp file for better compatibility
+            icon = QIcon(pixmap)
+            self.setWindowIcon(icon)
+            
+            # Save icon to temp file
+            icon_path = "/tmp/t500rs_icon.png"
+            pixmap.save(icon_path)
+            print(f"✅ Saved icon to {icon_path}")
+            
+            print("✅ Steering wheel icon set")
+        except Exception as e:
+            print(f"Could not set icon: {e}")
+    
     def init_ui(self):
         self.setWindowTitle('T500RS Control Panel v2.0')
         self.setGeometry(100, 100, 900, 750)
@@ -215,35 +276,82 @@ class T500RSControl(QMainWindow):
         layout = QVBoxLayout()
         widget.setLayout(layout)
 
-        info = QLabel('Test various force feedback effects (2-3 seconds each)')
+        info = QLabel('Test realistic force feedback effects - now with varied intensities and directions!')
         info.setStyleSheet('color: gray; padding: 5px;')
         layout.addWidget(info)
 
-        effects_group = QGroupBox('Test Effects')
-        effects_layout = QGridLayout()
-        effects_group.setLayout(effects_layout)
+        # Standard effects
+        standard_group = QGroupBox('🎯 Standard Effects')
+        standard_layout = QGridLayout()
+        standard_group.setLayout(standard_layout)
 
-        effects = [
-            ('Flat Spot', 'periodic 100 50'),
-            ('Engine Start', 'periodic 200 100'),
-            ('Flat Tire', 'periodic 150 80'),
-            ('Gravel/Rumble', 'periodic 50 120'),
-            ('Road Texture', 'periodic 300 60'),
-            ('Crash Impact', 'constant 20000'),
-            ('Curb Hit', 'constant 12000'),
-            ('Understeer', 'spring 8000'),
+        standard_effects = [
+            ('Pull LEFT (Strong)', 'constant_left'),
+            ('Pull RIGHT (Strong)', 'constant_right'),
+            ('Light LEFT Pull', 'light_left'),
+            ('Light RIGHT Pull', 'light_right'),
+            ('Slow Sine Wave', 'slow_sine'),
+            ('Fast Square Pulse', 'fast_pulse'),
+            ('Triangle Bumps', 'triangle_bumps'),
+            ('Sawtooth Ramp', 'sawtooth'),
         ]
 
-        for i, (name, cmd) in enumerate(effects):
+        for i, (name, cmd) in enumerate(standard_effects):
             btn = QPushButton(name)
             btn.clicked.connect(lambda checked, c=cmd: self.run_test_effect(c))
-            btn.setMinimumHeight(50)
-            effects_layout.addWidget(btn, i // 2, i % 2)
+            btn.setMinimumHeight(40)
+            standard_layout.addWidget(btn, i // 2, i % 2)
 
-        layout.addWidget(effects_group)
+        layout.addWidget(standard_group)
+
+        # Realistic racing effects
+        racing_group = QGroupBox('🏎️ Racing Simulation (Directional)')
+        racing_layout = QGridLayout()
+        racing_group.setLayout(racing_layout)
+
+        racing_effects = [
+            ('Flat Tire (LEFT)', 'flat_tire_left'),
+            ('Flat Tire (RIGHT)', 'flat_tire_right'),
+            ('Flat Spot (Heavy)', 'flat_spot_heavy'),
+            ('Engine Idle', 'engine_idle'),
+            ('Left Curb Hit', 'curb_left'),
+            ('Right Curb Hit', 'curb_right'),
+            ('Wall Crash LEFT', 'crash_left'),
+            ('Wall Crash RIGHT', 'crash_right'),
+        ]
+
+        for i, (name, cmd) in enumerate(racing_effects):
+            btn = QPushButton(name)
+            btn.clicked.connect(lambda checked, c=cmd: self.run_test_effect(c))
+            btn.setMinimumHeight(40)
+            racing_layout.addWidget(btn, i // 2, i % 2)
+
+        layout.addWidget(racing_group)
+
+        # Road surface effects
+        surface_group = QGroupBox('🛣️ Road Surface Effects')
+        surface_layout = QGridLayout()
+        surface_group.setLayout(surface_layout)
+
+        surface_effects = [
+            ('Smooth Track (Subtle)', 'smooth_track'),
+            ('Rough Asphalt', 'rough_asphalt'),
+            ('Rumble Strips (LOUD)', 'rumble_loud'),
+            ('Cobblestone (Harsh)', 'cobblestone_harsh'),
+            ('Gravel Slide', 'gravel_slide'),
+            ('Ice Surface (Light)', 'ice_surface'),
+        ]
+
+        for i, (name, cmd) in enumerate(surface_effects):
+            btn = QPushButton(name)
+            btn.clicked.connect(lambda checked, c=cmd: self.run_test_effect(c))
+            btn.setMinimumHeight(40)
+            surface_layout.addWidget(btn, i // 2, i % 2)
+
+        layout.addWidget(surface_group)
 
         stop_btn = QPushButton('⛔ STOP ALL EFFECTS')
-        stop_btn.setStyleSheet('background: #f44336; color: white; padding: 15px; font-size: 14px;')
+        stop_btn.setStyleSheet('background: #f44336; color: white; padding: 15px; font-size: 14px; font-weight: bold;')
         stop_btn.clicked.connect(self.stop_all_effects)
         layout.addWidget(stop_btn)
 
@@ -545,6 +653,9 @@ class T500RSControl(QMainWindow):
                 try:
                     # Read one input_event structure (24 bytes)
                     event_data = os.read(self.input_fd, 24)
+                    if len(event_data) == 0:
+                        # No data available (NONBLOCK)
+                        break
                     if len(event_data) < 24:
                         break
 
@@ -619,12 +730,23 @@ class T500RSControl(QMainWindow):
 
                 except BlockingIOError:
                     break
+                except OSError as e:
+                    if e.errno == 9:  # Bad file descriptor
+                        # Device was closed, stop reading
+                        self.input_fd = None
+                        break
+                    print(f"Error reading event: {e}")
+                    break
                 except Exception as e:
                     print(f"Error reading event: {e}")
                     break
 
         except Exception as e:
-            print(f"Error in read_device_input: {e}")
+            if hasattr(e, 'errno') and e.errno == 9:
+                # Bad file descriptor - device closed
+                self.input_fd = None
+            else:
+                print(f"Error in read_device_input: {e}")
     
 
     
@@ -637,6 +759,193 @@ class T500RSControl(QMainWindow):
             return True
         except:
             return False
+    
+    # Direct FFB methods
+    def create_constant_effect(self, level, duration_ms=2000, direction=0x4000):
+        """Create FF_CONSTANT effect"""
+        effect = bytearray(48)
+        struct.pack_into('H', effect, 0, FF_CONSTANT)
+        struct.pack_into('h', effect, 2, -1)  # auto-assign ID
+        struct.pack_into('H', effect, 4, direction)  # direction
+        struct.pack_into('HH', effect, 6, 0, 0)  # trigger
+        struct.pack_into('HH', effect, 10, duration_ms, 0)  # replay
+        struct.pack_into('h', effect, 16, level)  # level
+        struct.pack_into('HHHH', effect, 18, 0, 0, 0, 0)  # envelope
+        return effect
+    
+    def create_spring_effect(self, strength, duration_ms=2000):
+        """Create FF_SPRING effect (resistance to movement)"""
+        effect = bytearray(48)
+        struct.pack_into('H', effect, 0, FF_SPRING)
+        struct.pack_into('h', effect, 2, -1)  # auto-assign ID
+        struct.pack_into('H', effect, 4, 0x4000)  # direction
+        struct.pack_into('HH', effect, 6, 0, 0)  # trigger
+        struct.pack_into('HH', effect, 10, duration_ms, 0)  # replay
+        # Condition effect: right_saturation, left_saturation, right_coeff, left_coeff, deadband, center
+        struct.pack_into('hhhhhh', effect, 16, strength, strength, 10000, 10000, 0, 0)
+        return effect
+    
+    def create_damper_effect(self, strength, duration_ms=2000):
+        """Create FF_DAMPER effect (resistance to velocity)"""
+        effect = bytearray(48)
+        struct.pack_into('H', effect, 0, FF_DAMPER)
+        struct.pack_into('h', effect, 2, -1)  # auto-assign ID
+        struct.pack_into('H', effect, 4, 0x4000)  # direction
+        struct.pack_into('HH', effect, 6, 0, 0)  # trigger
+        struct.pack_into('HH', effect, 10, duration_ms, 0)  # replay
+        struct.pack_into('hhhhhh', effect, 16, strength, strength, 10000, 10000, 0, 0)
+        return effect
+    
+    def create_friction_effect(self, strength, duration_ms=2000):
+        """Create FF_FRICTION effect (resistance based on position)"""
+        effect = bytearray(48)
+        struct.pack_into('H', effect, 0, FF_FRICTION)
+        struct.pack_into('h', effect, 2, -1)  # auto-assign ID
+        struct.pack_into('H', effect, 4, 0x4000)  # direction
+        struct.pack_into('HH', effect, 6, 0, 0)  # trigger
+        struct.pack_into('HH', effect, 10, duration_ms, 0)  # replay
+        struct.pack_into('hhhhhh', effect, 16, strength, strength, 10000, 10000, 0, 0)
+        return effect
+    
+    def create_inertia_effect(self, strength, duration_ms=2000):
+        """Create FF_INERTIA effect (resistance to acceleration)"""
+        effect = bytearray(48)
+        struct.pack_into('H', effect, 0, FF_INERTIA)
+        struct.pack_into('h', effect, 2, -1)  # auto-assign ID
+        struct.pack_into('H', effect, 4, 0x4000)  # direction
+        struct.pack_into('HH', effect, 6, 0, 0)  # trigger
+        struct.pack_into('HH', effect, 10, duration_ms, 0)  # replay
+        struct.pack_into('hhhhhh', effect, 16, strength, strength, 10000, 10000, 0, 0)
+        return effect
+    
+    def create_periodic_effect(self, waveform, magnitude, period_ms, duration_ms=2000):
+        """Create periodic effect (sine, square, triangle, etc.)
+        waveform: FF_SINE=0x58, FF_SQUARE=0x5A, FF_TRIANGLE=0x59, FF_SAW_UP=0x5B, FF_SAW_DOWN=0x5C
+        """
+        effect = bytearray(48)
+        struct.pack_into('H', effect, 0, FF_PERIODIC)
+        struct.pack_into('h', effect, 2, -1)  # auto-assign ID
+        struct.pack_into('H', effect, 4, 0x4000)  # direction
+        struct.pack_into('HH', effect, 6, 0, 0)  # trigger
+        struct.pack_into('HH', effect, 10, duration_ms, 0)  # replay
+        # Periodic: waveform, period, magnitude, offset, phase
+        struct.pack_into('HHhhH', effect, 16, waveform, period_ms, magnitude, 0, 0)
+        # Envelope: attack_length, attack_level, fade_length, fade_level
+        struct.pack_into('HHHH', effect, 26, 0, 0, 0, 0)
+        return effect
+    
+    def create_ramp_effect(self, start_level, end_level, duration_ms=2000):
+        """Create FF_RAMP effect (force that changes linearly)"""
+        effect = bytearray(48)
+        struct.pack_into('H', effect, 0, FF_RAMP)
+        struct.pack_into('h', effect, 2, -1)  # auto-assign ID
+        struct.pack_into('H', effect, 4, 0x4000)  # direction
+        struct.pack_into('HH', effect, 6, 0, 0)  # trigger
+        struct.pack_into('HH', effect, 10, duration_ms, 0)  # replay
+        # Ramp: start_level, end_level
+        struct.pack_into('hh', effect, 16, start_level, end_level)
+        # Envelope
+        struct.pack_into('HHHH', effect, 20, 0, 0, 0, 0)
+        return effect
+    
+    def upload_and_play_effect(self, effect_bytes, duration_sec=2, effect_name="Unknown"):
+        """Upload effect, play it, wait, then stop
+        
+        CRITICAL: Cannot force effect ID! Kernel auto-assigns IDs.
+        When slots are full, we must stop ALL effects to free slots.
+        """
+        if not self.device_fd:
+            return None
+        
+        try:
+            # Upload - let kernel auto-assign ID (ID must be -1)
+            buf = bytearray(effect_bytes)
+            # Ensure ID is -1 for auto-assignment
+            struct.pack_into('h', buf, 2, -1)
+            
+            EVIOCSFF = 0x40304580
+            fcntl.ioctl(self.device_fd, EVIOCSFF, buf)
+            effect_id = struct.unpack_from('h', buf, 2)[0]
+            effect_type = struct.unpack_from('H', buf, 0)[0]
+            
+            # Track effect in slot
+            self.effect_slots[effect_id] = (time.time(), effect_name)
+            
+            print(f"✅ Uploaded effect '{effect_name}' → ID={effect_id}, Type=0x{effect_type:02X}, Duration={duration_sec}s (slot {len(self.effect_slots)}/{self.max_effects})")
+            
+            # Play
+            event = struct.pack('llHHi', 0, 0, EV_FF, effect_id, 1)
+            os.write(self.device_fd, event)
+            print(f"▶️  Playing effect ID {effect_id}")
+            
+            # Track active effect
+            if not hasattr(self, 'active_effects'):
+                self.active_effects = set()
+            self.active_effects.add(effect_id)
+            
+            # Schedule stop and cleanup (convert to int milliseconds!)
+            duration_ms = int(duration_sec * 1000)
+            QTimer.singleShot(duration_ms, lambda: self.stop_and_remove_effect(effect_id, effect_name))
+            
+            return effect_id
+            
+        except OSError as e:
+            if e.errno == 28:  # ENOSPC - No space left on device
+                print(f"❌ Effect '{effect_name}' failed: No effect slots available!")
+                print(f"⚠️  All {self.max_effects} slots full. Click 'STOP ALL EFFECTS' to free slots.")
+                print(f"📋 Active slots: {list(self.effect_slots.keys())}")
+            elif e.errno == 22:  # EINVAL
+                print(f"❌ Effect '{effect_name}' failed: Invalid effect parameters (errno 22)")
+            elif e.errno == 38:  # ENOSYS - Function not implemented
+                print(f"❌ Effect '{effect_name}' failed: Effect type not supported by device (errno 38)")
+            else:
+                print(f"❌ Error uploading effect '{effect_name}': {e} (errno {e.errno})")
+            return None
+        except Exception as e:
+            print(f"❌ Error playing effect '{effect_name}': {e}")
+            return None
+    
+    def stop_effect(self, effect_id):
+        """Stop a specific effect"""
+        if not self.device_fd:
+            return
+        try:
+            event = struct.pack('llHHi', 0, 0, EV_FF, effect_id, 0)
+            os.write(self.device_fd, event)
+        except:
+            pass
+    
+    def stop_and_remove_effect(self, effect_id, effect_name="Unknown"):
+        """Stop and remove an effect from kernel"""
+        if not self.device_fd:
+            return
+        try:
+            # Stop playing
+            event = struct.pack('llHHi', 0, 0, EV_FF, effect_id, 0)
+            os.write(self.device_fd, event)
+            print(f"⏹️  Stopped effect '{effect_name}' (ID {effect_id})")
+            
+            # Try to remove from kernel (some devices don't support EVIOCRMFF)
+            try:
+                EVIOCRMFF = 0x40044581
+                # Pack as signed short, not int
+                effect_id_buf = struct.pack('h', effect_id) + b'\x00' * 46  # Pad to 48 bytes
+                fcntl.ioctl(self.device_fd, EVIOCRMFF, effect_id_buf)
+                print(f"🗑️  Removed effect ID {effect_id} from kernel")
+            except OSError as e:
+                if e.errno == 22:  # EINVAL - device doesn't support removal
+                    print(f"⚠️  Effect ID {effect_id} removal not supported (will be overwritten)")
+                else:
+                    print(f"⚠️  Remove error: {e}")
+            
+            # Remove from tracking
+            if hasattr(self, 'active_effects'):
+                self.active_effects.discard(effect_id)
+        except Exception as e:
+            print(f"⚠️  Error stopping effect '{effect_name}' (ID {effect_id}): {e}")
+            # Still remove from tracking
+            if hasattr(self, 'active_effects'):
+                self.active_effects.discard(effect_id)
     
     # Control handlers
     def on_overall_gain_changed(self, value):
@@ -693,23 +1002,216 @@ class T500RSControl(QMainWindow):
         self.statusBar().showMessage('Reset to defaults', 2000)
     
     # FFB test methods
-    def run_test_effect(self, cmd):
-        parts = cmd.split()
-        effect_type = parts[0]
+    def run_test_effect(self, effect_name):
+        """Run a named test effect with realistic parameters"""
+        if not self.device_fd:
+            self.statusBar().showMessage('❌ Device not connected!', 3000)
+            return
         
-        if effect_type == 'constant':
-            level = int(parts[1]) if len(parts) > 1 else 16384
-            subprocess.Popen(f'cd /home/caz/Documents/hid-tmff2/userspace && echo "1" | sudo ./test_all_effects', shell=True)
-        elif effect_type == 'periodic':
-            subprocess.Popen(f'cd /home/caz/Documents/hid-tmff2/userspace && echo "11" | sudo ./test_all_effects', shell=True)
-        elif effect_type == 'spring':
-            subprocess.Popen(f'cd /home/caz/Documents/hid-tmff2/userspace && echo "6" | sudo ./test_all_effects', shell=True)
+        print(f"\n🎮 TRIGGERING EFFECT: '{effect_name}'")
         
-        self.statusBar().showMessage(f'Testing {effect_type} effect...', 3000)
+        # Define waveform constants
+        FF_SQUARE = 0x5A
+        FF_TRIANGLE = 0x59
+        FF_SINE = 0x58
+        FF_SAW_UP = 0x5B
+        FF_SAW_DOWN = 0x5C
+        
+        effect = None
+        duration = 2.0
+        msg = ''
+        
+        # Standard effects - varied intensities and waveforms
+        # TESTED BEHAVIOR: buf[2]=0x00 (negative force) pulls RIGHT, buf[2]=0x41 (positive) pulls LEFT
+        # This is OPPOSITE of what the driver comments say!
+        if effect_name == 'constant_left':
+            effect = self.create_constant_effect(25000, 2000)  # Positive = LEFT (driver is backwards!)
+            duration = 2.0
+            msg = '⬅️ Strong PULL LEFT'
+            print(f"  Parameters: level=+25000 (LEFT), duration=2000ms")
+        elif effect_name == 'constant_right':
+            effect = self.create_constant_effect(-25000, 2000)  # Negative = RIGHT (driver is backwards!)
+            duration = 2.0
+            msg = '➡️ Strong PULL RIGHT'
+            print(f"  Parameters: level=-25000 (RIGHT), duration=2000ms")
+        elif effect_name == 'light_left':
+            effect = self.create_constant_effect(8000, 2000)  # Positive = LEFT (driver is backwards!)
+            duration = 2.0
+            msg = '⬅️ Light pull left'
+            print(f"  Parameters: level=+8000 (LEFT), duration=2000ms")
+        elif effect_name == 'light_right':
+            effect = self.create_constant_effect(-8000, 2000)  # Negative = RIGHT (driver is backwards!)
+            duration = 2.0
+            msg = '➡️ Light pull right'
+            print(f"  Parameters: level=-8000 (RIGHT), duration=2000ms")
+        elif effect_name == 'slow_sine':
+            effect = self.create_periodic_effect(FF_SINE, 15000, 800, 3000)
+            duration = 3.0
+            msg = '🌊 Slow smooth sine wave'
+            print(f"  Parameters: waveform=SINE, magnitude=15000, period=800ms (slow)")
+        elif effect_name == 'fast_pulse':
+            effect = self.create_periodic_effect(FF_SQUARE, 22000, 200, 2000)
+            duration = 2.0
+            msg = '⚡ Fast square pulses'
+            print(f"  Parameters: waveform=SQUARE, magnitude=22000, period=200ms (fast)")
+        elif effect_name == 'triangle_bumps':
+            effect = self.create_periodic_effect(FF_TRIANGLE, 18000, 300, 2500)
+            duration = 2.5
+            msg = '🔺 Triangle wave bumps'
+            print(f"  Parameters: waveform=TRIANGLE, magnitude=18000, period=300ms")
+        elif effect_name == 'sawtooth':
+            effect = self.create_periodic_effect(FF_SAW_UP, 20000, 250, 2500)
+            duration = 2.5
+            msg = '🪚 Sawtooth ramp effect'
+            print(f"  Parameters: waveform=SAW_UP, magnitude=20000, period=250ms")
+        
+        # Racing effects - with directional variations
+        elif effect_name == 'flat_tire_left':
+            # LEFT tire flat - strong thumping with left bias
+            effect = self.create_periodic_effect(FF_SQUARE, 28000, 350, 3000)
+            duration = 3.0
+            msg = '💥 FLAT TIRE LEFT - heavy thumping!'
+            print(f"  Parameters: waveform=SQUARE, magnitude=28000, period=350ms (left tire)")
+        elif effect_name == 'flat_tire_right':
+            # RIGHT tire flat - strong thumping 
+            effect = self.create_periodic_effect(FF_SQUARE, 28000, 350, 3000)
+            duration = 3.0
+            msg = '💥 FLAT TIRE RIGHT - heavy thumping!'
+            print(f"  Parameters: waveform=SQUARE, magnitude=28000, period=350ms (right tire)")
+        elif effect_name == 'flat_spot_heavy':
+            # Locked wheel - very fast harsh vibration
+            effect = self.create_periodic_effect(FF_SQUARE, 24000, 120, 2000)
+            duration = 2.0
+            msg = '🔴 FLAT SPOT - HEAVY brake lockup!'
+            print(f"  Parameters: waveform=SQUARE, magnitude=24000, period=120ms (heavy)")
+        elif effect_name == 'engine_idle':
+            # Engine idle - very smooth low magnitude
+            effect = self.create_periodic_effect(FF_SINE, 4000, 40, 3000)
+            duration = 3.0
+            msg = '🏁 Engine idle vibration'
+            print(f"  Parameters: waveform=SINE, magnitude=4000, period=40ms (idle)")
+        elif effect_name == 'curb_left':
+            # Left wheel hits curb - STRONG left force
+            effect = self.create_constant_effect(28000, 300)  # Positive = LEFT (driver is backwards!)
+            duration = 0.3
+            msg = '💥 LEFT CURB HIT!'
+            print(f"  Parameters: level=+28000 (LEFT), duration=300ms")
+        elif effect_name == 'curb_right':
+            # Right wheel hits curb - STRONG right force
+            effect = self.create_constant_effect(-28000, 300)  # Negative = RIGHT (driver is backwards!)
+            duration = 0.3
+            msg = '💥 RIGHT CURB HIT!'
+            print(f"  Parameters: level=-28000 (RIGHT), duration=300ms")
+        elif effect_name == 'crash_left':
+            # Wall impact LEFT side - MAXIMUM left force
+            effect = self.create_constant_effect(32000, 500)  # Positive = LEFT (driver is backwards!)
+            duration = 0.5
+            msg = '💥💥💥 WALL CRASH LEFT!'
+            print(f"  Parameters: level=+32000 (MAX LEFT!), duration=500ms")
+        elif effect_name == 'crash_right':
+            # Wall impact RIGHT side - MAXIMUM right force
+            effect = self.create_constant_effect(-32000, 500)  # Negative = RIGHT (driver is backwards!)
+            duration = 0.5
+            msg = '💥💥💥 WALL CRASH RIGHT!'
+            print(f"  Parameters: level=-32000 (MAX RIGHT!), duration=500ms")
+        
+        # Road surface effects - varied textures
+        elif effect_name == 'smooth_track':
+            # Very subtle high-freq
+            effect = self.create_periodic_effect(FF_SINE, 2000, 25, 3000)
+            duration = 3.0
+            msg = '🛣️ Smooth track - barely noticeable'
+            print(f"  Parameters: waveform=SINE, magnitude=2000 (subtle), period=25ms")
+        elif effect_name == 'rough_asphalt':
+            # Medium irregular bumps
+            effect = self.create_periodic_effect(FF_TRIANGLE, 12000, 70, 3000)
+            duration = 3.0
+            msg = '🛤️ Rough asphalt - medium bumps'
+            print(f"  Parameters: waveform=TRIANGLE, magnitude=12000, period=70ms")
+        elif effect_name == 'rumble_loud':
+            # Very loud sharp rumble strips
+            effect = self.create_periodic_effect(FF_SQUARE, 28000, 90, 2500)
+            duration = 2.5
+            msg = '⚠️⚠️ RUMBLE STRIPS - LOUD!'
+            print(f"  Parameters: waveform=SQUARE, magnitude=28000 (LOUD), period=90ms")
+        elif effect_name == 'cobblestone_harsh':
+            # Very harsh irregular cobblestones
+            effect = self.create_periodic_effect(FF_SAW_UP, 22000, 60, 3000)
+            duration = 3.0
+            msg = '🪨 Cobblestone - HARSH!'
+            print(f"  Parameters: waveform=SAW_UP, magnitude=22000 (harsh), period=60ms")
+        elif effect_name == 'gravel_slide':
+            # Sliding on gravel - chaotic triangle
+            effect = self.create_periodic_effect(FF_TRIANGLE, 16000, 55, 2500)
+            duration = 2.5
+            msg = '🏞️ Gravel slide - sliding!'
+            print(f"  Parameters: waveform=TRIANGLE, magnitude=16000, period=55ms (slide)")
+        elif effect_name == 'ice_surface':
+            # Ice - very light almost no feedback
+            effect = self.create_periodic_effect(FF_SINE, 3000, 150, 3000)
+            duration = 3.0
+            msg = '❄️ Ice surface - slippery, minimal feedback'
+            print(f"  Parameters: waveform=SINE, magnitude=3000 (light), period=150ms (slow)")
+        
+        if effect:
+            self.upload_and_play_effect(effect, duration, effect_name)
+            self.statusBar().showMessage(f'▶️ {msg}', int(duration * 1000))
+        else:
+            print(f"❌ Unknown effect name: {effect_name}")
+            self.statusBar().showMessage(f'❌ Unknown effect: {effect_name}', 2000)
     
     def stop_all_effects(self):
-        subprocess.Popen('cd /home/caz/Documents/hid-tmff2/userspace && sudo ./emergency_reset.sh', shell=True)
-        self.statusBar().showMessage('All effects stopped', 3000)
+        """Stop and remove all force feedback effects
+        
+        CRITICAL: Must REMOVE all 16 kernel effect slots, not just stop them!
+        Stopping doesn't free the slot - only EVIOCRMFF does.
+        """
+        if not self.device_fd:
+            return
+        
+        print("\n🛑 STOP ALL EFFECTS REQUESTED")
+        stopped_count = 0
+        removed_count = 0
+        
+        # FIRST: Stop ALL possible effect IDs (0-15)
+        print("⏹️  Stopping all effects...")
+        for effect_id in range(16):
+            try:
+                event = struct.pack('llHHi', 0, 0, EV_FF, effect_id, 0)
+                os.write(self.device_fd, event)
+                stopped_count += 1
+            except:
+                pass
+        
+        print(f"✅ Stopped {stopped_count} effects")
+        
+        # SECOND: REMOVE ALL effect slots from kernel (this frees the slots!)
+        print("🗑️  Removing all effect slots from kernel...")
+        EVIOCRMFF = 0x40044581
+        for effect_id in range(16):
+            try:
+                # Try to remove this slot
+                effect_id_buf = struct.pack('h', effect_id) + b'\x00' * 46  # Pad to 48 bytes
+                fcntl.ioctl(self.device_fd, EVIOCRMFF, effect_id_buf)
+                removed_count += 1
+            except OSError as e:
+                # errno 22 (EINVAL) means slot doesn't exist - that's fine!
+                if e.errno != 22:
+                    print(f"⚠️  Warning: Could not remove slot {effect_id}: {e}")
+            except Exception as e:
+                pass
+        
+        print(f"✅ Removed {removed_count} effect slots from kernel")
+        
+        # THIRD: Clear our tracking
+        if hasattr(self, 'active_effects'):
+            self.active_effects.clear()
+        self.effect_slots.clear()
+        print("🗑️  Cleared all effect tracking")
+        
+        msg = f'✅ Stopped {stopped_count} effects, freed {removed_count} kernel slots'
+        self.statusBar().showMessage(msg, 3000)
+        print(f"🏁 Stop all complete - all slots freed!\n")
     
     # Profile methods
     def load_profiles(self):
@@ -852,6 +1354,12 @@ def main():
         sys.exit(1)
     
     app = QApplication(sys.argv)
+    
+    # Set application metadata for proper taskbar icon support
+    app.setApplicationName("T500RS Control Panel")
+    app.setApplicationDisplayName("T500RS Control Panel")
+    app.setDesktopFileName("t500rs-control.desktop")
+    
     window = T500RSControl()
     window.show()
     sys.exit(app.exec_())

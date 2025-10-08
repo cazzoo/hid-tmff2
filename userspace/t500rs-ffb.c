@@ -20,6 +20,13 @@
 #include <libusb-1.0/libusb.h>
 #include <pthread.h>
 
+/* Enable Windows-compatible protocol by default */
+#define USE_WINDOWS_PROTOCOL 0  /* Temporarily disabled for testing */
+
+#if USE_WINDOWS_PROTOCOL
+#include "t500rs_protocol.h"
+#endif
+
 #define VENDOR_ID       0x044f
 #define PRODUCT_ID_BOOT 0xb65d  /* Boot mode - before initialization */
 #define PRODUCT_ID      0xb65e  /* Normal mode - after initialization */
@@ -63,6 +70,9 @@ static int ramp_thread_running = 0;
 /* TEMPORARY: Disable ramp effects due to kernel crash bug */
 #define ENABLE_RAMP_EFFECTS 0
 
+/* USB hex debug logging - enable to see all USB packets */
+#define USB_HEX_DEBUG 0
+
 /* Gain control state */
 static int current_gain = 0xffff;  /* Default: maximum (0-65535) */
 
@@ -90,9 +100,14 @@ static int current_rotation_angle = 1080;  /* Default: 1080 degrees */
 #define FF_ROTATION_ANGLE 0x76  /* Custom event code for rotation angle */
 
 /* Forward declarations */
-static int apply_effect_gain(int value, int effect_type);
+int apply_effect_gain(int value, int effect_type);
 static int set_effect_type_gain(int effect_type, int gain);
 static int set_rotation_angle(int angle);
+
+#if USE_WINDOWS_PROTOCOL
+/* Windows protocol effect upload - uses new translation layer */
+static int upload_effect_windows_protocol(int id, struct ff_effect *effect);
+#endif
 
 /* Logging */
 #define LOG_INFO(fmt, ...) fprintf(stdout, "[INFO] " fmt "\n", ##__VA_ARGS__)
@@ -106,14 +121,29 @@ static void signal_handler(int sig)
     running = 0;
 }
 
-/* USB communication */
-static int usb_send(unsigned char *data, int len)
+/* USB communication - made global for protocol module */
+int usb_send(unsigned char *data, int len)
 {
     int ret, transferred;
 
+#if USB_HEX_DEBUG
+    /* Debug: print hex dump of outgoing packet */
+    fprintf(stderr, "[USB OUT %2d] ", len);
+    for (int i = 0; i < len; i++) {
+        fprintf(stderr, "%02x", data[i]);
+        if (i < len - 1 && (i + 1) % 4 == 0) {
+            fprintf(stderr, " ");  /* Space every 4 bytes */
+        }
+    }
+    fprintf(stderr, "\n");
+#endif
+
     ret = libusb_interrupt_transfer(usb_handle, EP_OUT, data, len, &transferred, 1000);
     if (ret < 0) {
-        LOG_ERROR("USB transfer failed: %s", libusb_error_name(ret));
+        /* Don't log NO_DEVICE errors during shutdown - these are expected */
+        if (ret != LIBUSB_ERROR_NO_DEVICE && running) {
+            LOG_ERROR("USB transfer failed: %s", libusb_error_name(ret));
+        }
         return ret;
     }
 
@@ -128,7 +158,7 @@ static int usb_send(unsigned char *data, int len)
 /* Device initialization */
 static int t500rs_initialize(void)
 {
-    unsigned char buf[15];
+    unsigned char buf[16];
     int ret;
 
     LOG_INFO("Initializing T500RS...");
@@ -268,7 +298,70 @@ static int t500rs_initialize(void)
     if (ret) return ret;
     usleep(100000);
 
-    LOG_INFO("Initialization complete (mode switch commands sent)");
+    LOG_INFO("Sending USB control requests for mode switch...");
+
+    /* USB CONTROL REQUEST - Get Model ID
+     * This is the critical step that queries the device for its model
+     * bRequestType: 0xc1 (device-to-host, vendor, device)
+     * bRequest: 73
+     * wValue: 0
+     * wIndex: 0
+     * wLength: 16 bytes
+     */
+    unsigned char model_response[16];
+    memset(model_response, 0, sizeof(model_response));
+    
+    ret = libusb_control_transfer(usb_handle,
+        0xc1,  /* bmRequestType: IN, vendor, device */
+        73,    /* bRequest */
+        0,     /* wValue */
+        0,     /* wIndex */
+        model_response,
+        16,    /* wLength */
+        5000); /* timeout ms */
+    
+    if (ret < 0) {
+        LOG_ERROR("Failed to get model ID: %s", libusb_error_name(ret));
+        return ret;
+    }
+    
+    LOG_INFO("Model ID response received (%d bytes)", ret);
+    if (ret >= 2) {
+        LOG_INFO("Response type: 0x%02x%02x", model_response[1], model_response[0]);
+    }
+    
+    /* USB CONTROL REQUEST - Switch Mode
+     * This triggers the actual mode switch from boot mode to normal mode
+     * bRequestType: 0x41 (host-to-device, vendor, device)
+     * bRequest: 83
+     * wValue: 0x0002 (T500RS switch value)
+     * wIndex: 0
+     * wLength: 0
+     */
+    LOG_INFO("Sending mode switch control request (value=0x0002)...");
+    
+    ret = libusb_control_transfer(usb_handle,
+        0x41,  /* bmRequestType: OUT, vendor, device */
+        83,    /* bRequest */
+        0x0002,/* wValue - T500RS switch value */
+        0,     /* wIndex */
+        NULL,  /* no data */
+        0,     /* wLength */
+        5000); /* timeout ms */
+    
+    if (ret < 0) {
+        /* Device may disconnect before responding - this is normal */
+        if (ret == LIBUSB_ERROR_NO_DEVICE || ret == LIBUSB_ERROR_PIPE || ret == LIBUSB_ERROR_IO) {
+            LOG_INFO("Device disconnected during mode switch (expected behavior)");
+        } else {
+            LOG_ERROR("Mode switch control request failed: %s", libusb_error_name(ret));
+            return ret;
+        }
+    } else {
+        LOG_INFO("Mode switch control request sent successfully");
+    }
+
+    LOG_INFO("Initialization complete (mode switch triggered)");
     return 0;
 }
 
@@ -679,21 +772,33 @@ static int start_effect(int id)
         }
     }
 
-    /* For constant force, set the level before starting */
+    /* For constant force, set the level before starting
+     * CRITICAL FIX: Send SIGNED force value!
+     * The direction is encoded in the sign of buf[3], not in buf[2] of Report 0x41!
+     * 
+     * Mapping:
+     *   Positive force (-32767 to 0)    → buf[3] = 128-255 (0x80-0xFF) → LEFT pull
+     *   Negative force (0 to +32767)    → buf[3] = 0-127   (0x00-0x7F) → RIGHT pull
+     * 
+     * OR the opposite - we'll test!
+     */
     if (is_constant) {
-        int abs_force = abs(force);
-        unsigned char level = (abs_force * 127) / 32767;
+        /* Map signed force to signed byte (-128 to +127)
+         * Then cast to unsigned to preserve bit pattern */
+        signed char signed_level = (signed char)((force * 127) / 32767);
+        unsigned char level = (unsigned char)signed_level;
 
-        /* Report 0x03 - Set force level */
+        /* Report 0x03 - Set force level (SIGNED!) */
         buf[0] = 0x03;
         buf[1] = 0x0e;
         buf[2] = 0x00;
-        buf[3] = level;
+        buf[3] = level;  /* Now contains signed value! */
         ret = usb_send(buf, 4);
         if (ret) return ret;
         usleep(5000);
 
-        LOG_DEBUG("Set constant force level to 0x%02x", level);
+        LOG_DEBUG("Set constant force level to 0x%02x (force=%d, signed_level=%d)", 
+                  level, force, signed_level);
     }
 
     /* For periodic effects, also set magnitude via Report 0x03 */
@@ -714,17 +819,19 @@ static int start_effect(int id)
 
     /* Ramp effects don't need Report 0x03 - the ramp is in Report 0x04 */
 
-    /* Send start command */
+    /* Send start command
+     * 
+     * NEW UNDERSTANDING from Windows capture analysis:
+     *   - buf[2]=0x41 is used for START (regardless of direction)
+     *   - buf[2]=0x00 is used for STOP (in stop_effect())
+     *   - Direction is encoded in Report 0x03 buf[3] as SIGNED value!
+     */
     buf[0] = 0x41;
     buf[1] = id;
-    buf[2] = 0x41;  /* Default: 0x41 for all effects */
-    buf[3] = 0x01;
+    buf[2] = 0x41;  /* Always 0x41 for START */
+    buf[3] = 0x01;  /* Action: 01 = start */
 
-    /* For constant force, use 0x00 for negative direction */
-    if (is_constant && force < 0) {
-        buf[2] = 0x00;  /* Negative direction */
-        LOG_DEBUG("Starting negative constant force");
-    }
+    LOG_DEBUG("Starting effect (buf[2]=0x41, force=%d)", force);
 
     return usb_send(buf, 4);
 }
@@ -745,7 +852,7 @@ static int stop_effect(int id)
 }
 
 /* Apply per-effect gain to a value */
-static int apply_effect_gain(int value, int effect_type)
+int apply_effect_gain(int value, int effect_type)
 {
     int gain = 0xffff;
 
@@ -852,9 +959,28 @@ static int set_effect_type_gain(int effect_type, int gain)
     return 0;
 }
 
-/* Set rotation angle (90-1080 degrees) */
+#if USE_WINDOWS_PROTOCOL
+/* Windows-compatible range setting - uses Ghidra reverse engineering findings */
+static int set_rotation_angle_windows_protocol(int angle)
+{
+    LOG_INFO("Setting range to %d° using Windows-compatible protocol", angle);
+    return t500rs_set_range_windows_compatible(angle);
+}
+#endif
+
+/* Set rotation angle (steering range) - Enhanced with Windows protocol support */
 static int set_rotation_angle(int angle)
 {
+#if USE_WINDOWS_PROTOCOL
+    /* Try Windows protocol first if available */
+    struct t500rs_device_state *state = t500rs_get_device_state();
+    if (state && state->protocol_active) {
+        LOG_INFO("Using Windows-compatible range setting");
+        return set_rotation_angle_windows_protocol(angle);
+    }
+    LOG_INFO("Windows protocol not active, falling back to legacy method");
+#endif
+
     unsigned char buf[15];
     int ret;
     unsigned char angle_code;
@@ -1158,6 +1284,137 @@ static void *ramp_update_thread_func(void *arg)
 
 
 
+#if USE_WINDOWS_PROTOCOL
+/* Upload effect using Windows-compatible protocol */
+static int upload_effect_windows_protocol(int id, struct ff_effect *effect)
+{
+    struct t500rs_hid_output cmd;
+    int ret;
+
+    /* Use the new translation layer to convert Linux FF effect to Windows HID command */
+    ret = t500rs_translate_effect(effect, &cmd, 1);  /* 1 = apply per-effect gains */
+    if (ret != 0) {
+        LOG_ERROR("Failed to translate effect %d: %d", id, ret);
+        return ret;
+    }
+
+    /* Send the Windows-compatible HID command */
+    LOG_DEBUG("Sending Windows protocol command: type=0x%02x, param=0x%04x, flags=0x%02x",
+              cmd.command_type, cmd.parameter, cmd.flags);
+    
+    ret = usb_send((unsigned char *)&cmd, sizeof(cmd));
+    if (ret != 0) {
+        LOG_ERROR("Failed to send Windows protocol command for effect %d: %d", id, ret);
+        return ret;
+    }
+
+    LOG_INFO("Effect %d uploaded using Windows protocol", id);
+    return 0;
+}
+
+/* Start effect using Windows protocol - resend the effect command */
+static int start_effect_windows_protocol(int id)
+{
+    struct t500rs_hid_output cmd;
+    int ret;
+
+    if (id < 0 || id >= MAX_EFFECTS) {
+        LOG_ERROR("Invalid effect ID for start: %d", id);
+        return -EINVAL;
+    }
+
+    if (!effects[id].effect.type) {
+        LOG_ERROR("Effect %d not uploaded", id);
+        return -EINVAL;
+    }
+
+    /* Translate effect again to get the command with actual parameters */
+    ret = t500rs_translate_effect(&effects[id].effect, &cmd, 1);
+    if (ret != 0) {
+        LOG_ERROR("Failed to translate effect %d for start: %d", id, ret);
+        return ret;
+    }
+
+    /* Send the command - this activates the effect */
+    LOG_DEBUG("Starting effect %d: type=0x%02x, param=0x%04x, flags=0x%02x",
+              id, cmd.command_type, cmd.parameter, cmd.flags);
+    
+    ret = usb_send((unsigned char *)&cmd, sizeof(cmd));
+    if (ret != 0) {
+        LOG_ERROR("Failed to start effect %d: %d", id, ret);
+        return ret;
+    }
+
+    LOG_INFO("Effect %d started using Windows protocol", id);
+    return 0;
+}
+
+/* Stop effect using Windows protocol - send command with zero magnitude */
+static int stop_effect_windows_protocol(int id)
+{
+    struct t500rs_hid_output cmd;
+    int ret;
+
+    if (id < 0 || id >= MAX_EFFECTS) {
+        LOG_ERROR("Invalid effect ID for stop: %d", id);
+        return -EINVAL;
+    }
+
+    /* Construct a zero-magnitude stop command based on effect type */
+    memset(&cmd, 0, sizeof(cmd));
+    cmd.report_id = T500RS_REPORT_ID;
+    
+    /* Use command type from the stored effect */
+    switch (effects[id].effect.type) {
+    case FF_CONSTANT:
+        cmd.command_type = T500RS_CMD_FF_PRIMARY;
+        cmd.flags = 0x00;
+        cmd.parameter = 0;  /* Zero magnitude = stop */
+        break;
+        
+    case FF_PERIODIC:
+        cmd.command_type = T500RS_CMD_FF_EXTENDED;
+        cmd.flags = 0x00;
+        cmd.parameter = 0;  /* Zero magnitude = stop */
+        break;
+        
+    case FF_SPRING:
+    case FF_DAMPER:
+    case FF_FRICTION:
+    case FF_INERTIA:
+        cmd.command_type = T500RS_CMD_FF_SECONDARY;
+        /* For conditional effects, use the appropriate flag but zero parameter */
+        if (effects[id].effect.type == FF_SPRING)
+            cmd.flags = 0x01;
+        else if (effects[id].effect.type == FF_DAMPER)
+            cmd.flags = 0x02;
+        else if (effects[id].effect.type == FF_FRICTION)
+            cmd.flags = 0x03;
+        else if (effects[id].effect.type == FF_INERTIA)
+            cmd.flags = 0x04;
+        cmd.parameter = 0;  /* Zero coefficient = stop */
+        break;
+        
+    default:
+        LOG_ERROR("Unknown effect type %d for stop", effects[id].effect.type);
+        return -EINVAL;
+    }
+
+    /* Send the zero-magnitude command */
+    LOG_DEBUG("Stopping effect %d: type=0x%02x, param=0x%04x, flags=0x%02x",
+              id, cmd.command_type, cmd.parameter, cmd.flags);
+    
+    ret = usb_send((unsigned char *)&cmd, sizeof(cmd));
+    if (ret != 0) {
+        LOG_ERROR("Failed to stop effect %d: %d", id, ret);
+        return ret;
+    }
+
+    LOG_INFO("Effect %d stopped using Windows protocol", id);
+    return 0;
+}
+#endif
+
 /* Handle force feedback upload */
 static int handle_ff_upload(struct uinput_ff_upload *upload)
 {
@@ -1177,7 +1434,11 @@ static int handle_ff_upload(struct uinput_ff_upload *upload)
     effects[id].effect = upload->effect;
     effects[id].active = 0;
 
-    /* Upload to device */
+#if USE_WINDOWS_PROTOCOL
+    /* Use Windows-compatible protocol */
+    ret = upload_effect_windows_protocol(id, &upload->effect);
+#else
+    /* Use legacy protocol - Upload to device */
     switch (upload->effect.type) {
     case FF_CONSTANT:
         ret = upload_constant_effect(id, &upload->effect);
@@ -1212,6 +1473,7 @@ static int handle_ff_upload(struct uinput_ff_upload *upload)
         ret = -EINVAL;
         break;
     }
+#endif
 
     upload->retval = ret;
     pthread_mutex_unlock(&effects_lock);
@@ -1234,7 +1496,11 @@ static int handle_ff_erase(struct uinput_ff_erase *erase)
 
     /* Stop if active */
     if (effects[id].active) {
+#if USE_WINDOWS_PROTOCOL
+        stop_effect_windows_protocol(id);
+#else
         stop_effect(id);
+#endif
         effects[id].active = 0;
     }
 
@@ -1251,6 +1517,8 @@ static void *input_reading_thread(void *arg)
     int transferred;
     int ret;
     struct input_event ev;
+    int disconnect_count = 0;
+    int error_count = 0;
 
     while (running) {
         /* Read from USB interrupt endpoint */
@@ -1262,11 +1530,41 @@ static void *input_reading_thread(void *arg)
         }
 
         if (ret < 0) {
+            if (ret == LIBUSB_ERROR_NO_DEVICE || ret == LIBUSB_ERROR_IO) {
+                /* Device might be disconnected temporarily (mode switch)
+                 * Give it some retries before giving up */
+                disconnect_count++;
+                
+                if (disconnect_count > 50) {  /* 50 * 10ms = 500ms timeout */
+                    LOG_INFO("Device disconnected for too long, stopping input thread");
+                    break;
+                }
+                
+                /* Don't spam logs for transient disconnects */
+                if (disconnect_count % 10 == 1) {
+                    LOG_INFO("Device temporarily unavailable, retrying... (%d)", disconnect_count);
+                }
+                
+                usleep(10000);
+                continue;
+            } else {
+                /* For other errors, reset disconnect counter */
+                disconnect_count = 0;
+            }
+            
             if (ret != LIBUSB_ERROR_INTERRUPTED) {
-                LOG_ERROR("USB read failed: %s", libusb_error_name(ret));
+                /* Don't spam on common transient errors */
+                error_count++;
+                if (error_count % 10 == 1) {
+                    LOG_ERROR("USB read failed: %s (count: %d)", libusb_error_name(ret), error_count);
+                }
             }
             usleep(10000);
             continue;
+        } else {
+            /* Successful read - reset disconnect counter */
+            disconnect_count = 0;
+            error_count = 0;
         }
 
         if (transferred < 15) {
@@ -1569,11 +1867,19 @@ static void process_uinput_events(void)
                                   effects[ev.code].ramp_duration_ms);
                     }
 
+#if USE_WINDOWS_PROTOCOL
+                    start_effect_windows_protocol(ev.code);
+#else
                     start_effect(ev.code);
+#endif
                     effects[ev.code].active = 1;
                 } else {
                     LOG_DEBUG("Stopping effect %d", ev.code);
+#if USE_WINDOWS_PROTOCOL
+                    stop_effect_windows_protocol(ev.code);
+#else
                     stop_effect(ev.code);
+#endif
                     effects[ev.code].active = 0;
                     effects[ev.code].is_ramp = 0;
                 }
@@ -1849,71 +2155,72 @@ int main(int argc, char **argv)
 
     int was_boot_mode = (desc.idProduct == PRODUCT_ID_BOOT);
 
-    /* If in boot mode, try to trigger mode switch */
+    /* If in boot mode, send initialization sequence to trigger mode switch */
     if (was_boot_mode) {
-        LOG_INFO("Device in boot mode, attempting mode switch...");
-
-        /* Try USB reset - this sometimes triggers mode switch */
-        LOG_INFO("Attempting USB reset...");
-        ret = libusb_reset_device(usb_handle);
+        LOG_INFO("Device in boot mode, will send initialization sequence...");
+        /* Don't do USB reset - it causes the handle to become invalid
+         * Instead, we'll send the init sequence directly which includes
+         * the USB control requests that trigger the mode switch */
+        
+        /* Initialize device (includes mode switch) */
+        ret = t500rs_initialize();
         if (ret < 0) {
-            LOG_ERROR("USB reset failed: %s", libusb_error_name(ret));
-            /* Continue anyway */
-        } else {
-            LOG_INFO("USB reset successful, waiting for re-enumeration...");
-            /* After reset, device handle is invalid */
-            usb_handle = NULL;
-            sleep(3);
-
-            /* Try to reopen in normal mode */
-            LOG_INFO("Trying to open in normal mode after reset...");
-            usb_handle = libusb_open_device_with_vid_pid(usb_ctx, VENDOR_ID, PRODUCT_ID);
-            if (usb_handle) {
-                LOG_INFO("Device switched to normal mode after reset!");
-                was_boot_mode = 0;  /* Update flag */
-
-                /* Detach kernel driver */
-                ret = libusb_detach_kernel_driver(usb_handle, INTERFACE);
-                if (ret < 0 && ret != LIBUSB_ERROR_NOT_FOUND) {
-                    LOG_ERROR("Failed to detach kernel driver: %s", libusb_error_name(ret));
-                    cleanup();
-                    return 1;
-                }
-
-                /* Claim interface */
-                ret = libusb_claim_interface(usb_handle, INTERFACE);
-                if (ret < 0) {
-                    LOG_ERROR("Failed to claim interface: %s", libusb_error_name(ret));
-                    cleanup();
-                    return 1;
-                }
-            } else {
-                LOG_INFO("Device still in boot mode after reset, will try init sequence");
-                /* Reopen in boot mode */
-                usb_handle = libusb_open_device_with_vid_pid(usb_ctx, VENDOR_ID, PRODUCT_ID_BOOT);
-                if (!usb_handle) {
-                    LOG_ERROR("Failed to reopen device after reset");
-                    cleanup();
-                    return 1;
-                }
-
-                /* Reclaim interface */
-                ret = libusb_claim_interface(usb_handle, INTERFACE);
-                if (ret < 0) {
-                    LOG_ERROR("Failed to claim interface: %s", libusb_error_name(ret));
-                    cleanup();
-                    return 1;
-                }
-            }
+            LOG_ERROR("Device initialization failed");
+            cleanup();
+            return 1;
         }
-    }
-
-    /* Initialize device */
-    ret = t500rs_initialize();
-    if (ret < 0) {
-        LOG_ERROR("Device initialization failed");
-        cleanup();
-        return 1;
+    } else {
+        LOG_INFO("Device already in normal mode, skipping mode switch");
+        /* Device is already in normal mode, just send basic init commands */
+        unsigned char init_buf[15];
+        
+        /* Report 0x40 - Initialize FFB system */
+        memset(init_buf, 0, sizeof(init_buf));
+        init_buf[0] = 0x40;
+        init_buf[1] = 0x11;
+        init_buf[2] = 0x55;
+        init_buf[3] = 0xd5;
+        ret = usb_send(init_buf, 4);
+        if (ret) {
+            LOG_ERROR("Failed to send init command 1");
+        }
+        usleep(10000);
+        
+        /* Report 0x42 - Configuration */
+        memset(init_buf, 0, sizeof(init_buf));
+        init_buf[0] = 0x42;
+        init_buf[1] = 0x04;
+        ret = usb_send(init_buf, 2);
+        if (ret) {
+            LOG_ERROR("Failed to send init command 2");
+        }
+        usleep(8000);
+        
+        /* Report 0x40 - Enable FFB */
+        memset(init_buf, 0, sizeof(init_buf));
+        init_buf[0] = 0x40;
+        init_buf[1] = 0x04;
+        init_buf[2] = 0x00;
+        init_buf[3] = 0x00;
+        ret = usb_send(init_buf, 4);
+        if (ret) {
+            LOG_ERROR("Failed to send init command 3");
+        }
+        usleep(8000);
+        
+        /* Report 0x40 - Finalize init */
+        memset(init_buf, 0, sizeof(init_buf));
+        init_buf[0] = 0x40;
+        init_buf[1] = 0x03;
+        init_buf[2] = 0x0d;
+        init_buf[3] = 0x00;
+        ret = usb_send(init_buf, 4);
+        if (ret) {
+            LOG_ERROR("Failed to send init command 4");
+        }
+        usleep(10000);
+        
+        LOG_INFO("Normal mode initialization complete");
     }
 
     /* If we were in boot mode, the device should have switched to normal mode */
@@ -2007,7 +2314,79 @@ int main(int argc, char **argv)
         }
 
         LOG_INFO("Normal mode device ready!");
+        
+        /* Initialize the normal mode device - this is critical for FFB */
+        LOG_INFO("Initializing normal mode device for force feedback...");
+        
+        /* Send essential initialization commands for normal mode */
+        unsigned char init_buf[15];
+        
+        /* Report 0x40 - Initialize FFB system */
+        memset(init_buf, 0, sizeof(init_buf));
+        init_buf[0] = 0x40;
+        init_buf[1] = 0x11;
+        init_buf[2] = 0x55;
+        init_buf[3] = 0xd5;
+        ret = usb_send(init_buf, 4);
+        if (ret) {
+            LOG_ERROR("Failed to send normal mode init command 1");
+        }
+        usleep(10000);
+        
+        /* Report 0x42 - Configuration */
+        memset(init_buf, 0, sizeof(init_buf));
+        init_buf[0] = 0x42;
+        init_buf[1] = 0x04;
+        ret = usb_send(init_buf, 2);
+        if (ret) {
+            LOG_ERROR("Failed to send normal mode init command 2");
+        }
+        usleep(8000);
+        
+        /* Report 0x40 - Enable FFB */
+        memset(init_buf, 0, sizeof(init_buf));
+        init_buf[0] = 0x40;
+        init_buf[1] = 0x04;
+        init_buf[2] = 0x00;
+        init_buf[3] = 0x00;
+        ret = usb_send(init_buf, 4);
+        if (ret) {
+            LOG_ERROR("Failed to send normal mode init command 3");
+        }
+        usleep(8000);
+        
+        /* Report 0x40 - Finalize init */
+        memset(init_buf, 0, sizeof(init_buf));
+        init_buf[0] = 0x40;
+        init_buf[1] = 0x03;
+        init_buf[2] = 0x0d;
+        init_buf[3] = 0x00;
+        ret = usb_send(init_buf, 4);
+        if (ret) {
+            LOG_ERROR("Failed to send normal mode init command 4");
+        }
+        usleep(10000);
+        
+        LOG_INFO("Normal mode initialization complete");
     }
+
+#if USE_WINDOWS_PROTOCOL
+    /* Initialize Windows-compatible protocol layer */
+    LOG_INFO("Initializing Windows-compatible protocol layer...");
+    ret = t500rs_initialize_windows_compatible();
+    if (ret) {
+        LOG_ERROR("Windows protocol initialization failed, continuing with legacy mode");
+        /* Not fatal - continue with legacy protocol */
+    } else {
+        LOG_INFO("✅ Windows-compatible protocol layer active");
+        
+        /* Set initial range using Windows protocol */
+        ret = set_rotation_angle_windows_protocol(current_rotation_angle);
+        if (ret) {
+            LOG_ERROR("Failed to set initial range using Windows protocol");
+        }
+    }
+#endif
 
     /* Setup uinput */
     ret = setup_uinput();

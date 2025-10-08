@@ -1,0 +1,99 @@
+╔═══════════════════════════════════════════════════════════════════════╗
+║         T500RS FORCE FEEDBACK EFFECTS - QUICK REFERENCE              ║
+╚═══════════════════════════════════════════════════════════════════════╝
+
+┌─────────────────────────────────────────────────────────────────────┐
+│ 🎯 STANDARD EFFECTS - Test Basic FFB Types                         │
+├─────────────────────────────────────────────────────────────────────┤
+│ Constant Left/Right  → Steady directional pull                     │
+│ Strong Pulse         → Medium-speed thumping (500ms)                │
+│ Gentle Vibration     → Fast smooth oscillation (100ms)              │
+│ Spring Center        → Self-centering resistance                    │
+│ Damper Feel          → Velocity-based resistance                    │
+│ Friction Road        → Position-based resistance                    │
+│ Inertia Heavy        → Acceleration-based resistance                │
+└─────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────┐
+│ 🏎️ RACING SIMULATION - Realistic Racing Scenarios                  │
+├─────────────────────────────────────────────────────────────────────┤
+│ 💥 Flat Tire          → THUMP-THUMP-THUMP (400ms, 3s)              │
+│ 🔴 Flat Spot (Brake)  → Fast harsh vibration (150ms, 2.5s)         │
+│ 🏁 Engine Vibration   → Smooth rapid oscillation (50ms, 3s)        │
+│ 🏔️ Gravel/Dirt Road   → Bumpy texture (80ms, 3s)                   │
+│ 💥 Curb Hit           → Sharp brief impact (400ms)                  │
+│ 💥💥💥 Crash Impact     → MAXIMUM FORCE! (600ms)                      │
+│ 🌀 Understeer Push    → Light wheel, less resistance (2s)          │
+│ ⚡ Oversteer Snap     → Quick ramp-up correction (800ms)            │
+└─────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────┐
+│ 🛣️ ROAD SURFACES - Different Driving Surfaces                      │
+├─────────────────────────────────────────────────────────────────────┤
+│ 🛣️ Smooth Asphalt     → Very subtle texture (30ms, 3s)             │
+│ 🛤️ Rough Pavement     → Medium bumps (60ms, 3s)                    │
+│ ⚠️ Rumble Strips      → Sharp regular bumps (100ms, 2s)            │
+│ 🪨 Cobblestones       → Harsh irregular bumps (70ms, 3s)           │
+└─────────────────────────────────────────────────────────────────────┘
+
+╔═══════════════════════════════════════════════════════════════════════╗
+║                      EFFECT TYPE CHEAT SHEET                          ║
+╠═══════════════════════════════════════════════════════════════════════╣
+║ FF_CONSTANT (0x52)  │ Steady force in one direction                 ║
+║ FF_SPRING (0x53)    │ Resists movement from center (position)       ║
+║ FF_DAMPER (0x55)    │ Resists fast movements (velocity)             ║
+║ FF_FRICTION (0x54)  │ Constant resistance throughout range          ║
+║ FF_INERTIA (0x56)   │ Resists acceleration (inertial)               ║
+║ FF_PERIODIC (0x51)  │ Repeating waveform effects                    ║
+║ FF_RAMP (0x57)      │ Force that changes linearly                   ║
+╠═══════════════════════════════════════════════════════════════════════╣
+║ WAVEFORMS (Periodic):                                                 ║
+║ • FF_SINE (0x58)     → Smooth sine wave                              ║
+║ • FF_SQUARE (0x5A)   → Harsh on/off square wave                      ║
+║ • FF_TRIANGLE (0x59) → Linear up/down triangle                       ║
+║ • FF_SAW_UP (0x5B)   → Ramp up, snap down                            ║
+║ • FF_SAW_DOWN (0x5C) → Snap up, ramp down                            ║
+╚═══════════════════════════════════════════════════════════════════════╝
+
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃ FORCE MAGNITUDE SCALE                                                ┃
+┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫
+┃  3,000 -  8,000  │ Subtle (vibrations, fine texture)               ┃
+┃ 12,000 - 18,000  │ Medium (bumps, resistance)                       ┃
+┃ 20,000 - 25,000  │ Strong (impacts, heavy effects)                  ┃
+┃ 32,000           │ MAXIMUM (crash, emergency only!)                 ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃ PERIOD/FREQUENCY GUIDE                                               ┃
+┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫
+┃  30-50ms   │ High freq (smooth vibration, engine hum)              ┃
+┃  60-100ms  │ Medium freq (bumps, rumble strips)                     ┃
+┃ 150-400ms  │ Low freq (thumps, flat tire rotation)                  ┃
+┃ 500ms+     │ Slow pulses (deliberate impacts)                       ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+
+╔═══════════════════════════════════════════════════════════════════════╗
+║                           WHAT'S FIXED                                ║
+╠═══════════════════════════════════════════════════════════════════════╣
+║ ✅ Bad file descriptor error → Handled gracefully, no spam           ║
+║ ✅ Stop All Effects button → Now properly removes effects            ║
+║ ✅ Generic placeholders → 20 unique, realistic, creative effects     ║
+║ ✅ Effect tracking → Active effects stored and cleaned up            ║
+║ ✅ Proper cleanup → Uses EVIOCRMFF ioctl to free kernel memory       ║
+╚═══════════════════════════════════════════════════════════════════════╝
+
+╔═══════════════════════════════════════════════════════════════════════╗
+║                          TESTING TIPS                                 ║
+╠═══════════════════════════════════════════════════════════════════════╣
+║ 1. Start with "Constant Left" to verify FFB works                    ║
+║ 2. Try "Spring Center" to feel position-based resistance             ║
+║ 3. Test "Flat Tire" for the most dramatic periodic effect            ║
+║ 4. "Crash Impact" is MAXIMUM force - be ready!                       ║
+║ 5. Use "Stop All Effects" emergency button if needed                 ║
+║ 6. Adjust Master Gain in Force Adjustment tab for comfort            ║
+╚═══════════════════════════════════════════════════════════════════════╝
+
+For detailed documentation: cat FFB_EFFECTS_GUIDE.md
+
+Run GUI: sudo python3 ~/Documents/hid-tmff2/userspace/t500rs_control.py

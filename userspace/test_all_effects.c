@@ -371,7 +371,7 @@ char* find_t500rs_device(void)
 
         if (fgets(name, sizeof(name), fp)) {
             /* Check if it's our T500RS FFB device */
-            if (strstr(name, "T500RS") && strstr(name, "FFB")) {
+            if (strstr(name, "T500RS") || (strstr(name, "T500") && strstr(name, "Force Feedback"))) {
                 snprintf(device, sizeof(device), "/dev/input/%s", entry->d_name);
                 fclose(fp);
                 closedir(dir);
@@ -523,8 +523,9 @@ int main(int argc, char **argv)
             printf("\nPlease specify device manually:\n");
             printf("Usage: %s /dev/input/eventX\n", argv[0]);
             printf("       %s --all  (run all tests)\n", argv[0]);
-            printf("\nTo find your device, run:\n");
-            printf("  sudo ./find_device.sh\n");
+            printf("\nTo find your device manually, check:\n");
+            printf("  ls -la /sys/class/input/event*/device/name\n");
+            printf("  cat /sys/class/input/event*/device/name | grep -i t500\n");
             return 1;
         }
     }
