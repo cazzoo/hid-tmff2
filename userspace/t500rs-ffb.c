@@ -92,8 +92,9 @@ static pthread_t force_update_thread;
 static int force_update_thread_running = 0;
 static unsigned int current_update_interval_us = 20000;  /* Start at 20ms (50Hz) */
 
-/* TEMPORARY: Disable ramp effects due to kernel crash bug */
-#define ENABLE_RAMP_EFFECTS 0
+/* Ramp effects now integrated into continuous update thread
+ * No longer need separate ramp thread - handled by force_update_thread */
+#define ENABLE_RAMP_EFFECTS 1
 
 /* USB hex debug logging - enable to see all USB packets */
 #define USB_HEX_DEBUG 0
@@ -1560,7 +1561,7 @@ static void *force_update_thread_func(void *arg)
         int forces[MAX_EFFECTS];  /* Array to hold individual forces for mixing */
         int force_count = 0;       /* Number of active constant force effects */
 
-        /* Calculate all active constant force effects */
+        /* Calculate all active constant force and ramp effects */
         for (int i = 0; i < MAX_EFFECTS; i++) {
             if (!effects[i].active) {
                 continue;
@@ -1581,6 +1582,41 @@ static void *force_update_thread_func(void *arg)
 
                 /* Apply per-effect-type gain */
                 force = apply_effect_gain(force, FF_CONSTANT);
+
+                /* Store target force for this effect */
+                effects[i].target_force = force;
+
+                /* Add to forces array for mixing */
+                if (force_count < MAX_EFFECTS) {
+                    forces[force_count++] = force;
+                }
+            }
+            else if (effects[i].is_ramp) {
+                /* Ramp effect - calculate current force based on elapsed time */
+                unsigned long elapsed_ms = get_elapsed_ms(&effects[i].start_time);
+
+                /* Calculate ramp progress */
+                int current_level = effects[i].ramp_start_level;
+                if (effects[i].ramp_duration_ms > 0 && elapsed_ms < effects[i].ramp_duration_ms) {
+                    /* Interpolate between start and end level */
+                    int delta = effects[i].ramp_end_level - effects[i].ramp_start_level;
+                    int progress = (elapsed_ms * delta) / effects[i].ramp_duration_ms;
+                    current_level = effects[i].ramp_start_level + progress;
+                } else if (elapsed_ms >= effects[i].ramp_duration_ms) {
+                    /* Ramp complete - use end level */
+                    current_level = effects[i].ramp_end_level;
+                }
+
+                force = current_level;
+
+                /* Apply envelope (attack/fade) */
+                force = apply_envelope(force, &effects[i]);
+
+                /* Apply global gain */
+                force = (force * current_gain) / 65535;
+
+                /* Apply per-effect-type gain */
+                force = apply_effect_gain(force, FF_RAMP);
 
                 /* Store target force for this effect */
                 effects[i].target_force = force;
@@ -2896,18 +2932,9 @@ int main(int argc, char **argv)
     }
     LOG_INFO("Force update thread created (20ms updates)");
 
-    /* Start ramp update thread */
-#if ENABLE_RAMP_EFFECTS
-    ramp_thread_running = 1;
-    if (pthread_create(&ramp_thread, NULL, ramp_update_thread_func, NULL) != 0) {
-        LOG_ERROR("Failed to create ramp update thread");
-        cleanup();
-        return 1;
-    }
-    LOG_DEBUG("Ramp update thread created");
-#else
-    LOG_INFO("Ramp effects disabled (ENABLE_RAMP_EFFECTS=0)");
-#endif
+    /* Ramp effects now handled by force_update_thread
+     * No need for separate ramp thread anymore */
+    LOG_INFO("Ramp effects enabled (integrated into force update thread)");
 
     /* Start input reading thread */
     if (pthread_create(&input_thread, NULL, input_reading_thread, NULL) != 0) {
