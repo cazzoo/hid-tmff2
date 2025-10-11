@@ -1,0 +1,30 @@
+#\!/bin/bash
+
+echo "=========================================="
+echo "T500RS Complete Effect Test Summary"
+echo "=========================================="
+echo ""
+echo "This will test all effect types."
+echo "Make sure the wheel is connected and driver is running."
+echo ""
+read -p "Press Enter to start testing..."
+
+echo ""
+echo "Running comprehensive effect test..."
+sudo ./test_all_effects
+
+echo ""
+echo "=========================================="
+echo "Test Complete\!"
+echo "=========================================="
+echo ""
+echo "Please verify:"
+echo "  ✓ Constant force works in both directions"
+echo "  ✓ Periodic effects (sine, triangle, square, sawtooth) work"
+echo "  ✓ Spring effect works"
+echo "  ✓ Damper effect works"
+echo "  ✓ Friction effect works"
+echo "  ✓ Inertia effect works"
+echo ""
+echo "If any effects don't work, please report which ones."
+echo ""

@@ -58,6 +58,10 @@ struct effect_state {
     int ramp_end_level;
     unsigned long ramp_duration_ms;
     struct timespec ramp_start_time;
+    /* Constant force state for continuous updates */
+    int is_constant;
+    int current_force_level;
+    struct timespec start_time;
 };
 
 static struct effect_state effects[MAX_EFFECTS];
@@ -66,6 +70,10 @@ static pthread_mutex_t effects_lock = PTHREAD_MUTEX_INITIALIZER;
 /* Ramp update thread */
 static pthread_t ramp_thread;
 static int ramp_thread_running = 0;
+
+/* Force update thread for continuous updates */
+static pthread_t force_update_thread;
+static int force_update_thread_running = 0;
 
 /* TEMPORARY: Disable ramp effects due to kernel crash bug */
 #define ENABLE_RAMP_EFFECTS 0
@@ -742,6 +750,13 @@ static int start_effect(int id)
         if (effects[id].effect.type == FF_CONSTANT) {
             is_constant = 1;
             force = effects[id].effect.u.constant.level;
+
+            /* Initialize constant force state for continuous updates */
+            effects[id].is_constant = 1;
+            effects[id].current_force_level = force;
+            clock_gettime(CLOCK_MONOTONIC, &effects[id].start_time);
+
+            LOG_DEBUG("Constant force initialized: level=%d", force);
         } else if (effects[id].effect.type == FF_PERIODIC) {
             is_periodic = 1;
             magnitude = effects[id].effect.u.periodic.magnitude;
@@ -811,6 +826,12 @@ static int stop_effect(int id)
     unsigned char buf[4];
 
     LOG_DEBUG("Stopping effect %d", id);
+
+    /* Clear constant force state (mutex already locked by caller) */
+    if (id >= 0 && id < MAX_EFFECTS) {
+        effects[id].is_constant = 0;
+        effects[id].current_force_level = 0;
+    }
 
     buf[0] = 0x41;
     buf[1] = id;
@@ -1159,6 +1180,81 @@ static int send_ramp_update(int id, unsigned short level, unsigned short duratio
     buf[8] = 0x00;
 
     return usb_send(buf, 9);
+}
+
+/* Force update thread - continuously updates constant force effects
+ * Sends Report 0x03 periodically to maintain force level
+ * This ensures smooth force feedback even if the application doesn't send updates
+ */
+static void *force_update_thread_func(void *arg)
+{
+    unsigned char buf[4];
+
+    LOG_DEBUG("Force update thread started");
+
+    while (force_update_thread_running) {
+        /* Check if we should continue */
+        if (!force_update_thread_running) break;
+
+        /* Try to lock with timeout to avoid deadlock */
+        if (pthread_mutex_trylock(&effects_lock) != 0) {
+            usleep(10000);  /* Wait 10ms and try again */
+            continue;
+        }
+
+        /* Check USB handle is valid */
+        if (!usb_handle) {
+            pthread_mutex_unlock(&effects_lock);
+            break;
+        }
+
+        /* Update all active constant force effects */
+        for (int i = 0; i < MAX_EFFECTS; i++) {
+            if (!effects[i].active || !effects[i].is_constant) {
+                continue;
+            }
+
+            /* Get current force level */
+            int force = effects[i].current_force_level;
+
+            /* Apply global gain */
+            force = (force * current_gain) / 65535;
+
+            /* Apply per-effect-type gain */
+            force = apply_effect_gain(force, FF_CONSTANT);
+
+            /* Convert to signed byte */
+            signed char signed_level = (signed char)((force * 127) / 32767);
+            unsigned char level = (unsigned char)signed_level;
+
+            /* Send Report 0x03 - Force level update */
+            buf[0] = 0x03;
+            buf[1] = 0x0e;
+            buf[2] = 0x00;
+            buf[3] = level;
+
+            /* Send without holding lock for too long */
+            pthread_mutex_unlock(&effects_lock);
+            usb_send(buf, 4);
+            pthread_mutex_lock(&effects_lock);
+
+            /* Check if we should still continue after sending */
+            if (!force_update_thread_running || !usb_handle) {
+                pthread_mutex_unlock(&effects_lock);
+                goto thread_exit;
+            }
+        }
+
+        pthread_mutex_unlock(&effects_lock);
+
+        /* Update every 20ms (50Hz) for smooth force feedback
+         * This matches typical game update rates */
+        usleep(20000);
+    }
+
+thread_exit:
+    LOG_DEBUG("Force update thread stopped");
+    return NULL;
 }
 
 /* Ramp update thread - continuously updates ramp effects */
@@ -1851,6 +1947,7 @@ static void process_uinput_events(void)
 #endif
                     effects[ev.code].active = 0;
                     effects[ev.code].is_ramp = 0;
+                    effects[ev.code].is_constant = 0;
                 }
             } else {
                 LOG_DEBUG("Invalid effect code: %d (max is %d)", ev.code, MAX_EFFECTS - 1);
@@ -1988,6 +2085,13 @@ static void cleanup(void)
         input_thread = 0;
     }
 
+    /* Stop force update thread */
+    if (force_update_thread_running) {
+        force_update_thread_running = 0;
+        pthread_join(force_update_thread, NULL);
+        LOG_DEBUG("Force update thread stopped");
+    }
+
     /* Stop ramp update thread */
     if (ramp_thread_running) {
         ramp_thread_running = 0;
@@ -2001,6 +2105,7 @@ static void cleanup(void)
             stop_effect(i);
             effects[i].active = 0;
             effects[i].is_ramp = 0;
+            effects[i].is_constant = 0;
         }
     }
     pthread_mutex_unlock(&effects_lock);
@@ -2371,6 +2476,15 @@ int main(int argc, char **argv)
     LOG_INFO("Device: /dev/input/eventX (check dmesg for exact number)");
     LOG_INFO("Press Ctrl+C to stop");
     LOG_INFO("");
+
+    /* Start force update thread for continuous force feedback */
+    force_update_thread_running = 1;
+    if (pthread_create(&force_update_thread, NULL, force_update_thread_func, NULL) != 0) {
+        LOG_ERROR("Failed to create force update thread");
+        cleanup();
+        return 1;
+    }
+    LOG_INFO("Force update thread created (20ms updates)");
 
     /* Start ramp update thread */
 #if ENABLE_RAMP_EFFECTS
