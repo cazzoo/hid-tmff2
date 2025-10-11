@@ -406,6 +406,78 @@ static unsigned int calculate_update_interval(int force_delta)
     }
 }
 
+/* Mix multiple force effects together
+ *
+ * Mixing strategies:
+ * 1. SIMPLE_ADD: Add all forces together (can exceed limits)
+ * 2. CLAMPED_ADD: Add and clamp to valid range
+ * 3. WEIGHTED_AVG: Average with weighting
+ * 4. PRIORITY: Use strongest effect only
+ *
+ * We use CLAMPED_ADD for realistic behavior
+ */
+enum mix_mode {
+    MIX_SIMPLE_ADD,    /* Simple addition */
+    MIX_CLAMPED_ADD,   /* Add and clamp */
+    MIX_WEIGHTED_AVG,  /* Weighted average */
+    MIX_PRIORITY       /* Strongest wins */
+};
+
+static int mix_forces(int *forces, int count, enum mix_mode mode)
+{
+    if (count == 0) return 0;
+    if (count == 1) return forces[0];
+
+    int result = 0;
+
+    switch (mode) {
+        case MIX_SIMPLE_ADD:
+            /* Simple addition - can overflow */
+            for (int i = 0; i < count; i++) {
+                result += forces[i];
+            }
+            break;
+
+        case MIX_CLAMPED_ADD:
+            /* Add all forces and clamp to valid range */
+            for (int i = 0; i < count; i++) {
+                result += forces[i];
+            }
+            if (result > 32767) result = 32767;
+            if (result < -32767) result = -32767;
+            break;
+
+        case MIX_WEIGHTED_AVG:
+            /* Weighted average - prevents overflow naturally */
+            for (int i = 0; i < count; i++) {
+                result += forces[i];
+            }
+            result = result / count;
+            break;
+
+        case MIX_PRIORITY:
+            /* Use strongest force only */
+            result = forces[0];
+            for (int i = 1; i < count; i++) {
+                if (abs(forces[i]) > abs(result)) {
+                    result = forces[i];
+                }
+            }
+            break;
+
+        default:
+            /* Default to clamped add */
+            for (int i = 0; i < count; i++) {
+                result += forces[i];
+            }
+            if (result > 32767) result = 32767;
+            if (result < -32767) result = -32767;
+            break;
+    }
+
+    return result;
+}
+
 /* Calculate periodic waveform value at given phase
  * Returns value in range -32767 to +32767
  *
@@ -1485,8 +1557,10 @@ static void *force_update_thread_func(void *arg)
         }
 
         int max_force_delta = 0;  /* Track largest force change for dynamic update rate */
+        int forces[MAX_EFFECTS];  /* Array to hold individual forces for mixing */
+        int force_count = 0;       /* Number of active constant force effects */
 
-        /* Update all active effects (constant and periodic) */
+        /* Calculate all active constant force effects */
         for (int i = 0; i < MAX_EFFECTS; i++) {
             if (!effects[i].active) {
                 continue;
@@ -1501,6 +1575,20 @@ static void *force_update_thread_func(void *arg)
 
                 /* Apply envelope (attack/fade) */
                 force = apply_envelope(force, &effects[i]);
+
+                /* Apply global gain */
+                force = (force * current_gain) / 65535;
+
+                /* Apply per-effect-type gain */
+                force = apply_effect_gain(force, FF_CONSTANT);
+
+                /* Store target force for this effect */
+                effects[i].target_force = force;
+
+                /* Add to forces array for mixing */
+                if (force_count < MAX_EFFECTS) {
+                    forces[force_count++] = force;
+                }
             }
             else if (effects[i].is_periodic) {
                 /* Periodic effects are handled by the device hardware
@@ -1517,53 +1605,52 @@ static void *force_update_thread_func(void *arg)
                 /* Other effect types (condition effects handled by device) */
                 continue;
             }
+        }
 
-            /* Apply global gain */
-            force = (force * current_gain) / 65535;
+        /* Mix all active constant force effects */
+        int combined_force = 0;
+        if (force_count > 0) {
+            /* Use clamped addition mixing mode
+             * This adds all forces together and clamps to valid range
+             * Provides realistic behavior when multiple effects overlap */
+            combined_force = mix_forces(forces, force_count, MIX_CLAMPED_ADD);
 
-            /* Apply per-effect-type gain */
-            int effect_type = effects[i].is_constant ? FF_CONSTANT : FF_PERIODIC;
-            force = apply_effect_gain(force, effect_type);
+            LOG_DEBUG("Mixed %d effects: combined_force=%d", force_count, combined_force);
+        }
 
-            /* Store target force for smoothing */
-            effects[i].target_force = force;
+        /* Apply force smoothing to the combined force
+         * This prevents sudden jumps when effects start/stop */
+        static int last_combined_force = 0;
+        combined_force = apply_force_smoothing(combined_force, last_combined_force);
 
-            /* Apply force smoothing ONLY to constant force effects
-             * Periodic effects should oscillate sharply without smoothing
-             * Otherwise the oscillations get dampened and feel too subtle */
-            if (effects[i].is_constant) {
-                force = apply_force_smoothing(force, effects[i].last_sent_force);
-            }
+        /* Track force delta for dynamic update rate */
+        int force_delta = abs(combined_force - last_combined_force);
+        if (force_delta > max_force_delta) {
+            max_force_delta = force_delta;
+        }
 
-            /* Track force delta for dynamic update rate */
-            int force_delta = abs(force - effects[i].last_sent_force);
-            if (force_delta > max_force_delta) {
-                max_force_delta = force_delta;
-            }
+        /* Update last combined force */
+        last_combined_force = combined_force;
 
-            /* Update last sent force */
-            effects[i].last_sent_force = force;
+        /* Convert to signed byte */
+        signed char signed_level = (signed char)((combined_force * 127) / 32767);
+        unsigned char level = (unsigned char)signed_level;
 
-            /* Convert to signed byte */
-            signed char signed_level = (signed char)((force * 127) / 32767);
-            unsigned char level = (unsigned char)signed_level;
+        /* Send Report 0x03 - Combined force level */
+        buf[0] = 0x03;
+        buf[1] = 0x0e;
+        buf[2] = 0x00;
+        buf[3] = level;
 
-            /* Send Report 0x03 - Force level update */
-            buf[0] = 0x03;
-            buf[1] = 0x0e;
-            buf[2] = 0x00;
-            buf[3] = level;
+        /* Send without holding lock for too long */
+        pthread_mutex_unlock(&effects_lock);
+        usb_send(buf, 4);
+        pthread_mutex_lock(&effects_lock);
 
-            /* Send without holding lock for too long */
+        /* Check if we should still continue after sending */
+        if (!force_update_thread_running || !usb_handle) {
             pthread_mutex_unlock(&effects_lock);
-            usb_send(buf, 4);
-            pthread_mutex_lock(&effects_lock);
-
-            /* Check if we should still continue after sending */
-            if (!force_update_thread_running || !usb_handle) {
-                pthread_mutex_unlock(&effects_lock);
-                goto thread_exit;
-            }
+            goto thread_exit;
         }
 
         pthread_mutex_unlock(&effects_lock);
