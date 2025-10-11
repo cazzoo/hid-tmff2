@@ -298,70 +298,12 @@ static int t500rs_initialize(void)
     if (ret) return ret;
     usleep(100000);
 
-    LOG_INFO("Sending USB control requests for mode switch...");
+    /* NOTE: USB control transfers (request 73, 83) are NOT needed for mode switch
+     * The Windows driver does NOT send these control transfers
+     * Mode switch is triggered purely by the HID interrupt transfers above
+     * The device will disconnect and reconnect automatically after receiving the init sequence */
 
-    /* USB CONTROL REQUEST - Get Model ID
-     * This is the critical step that queries the device for its model
-     * bRequestType: 0xc1 (device-to-host, vendor, device)
-     * bRequest: 73
-     * wValue: 0
-     * wIndex: 0
-     * wLength: 16 bytes
-     */
-    unsigned char model_response[16];
-    memset(model_response, 0, sizeof(model_response));
-    
-    ret = libusb_control_transfer(usb_handle,
-        0xc1,  /* bmRequestType: IN, vendor, device */
-        73,    /* bRequest */
-        0,     /* wValue */
-        0,     /* wIndex */
-        model_response,
-        16,    /* wLength */
-        5000); /* timeout ms */
-    
-    if (ret < 0) {
-        LOG_ERROR("Failed to get model ID: %s", libusb_error_name(ret));
-        return ret;
-    }
-    
-    LOG_INFO("Model ID response received (%d bytes)", ret);
-    if (ret >= 2) {
-        LOG_INFO("Response type: 0x%02x%02x", model_response[1], model_response[0]);
-    }
-    
-    /* USB CONTROL REQUEST - Switch Mode
-     * This triggers the actual mode switch from boot mode to normal mode
-     * bRequestType: 0x41 (host-to-device, vendor, device)
-     * bRequest: 83
-     * wValue: 0x0002 (T500RS switch value)
-     * wIndex: 0
-     * wLength: 0
-     */
-    LOG_INFO("Sending mode switch control request (value=0x0002)...");
-    
-    ret = libusb_control_transfer(usb_handle,
-        0x41,  /* bmRequestType: OUT, vendor, device */
-        83,    /* bRequest */
-        0x0002,/* wValue - T500RS switch value */
-        0,     /* wIndex */
-        NULL,  /* no data */
-        0,     /* wLength */
-        5000); /* timeout ms */
-    
-    if (ret < 0) {
-        /* Device may disconnect before responding - this is normal */
-        if (ret == LIBUSB_ERROR_NO_DEVICE || ret == LIBUSB_ERROR_PIPE || ret == LIBUSB_ERROR_IO) {
-            LOG_INFO("Device disconnected during mode switch (expected behavior)");
-        } else {
-            LOG_ERROR("Mode switch control request failed: %s", libusb_error_name(ret));
-            return ret;
-        }
-    } else {
-        LOG_INFO("Mode switch control request sent successfully");
-    }
-
-    LOG_INFO("Initialization complete (mode switch triggered)");
+    LOG_INFO("Initialization complete (mode switch commands sent)");
     return 0;
 }
 
