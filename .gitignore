@@ -11,4 +11,4 @@ userspace/t500rs-ffb
 userspace/test_all_effects
 userspace/test_input_reading
 userspace/list_input_devices
-captures/*
+#captures/*

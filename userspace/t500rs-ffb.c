@@ -307,6 +307,44 @@ static int t500rs_initialize(void)
     return 0;
 }
 
+/* Send Report 0x02 continuous force update
+ * Based on USB capture analysis:
+ * - Bytes 3-4: Force magnitude (0-1500, little-endian)
+ * - Byte 5: Direction flag (0x5e or 0x3f)
+ * - Byte 8: Constant 0x21
+ */
+static int send_force_update(int force_level)
+{
+    unsigned char buf[9];
+    int ret;
+
+    /* Calculate magnitude (0-1500 range from captures) */
+    unsigned int magnitude = (abs(force_level) * 1500) / 32767;
+
+    /* Determine direction flag based on force sign
+     * From TShark analysis: 0x5e and 0x3f are the two values seen
+     * Testing needed to determine which is which direction */
+    unsigned char direction = (force_level >= 0) ? 0x5e : 0x3f;
+
+    memset(buf, 0, sizeof(buf));
+    buf[0] = 0x02;
+    buf[1] = 0x1c;
+    buf[2] = 0x00;
+    buf[3] = magnitude & 0xff;        /* Magnitude low byte */
+    buf[4] = (magnitude >> 8) & 0xff; /* Magnitude high byte */
+    buf[5] = direction;                /* Direction flag */
+    buf[6] = 0x00;
+    buf[7] = 0x00;
+    buf[8] = 0x21;                     /* Constant from captures */
+
+    ret = usb_send(buf, 9);
+
+    LOG_DEBUG("Force update: level=%d, magnitude=%u (0x%04x), direction=0x%02x",
+              force_level, magnitude, magnitude, direction);
+
+    return ret;
+}
+
 /* Upload constant force effect */
 static int upload_constant_effect(int id, struct ff_effect *effect)
 {
@@ -319,28 +357,20 @@ static int upload_constant_effect(int id, struct ff_effect *effect)
     LOG_DEBUG("Uploading constant effect %d, force=%d (after gain: %d)",
               id, effect->u.constant.level, level);
 
-    /* Report 0x02 - Envelope (attack/fade) - use defaults */
+    /* Report 0x02 - Envelope (attack/fade) - use defaults for now
+     * NOTE: This is also used for continuous updates during playback
+     * For upload, we send with zeros (envelope parameters) */
     memset(buf, 0, sizeof(buf));
     buf[0] = 0x02;
     buf[1] = 0x1c;
     buf[2] = 0x00;
-    buf[3] = 0x00;
-    buf[4] = 0x00;
-    buf[5] = 0x00;
-    buf[6] = 0x00;
-    buf[7] = 0x00;
-    buf[8] = 0x00;
+    buf[3] = 0x00;  /* Attack length low */
+    buf[4] = 0x00;  /* Attack length high */
+    buf[5] = 0x00;  /* Attack level */
+    buf[6] = 0x00;  /* Fade length low */
+    buf[7] = 0x00;  /* Fade length high */
+    buf[8] = 0x00;  /* Fade level */
     ret = usb_send(buf, 9);
-    if (ret) return ret;
-    usleep(5000);
-
-    /* Report 0x03 - Force level (set to 0 initially, will be set on play) */
-    memset(buf, 0, sizeof(buf));
-    buf[0] = 0x03;
-    buf[1] = 0x0e;
-    buf[2] = 0x00;
-    buf[3] = 0x00;  /* Will be set when effect starts */
-    ret = usb_send(buf, 4);
     if (ret) return ret;
     usleep(5000);
 
@@ -714,50 +744,18 @@ static int start_effect(int id)
         }
     }
 
-    /* For constant force, set the level before starting
-     * CRITICAL FIX: Send SIGNED force value!
-     * The direction is encoded in the sign of buf[3], not in buf[2] of Report 0x41!
-     * 
-     * Mapping:
-     *   Positive force (-32767 to 0)    → buf[3] = 128-255 (0x80-0xFF) → LEFT pull
-     *   Negative force (0 to +32767)    → buf[3] = 0-127   (0x00-0x7F) → RIGHT pull
-     * 
-     * OR the opposite - we'll test!
+    /* For constant force, send Report 0x02 continuous update
+     * Based on USB capture analysis, Report 0x02 is used for continuous force updates
+     * NOT Report 0x03 (which was not found in TShark analysis)
      */
     if (is_constant) {
-        /* Map signed force to signed byte (-128 to +127)
-         * Then cast to unsigned to preserve bit pattern */
-        signed char signed_level = (signed char)((force * 127) / 32767);
-        unsigned char level = (unsigned char)signed_level;
-
-        /* Report 0x03 - Set force level (SIGNED!) */
-        buf[0] = 0x03;
-        buf[1] = 0x0e;
-        buf[2] = 0x00;
-        buf[3] = level;  /* Now contains signed value! */
-        ret = usb_send(buf, 4);
+        ret = send_force_update(force);
         if (ret) return ret;
         usleep(5000);
-
-        LOG_DEBUG("Set constant force level to 0x%02x (force=%d, signed_level=%d)", 
-                  level, force, signed_level);
     }
 
-    /* For periodic effects, also set magnitude via Report 0x03 */
-    if (is_periodic) {
-        unsigned char mag = (abs(magnitude) * 127) / 32767;
-
-        /* Report 0x03 - Set magnitude */
-        buf[0] = 0x03;
-        buf[1] = 0x0e;
-        buf[2] = 0x00;
-        buf[3] = mag;
-        ret = usb_send(buf, 4);
-        if (ret) return ret;
-        usleep(5000);
-
-        LOG_DEBUG("Set periodic magnitude to 0x%02x", mag);
-    }
+    /* For periodic effects, magnitude is set via Report 0x04 during upload
+     * No need to send anything here */
 
     /* Ramp effects don't need Report 0x03 - the ramp is in Report 0x04 */
 
