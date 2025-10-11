@@ -345,6 +345,14 @@ static int apply_envelope(int force_level, struct effect_state *state)
 {
     unsigned long elapsed_ms = get_elapsed_ms(&state->start_time);
     int adjusted_force = force_level;
+    static unsigned long last_log_ms = 0;
+    int should_log = 0;
+
+    /* Log every 100ms to avoid spam */
+    if (elapsed_ms - last_log_ms >= 100) {
+        should_log = 1;
+        last_log_ms = elapsed_ms;
+    }
 
     /* Attack phase - ramp up from attack_level to full force */
     if (state->attack_length_ms > 0 && elapsed_ms < state->attack_length_ms) {
@@ -355,8 +363,11 @@ static int apply_envelope(int force_level, struct effect_state *state)
         int attack_force = (force_level * state->attack_level) / 65535;
         adjusted_force = attack_force + ((force_level - attack_force) * progress) / 65535;
 
-        LOG_DEBUG("Attack phase: elapsed=%lums, progress=%u, force=%d->%d",
-                  elapsed_ms, progress, force_level, adjusted_force);
+        if (should_log) {
+            LOG_INFO("ENVELOPE ATTACK: elapsed=%lums/%ums, progress=%u%%, force=%d->%d",
+                      elapsed_ms, state->attack_length_ms, (progress * 100) / 65535,
+                      force_level, adjusted_force);
+        }
     }
     /* Fade phase - ramp down from full force to fade_level */
     else if (state->fade_length_ms > 0 && state->duration_ms > 0) {
@@ -371,8 +382,11 @@ static int apply_envelope(int force_level, struct effect_state *state)
             int fade_force = (force_level * state->fade_level) / 65535;
             adjusted_force = force_level - ((force_level - fade_force) * progress) / 65535;
 
-            LOG_DEBUG("Fade phase: elapsed=%lums, progress=%u, force=%d->%d",
-                      fade_elapsed, progress, force_level, adjusted_force);
+            if (should_log) {
+                LOG_INFO("ENVELOPE FADE: elapsed=%lums/%ums, progress=%u%%, force=%d->%d",
+                          fade_elapsed, state->fade_length_ms, (progress * 100) / 65535,
+                          force_level, adjusted_force);
+            }
         }
     }
 
