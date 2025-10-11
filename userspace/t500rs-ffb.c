@@ -68,6 +68,16 @@ struct effect_state {
     unsigned int fade_length_ms;
     unsigned int fade_level;
     unsigned int duration_ms;
+    /* Force smoothing */
+    int last_sent_force;  /* Last force value sent to device */
+    int target_force;     /* Target force after envelope/gain */
+    /* Periodic effect state */
+    int is_periodic;
+    unsigned int periodic_magnitude;
+    int periodic_offset;
+    unsigned int periodic_phase;
+    unsigned int periodic_period_ms;
+    int periodic_waveform;  /* FF_SINE, FF_TRIANGLE, etc. */
 };
 
 static struct effect_state effects[MAX_EFFECTS];
@@ -80,6 +90,7 @@ static int ramp_thread_running = 0;
 /* Force update thread for continuous updates */
 static pthread_t force_update_thread;
 static int force_update_thread_running = 0;
+static unsigned int current_update_interval_us = 20000;  /* Start at 20ms (50Hz) */
 
 /* TEMPORARY: Disable ramp effects due to kernel crash bug */
 #define ENABLE_RAMP_EFFECTS 0
@@ -331,6 +342,145 @@ static unsigned long get_elapsed_ms(struct timespec *start_time)
     long elapsed_nsec = now.tv_nsec - start_time->tv_nsec;
 
     return (elapsed_sec * 1000) + (elapsed_nsec / 1000000);
+}
+
+/* Apply force smoothing to prevent sudden jumps
+ * Uses exponential smoothing: new = old + (target - old) * factor
+ *
+ * Smoothing factor determines responsiveness:
+ * - 1.0 = instant (no smoothing)
+ * - 0.5 = moderate smoothing
+ * - 0.2 = heavy smoothing
+ *
+ * We use 0.3 for good balance between responsiveness and smoothness
+ */
+static int apply_force_smoothing(int target_force, int last_force)
+{
+    /* Smoothing factor (0.0 to 1.0, scaled to 0-65535) */
+    const int smoothing_factor = 19660;  /* ~0.3 * 65535 */
+
+    /* Calculate force delta */
+    int delta = target_force - last_force;
+
+    /* Apply smoothing: new = old + delta * factor */
+    int smoothed_delta = (delta * smoothing_factor) / 65535;
+    int smoothed_force = last_force + smoothed_delta;
+
+    /* For very small deltas, just use target to avoid drift */
+    if (abs(delta) < 100) {
+        smoothed_force = target_force;
+    }
+
+    return smoothed_force;
+}
+
+/* Calculate optimal update interval based on force change rate
+ * Returns interval in microseconds
+ *
+ * Fast changes (large delta) → faster updates (10ms = 100Hz)
+ * Slow changes (small delta) → slower updates (40ms = 25Hz)
+ * No change → slowest updates (50ms = 20Hz)
+ *
+ * This optimizes CPU usage while maintaining responsiveness
+ */
+static unsigned int calculate_update_interval(int force_delta)
+{
+    int abs_delta = abs(force_delta);
+
+    /* Thresholds for different update rates */
+    if (abs_delta > 5000) {
+        /* Large change - very fast updates (100Hz) */
+        return 10000;  /* 10ms */
+    } else if (abs_delta > 2000) {
+        /* Medium change - fast updates (66Hz) */
+        return 15000;  /* 15ms */
+    } else if (abs_delta > 500) {
+        /* Small change - normal updates (50Hz) */
+        return 20000;  /* 20ms */
+    } else if (abs_delta > 100) {
+        /* Tiny change - slow updates (33Hz) */
+        return 30000;  /* 30ms */
+    } else {
+        /* No significant change - slowest updates (25Hz) */
+        return 40000;  /* 40ms */
+    }
+}
+
+/* Calculate periodic waveform value at given phase
+ * Returns value in range -32767 to +32767
+ *
+ * Phase is 0-65535 representing 0-360 degrees
+ */
+static int calculate_periodic_waveform(int waveform, unsigned int phase, int magnitude, int offset)
+{
+    int value = 0;
+
+    switch (waveform) {
+        case FF_SINE:
+            /* Sine wave: smooth oscillation */
+            /* Use lookup table or approximation for efficiency */
+            /* Simple approximation: sin(x) ≈ x for small x */
+            /* For now, use triangle as approximation */
+            /* TODO: Implement proper sine calculation */
+            if (phase < 16384) {
+                /* 0-90 degrees: rising */
+                value = (phase * 32767) / 16384;
+            } else if (phase < 49152) {
+                /* 90-270 degrees: falling */
+                value = 32767 - ((phase - 16384) * 65534) / 32768;
+            } else {
+                /* 270-360 degrees: rising */
+                value = -32767 + ((phase - 49152) * 32767) / 16384;
+            }
+            break;
+
+        case FF_TRIANGLE:
+            /* Triangle wave: linear ramp up and down */
+            if (phase < 32768) {
+                /* First half: ramp up from -max to +max */
+                value = -32767 + (phase * 65534) / 32768;
+            } else {
+                /* Second half: ramp down from +max to -max */
+                value = 32767 - ((phase - 32768) * 65534) / 32768;
+            }
+            break;
+
+        case FF_SQUARE:
+            /* Square wave: instant switch between -max and +max */
+            value = (phase < 32768) ? 32767 : -32767;
+            break;
+
+        case FF_SAW_UP:
+            /* Sawtooth up: linear ramp from -max to +max */
+            value = -32767 + (phase * 65534) / 65535;
+            break;
+
+        case FF_SAW_DOWN:
+            /* Sawtooth down: linear ramp from +max to -max */
+            value = 32767 - (phase * 65534) / 65535;
+            break;
+
+        default:
+            /* Unknown waveform, use triangle */
+            if (phase < 32768) {
+                value = -32767 + (phase * 65534) / 32768;
+            } else {
+                value = 32767 - ((phase - 32768) * 65534) / 32768;
+            }
+            break;
+    }
+
+    /* Apply magnitude (scale the waveform) */
+    value = (value * magnitude) / 32767;
+
+    /* Apply offset (shift the waveform up/down) */
+    value += offset;
+
+    /* Clamp to valid range */
+    if (value > 32767) value = 32767;
+    if (value < -32767) value = -32767;
+
+    return value;
 }
 
 /* Apply envelope to force level
@@ -863,6 +1013,26 @@ static int start_effect(int id)
         } else if (effects[id].effect.type == FF_PERIODIC) {
             is_periodic = 1;
             magnitude = effects[id].effect.u.periodic.magnitude;
+
+            /* Initialize periodic effect state for continuous updates */
+            effects[id].is_periodic = 1;
+            effects[id].periodic_magnitude = effects[id].effect.u.periodic.magnitude;
+            effects[id].periodic_offset = effects[id].effect.u.periodic.offset;
+            effects[id].periodic_phase = effects[id].effect.u.periodic.phase;
+            effects[id].periodic_period_ms = effects[id].effect.u.periodic.period;
+            effects[id].periodic_waveform = effects[id].effect.u.periodic.waveform;
+            clock_gettime(CLOCK_MONOTONIC, &effects[id].start_time);
+
+            /* Initialize envelope parameters for periodic effect */
+            effects[id].attack_length_ms = effects[id].effect.u.periodic.envelope.attack_length;
+            effects[id].attack_level = effects[id].effect.u.periodic.envelope.attack_level;
+            effects[id].fade_length_ms = effects[id].effect.u.periodic.envelope.fade_length;
+            effects[id].fade_level = effects[id].effect.u.periodic.envelope.fade_level;
+            effects[id].duration_ms = effects[id].effect.replay.length;
+
+            LOG_DEBUG("Periodic effect initialized: waveform=%d, mag=%d, offset=%d, period=%ums",
+                      effects[id].periodic_waveform, effects[id].periodic_magnitude,
+                      effects[id].periodic_offset, effects[id].periodic_period_ms);
         } else if (effects[id].effect.type == FF_RAMP) {
             is_ramp = 1;
             ramp_start = effects[id].effect.u.ramp.start_level;
@@ -930,10 +1100,13 @@ static int stop_effect(int id)
 
     LOG_DEBUG("Stopping effect %d", id);
 
-    /* Clear constant force state (mutex already locked by caller) */
+    /* Clear effect state (mutex already locked by caller) */
     if (id >= 0 && id < MAX_EFFECTS) {
         effects[id].is_constant = 0;
+        effects[id].is_periodic = 0;
         effects[id].current_force_level = 0;
+        effects[id].last_sent_force = 0;
+        effects[id].target_force = 0;
     }
 
     buf[0] = 0x41;
@@ -1311,23 +1484,75 @@ static void *force_update_thread_func(void *arg)
             break;
         }
 
-        /* Update all active constant force effects */
+        int max_force_delta = 0;  /* Track largest force change for dynamic update rate */
+
+        /* Update all active effects (constant and periodic) */
         for (int i = 0; i < MAX_EFFECTS; i++) {
-            if (!effects[i].active || !effects[i].is_constant) {
+            if (!effects[i].active) {
                 continue;
             }
 
-            /* Get current force level */
-            int force = effects[i].current_force_level;
+            int force = 0;
 
-            /* Apply envelope (attack/fade) */
-            force = apply_envelope(force, &effects[i]);
+            /* Calculate force based on effect type */
+            if (effects[i].is_constant) {
+                /* Constant force effect */
+                force = effects[i].current_force_level;
+
+                /* Apply envelope (attack/fade) */
+                force = apply_envelope(force, &effects[i]);
+            }
+            else if (effects[i].is_periodic) {
+                /* Periodic effect - calculate waveform */
+                unsigned long elapsed_ms = get_elapsed_ms(&effects[i].start_time);
+
+                /* Calculate current phase based on elapsed time and period */
+                unsigned int phase = 0;
+                if (effects[i].periodic_period_ms > 0) {
+                    unsigned long phase_ms = elapsed_ms % effects[i].periodic_period_ms;
+                    phase = (phase_ms * 65535) / effects[i].periodic_period_ms;
+                }
+
+                /* Add initial phase offset */
+                phase = (phase + effects[i].periodic_phase) % 65536;
+
+                /* Calculate waveform value */
+                force = calculate_periodic_waveform(
+                    effects[i].periodic_waveform,
+                    phase,
+                    effects[i].periodic_magnitude,
+                    effects[i].periodic_offset
+                );
+
+                /* Apply envelope to periodic effect */
+                force = apply_envelope(force, &effects[i]);
+            }
+            else {
+                /* Other effect types (condition effects handled by device) */
+                continue;
+            }
 
             /* Apply global gain */
             force = (force * current_gain) / 65535;
 
             /* Apply per-effect-type gain */
-            force = apply_effect_gain(force, FF_CONSTANT);
+            int effect_type = effects[i].is_constant ? FF_CONSTANT : FF_PERIODIC;
+            force = apply_effect_gain(force, effect_type);
+
+            /* Store target force for smoothing */
+            effects[i].target_force = force;
+
+            /* Apply force smoothing */
+            force = apply_force_smoothing(force, effects[i].last_sent_force);
+
+            /* Track force delta for dynamic update rate */
+            int force_delta = abs(force - effects[i].last_sent_force);
+            if (force_delta > max_force_delta) {
+                max_force_delta = force_delta;
+            }
+
+            /* Update last sent force */
+            effects[i].last_sent_force = force;
 
             /* Convert to signed byte */
             signed char signed_level = (signed char)((force * 127) / 32767);
@@ -1353,9 +1578,9 @@ static void *force_update_thread_func(void *arg)
 
         pthread_mutex_unlock(&effects_lock);
 
-        /* Update every 20ms (50Hz) for smooth force feedback
-         * This matches typical game update rates */
-        usleep(20000);
+        /* Dynamic update rate based on force change */
+        current_update_interval_us = calculate_update_interval(max_force_delta);
+        usleep(current_update_interval_us);
     }
 
 thread_exit:
@@ -2054,6 +2279,7 @@ static void process_uinput_events(void)
                     effects[ev.code].active = 0;
                     effects[ev.code].is_ramp = 0;
                     effects[ev.code].is_constant = 0;
+                    effects[ev.code].is_periodic = 0;
                 }
             } else {
                 LOG_DEBUG("Invalid effect code: %d (max is %d)", ev.code, MAX_EFFECTS - 1);
@@ -2212,6 +2438,7 @@ static void cleanup(void)
             effects[i].active = 0;
             effects[i].is_ramp = 0;
             effects[i].is_constant = 0;
+            effects[i].is_periodic = 0;
         }
     }
     pthread_mutex_unlock(&effects_lock);
