@@ -62,6 +62,12 @@ struct effect_state {
     int is_constant;
     int current_force_level;
     struct timespec start_time;
+    /* Envelope parameters */
+    unsigned int attack_length_ms;
+    unsigned int attack_level;
+    unsigned int fade_length_ms;
+    unsigned int fade_level;
+    unsigned int duration_ms;
 };
 
 static struct effect_state effects[MAX_EFFECTS];
@@ -315,6 +321,64 @@ static int t500rs_initialize(void)
     return 0;
 }
 
+/* Calculate elapsed time in milliseconds */
+static unsigned long get_elapsed_ms(struct timespec *start_time)
+{
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+
+    unsigned long elapsed_sec = now.tv_sec - start_time->tv_sec;
+    long elapsed_nsec = now.tv_nsec - start_time->tv_nsec;
+
+    return (elapsed_sec * 1000) + (elapsed_nsec / 1000000);
+}
+
+/* Apply envelope to force level
+ * Implements attack and fade based on elapsed time
+ *
+ * Attack: Ramps force from attack_level to full force over attack_length
+ * Fade: Ramps force from full force to fade_level over fade_length
+ *
+ * Returns: Envelope-adjusted force level
+ */
+static int apply_envelope(int force_level, struct effect_state *state)
+{
+    unsigned long elapsed_ms = get_elapsed_ms(&state->start_time);
+    int adjusted_force = force_level;
+
+    /* Attack phase - ramp up from attack_level to full force */
+    if (state->attack_length_ms > 0 && elapsed_ms < state->attack_length_ms) {
+        /* Calculate attack progress (0-65535) */
+        unsigned int progress = (elapsed_ms * 65535) / state->attack_length_ms;
+
+        /* Interpolate from attack_level to full force */
+        int attack_force = (force_level * state->attack_level) / 65535;
+        adjusted_force = attack_force + ((force_level - attack_force) * progress) / 65535;
+
+        LOG_DEBUG("Attack phase: elapsed=%lums, progress=%u, force=%d->%d",
+                  elapsed_ms, progress, force_level, adjusted_force);
+    }
+    /* Fade phase - ramp down from full force to fade_level */
+    else if (state->fade_length_ms > 0 && state->duration_ms > 0) {
+        unsigned long fade_start_ms = state->duration_ms - state->fade_length_ms;
+
+        if (elapsed_ms >= fade_start_ms) {
+            /* Calculate fade progress (0-65535) */
+            unsigned long fade_elapsed = elapsed_ms - fade_start_ms;
+            unsigned int progress = (fade_elapsed * 65535) / state->fade_length_ms;
+
+            /* Interpolate from full force to fade_level */
+            int fade_force = (force_level * state->fade_level) / 65535;
+            adjusted_force = force_level - ((force_level - fade_force) * progress) / 65535;
+
+            LOG_DEBUG("Fade phase: elapsed=%lums, progress=%u, force=%d->%d",
+                      fade_elapsed, progress, force_level, adjusted_force);
+        }
+    }
+
+    return adjusted_force;
+}
+
 /* Send Report 0x02 continuous force update
  * Based on USB capture analysis:
  * - Bytes 3-4: SIGNED force value (little-endian, -1500 to +1500)
@@ -323,6 +387,8 @@ static int t500rs_initialize(void)
  *
  * TESTING RESULT: Direction flag alone doesn't work - both pull same direction
  * HYPOTHESIS: Bytes 3-4 should be SIGNED value, not unsigned magnitude
+ *
+ * NOTE: This function is currently unused - we use Report 0x03 instead
  */
 static int send_force_update(int force_level)
 {
@@ -372,22 +438,34 @@ static int upload_constant_effect(int id, struct ff_effect *effect)
     LOG_DEBUG("Uploading constant effect %d, force=%d (after gain: %d)",
               id, effect->u.constant.level, level);
 
-    /* Report 0x02 - Envelope (attack/fade) - use defaults for now
-     * NOTE: This is also used for continuous updates during playback
-     * For upload, we send with zeros (envelope parameters) */
+    /* Report 0x02 - Envelope (attack/fade)
+     * Format from manual analysis:
+     * - Bytes 3-4: Attack length (milliseconds, little-endian)
+     * - Byte 5: Attack level (0-127, scaled from 0-65535)
+     * - Bytes 6-7: Fade length (milliseconds, little-endian)
+     * - Byte 8: Fade level (0-127, scaled from 0-65535)
+     */
+    unsigned short attack_len = effect->u.constant.envelope.attack_length;
+    unsigned char attack_lvl = (effect->u.constant.envelope.attack_level * 127) / 65535;
+    unsigned short fade_len = effect->u.constant.envelope.fade_length;
+    unsigned char fade_lvl = (effect->u.constant.envelope.fade_level * 127) / 65535;
+
     memset(buf, 0, sizeof(buf));
     buf[0] = 0x02;
     buf[1] = 0x1c;
     buf[2] = 0x00;
-    buf[3] = 0x00;  /* Attack length low */
-    buf[4] = 0x00;  /* Attack length high */
-    buf[5] = 0x00;  /* Attack level */
-    buf[6] = 0x00;  /* Fade length low */
-    buf[7] = 0x00;  /* Fade length high */
-    buf[8] = 0x00;  /* Fade level */
+    buf[3] = attack_len & 0xff;        /* Attack length low */
+    buf[4] = (attack_len >> 8) & 0xff; /* Attack length high */
+    buf[5] = attack_lvl;                /* Attack level */
+    buf[6] = fade_len & 0xff;          /* Fade length low */
+    buf[7] = (fade_len >> 8) & 0xff;   /* Fade length high */
+    buf[8] = fade_lvl;                  /* Fade level */
     ret = usb_send(buf, 9);
     if (ret) return ret;
     usleep(5000);
+
+    LOG_DEBUG("Envelope: attack=%ums@%u, fade=%ums@%u",
+              attack_len, attack_lvl, fade_len, fade_lvl);
 
     /* Report 0x01 - Main effect upload */
     memset(buf, 0, sizeof(buf));
@@ -756,7 +834,18 @@ static int start_effect(int id)
             effects[id].current_force_level = force;
             clock_gettime(CLOCK_MONOTONIC, &effects[id].start_time);
 
-            LOG_DEBUG("Constant force initialized: level=%d", force);
+            /* Initialize envelope parameters */
+            effects[id].attack_length_ms = effects[id].effect.u.constant.envelope.attack_length;
+            effects[id].attack_level = effects[id].effect.u.constant.envelope.attack_level;
+            effects[id].fade_length_ms = effects[id].effect.u.constant.envelope.fade_length;
+            effects[id].fade_level = effects[id].effect.u.constant.envelope.fade_level;
+            effects[id].duration_ms = effects[id].effect.replay.length;
+
+            LOG_DEBUG("Constant force initialized: level=%d, attack=%ums@%u, fade=%ums@%u, duration=%ums",
+                      force,
+                      effects[id].attack_length_ms, effects[id].attack_level,
+                      effects[id].fade_length_ms, effects[id].fade_level,
+                      effects[id].duration_ms);
         } else if (effects[id].effect.type == FF_PERIODIC) {
             is_periodic = 1;
             magnitude = effects[id].effect.u.periodic.magnitude;
@@ -1216,6 +1305,9 @@ static void *force_update_thread_func(void *arg)
 
             /* Get current force level */
             int force = effects[i].current_force_level;
+
+            /* Apply envelope (attack/fade) */
+            force = apply_envelope(force, &effects[i]);
 
             /* Apply global gain */
             force = (force * current_gain) / 65535;
