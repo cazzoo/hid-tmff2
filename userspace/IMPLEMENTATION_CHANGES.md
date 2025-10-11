@@ -4,88 +4,112 @@
 
 Implementation of improvements based on comprehensive USB capture analysis.
 
+## CORRECTION: Report 0x03 IS Correct! ✅
+
+**Initial Analysis Error:**
+- TShark analysis of one capture didn't show Report 0x03
+- Incorrectly concluded Report 0x03 was not used
+- Attempted to use Report 0x02 for continuous updates
+
+**Manual Analysis Shows Truth:**
+- Report 0x03 IS used for constant force level
+- Manual captures clearly show: `03 0e 00 [level]`
+- Report 0x02 is for envelope parameters only
+
+**Testing Confirmed:**
+- Report 0x03 with signed encoding works perfectly ✅
+- Positive values (0x01-0x7F) pull LEFT
+- Negative values (0x80-0xFF) pull RIGHT
+
 ## Changes Implemented
 
-### 1. Report 0x02 - Fixed Format for Continuous Updates ✅
+### 1. Report 0x03 - Constant Force Level (RESTORED) ✅
 
-**Previous Implementation:**
+**Format (from manual analysis):**
 ```c
-// Sent once during upload with all zeros
-buf[0] = 0x02;
-buf[1] = 0x1c;
-buf[2] = 0x00;
-buf[3] = 0x00;  // All zeros
-buf[4] = 0x00;
-buf[5] = 0x00;
-buf[6] = 0x00;
-buf[7] = 0x00;
-buf[8] = 0x00;
-```
-
-**New Implementation:**
-```c
-// New function: send_force_update()
-// Sends continuous force updates with proper format
-buf[0] = 0x02;
-buf[1] = 0x1c;
-buf[2] = 0x00;
-buf[3] = magnitude & 0xff;        // Magnitude low byte (0-1500)
-buf[4] = (magnitude >> 8) & 0xff; // Magnitude high byte
-buf[5] = direction;                // 0x5e or 0x3f based on force sign
-buf[6] = 0x00;
-buf[7] = 0x00;
-buf[8] = 0x21;                     // Constant from captures
-```
-
-**Changes:**
-- Added `send_force_update()` function
-- Magnitude scaled to 0-1500 range (from USB captures)
-- Direction flag: 0x5e for positive force, 0x3f for negative
-- Byte 8 set to 0x21 (constant from captures)
-
-**Status:** ✅ Implemented
-
-### 2. Removed Report 0x03 Usage ✅
-
-**Previous Implementation:**
-```c
-// Used Report 0x03 to set force level
+// Report 0x03 - Set constant force level
 buf[0] = 0x03;
 buf[1] = 0x0e;
 buf[2] = 0x00;
-buf[3] = level;  // Signed force level
+buf[3] = level;  // SIGNED byte (-128 to +127)
 ```
 
-**New Implementation:**
-- Removed Report 0x03 from `start_effect()`
-- Replaced with `send_force_update()` using Report 0x02
-- Report 0x03 not found in TShark analysis of Windows captures
+**Encoding:**
+- Positive values (0x01-0x7F) = LEFT pull
+- Negative values (0x80-0xFF) = RIGHT pull
+- 0xFF = neutral/middle (-1 signed)
 
-**Rationale:**
-- TShark analysis found NO Report 0x03 in Windows USB captures
-- Windows driver uses Report 0x02 for continuous updates
-- Report 0x03 may not be correct protocol
+**Examples from manual captures:**
+```
+03 0e 00 01  // +1   = left small
+03 0e 00 29  // +41  = left bigger
+03 0e 00 cc  // -52  = right bigger
+03 0e 00 ff  // -1   = middle/neutral
+```
 
-**Status:** ✅ Implemented
+**Implementation:**
+```c
+signed char signed_level = (signed char)((force * 127) / 32767);
+unsigned char level = (unsigned char)signed_level;
 
-### 3. Report 0x05 - Already Correct ✅
+buf[0] = 0x03;
+buf[1] = 0x0e;
+buf[2] = 0x00;
+buf[3] = level;
+```
+
+**Testing Results:**
+- Positive force (+16000) → level = +62 (0x3E) → pulls LEFT ✅
+- Negative force (-16000) → level = -62 (0xC2) → pulls RIGHT ✅
+
+**Status:** ✅ Verified working
+
+### 2. Report 0x02 - Envelope Only (NOT for continuous updates) ✅
+
+**Clarification:**
+- Report 0x02 is for envelope parameters (attack/fade)
+- NOT for continuous force updates
+- Sent once during effect upload with envelope data
+
+**Format:**
+```c
+buf[0] = 0x02;
+buf[1] = 0x1c;
+buf[2] = 0x00;
+buf[3] = attack_length_lo;
+buf[4] = attack_length_hi;
+buf[5] = attack_level;
+buf[6] = fade_length_lo;
+buf[7] = fade_length_hi;
+buf[8] = fade_level;
+```
+
+**Status:** ✅ Correct (no changes needed)
+
+### 3. Report 0x05 - Condition Effects (Already Correct) ✅
 
 **Current Implementation:**
 ```c
-// First report (0x0e)
+// First report (0x0e) - Coefficients
 buf[0] = 0x05;
 buf[1] = 0x0e;
-// ... coefficients
+buf[2] = 0x00;
+buf[3] = right_coeff;
+buf[4] = left_coeff;
+// ... saturation values
 
-// Second report (0x1c)
+// Second report (0x1c) - Deadband and center
 buf[0] = 0x05;
 buf[1] = 0x1c;
-// ... deadband and center
+buf[2] = 0x00;
+buf[3] = deadband;
+buf[4] = center;
+// ... saturation values
 ```
 
 **Analysis:**
 - Driver already sends TWO Report 0x05 transfers
-- Matches manual capture analysis
+- Matches manual capture analysis perfectly
 - No changes needed
 
 **Status:** ✅ Already correct
@@ -234,12 +258,14 @@ sudo ./test_all_effects
 ## Verification Checklist
 
 - [x] Code compiles without errors
-- [ ] Constant force works in both directions
-- [ ] Direction encoding is correct (0x5e/0x3f)
-- [ ] Magnitude scaling feels appropriate
-- [ ] Periodic effects still work
-- [ ] Condition effects still work
-- [ ] No regression in existing functionality
+- [x] Constant force works in both directions
+- [x] Direction encoding is correct (Report 0x03 signed byte)
+- [x] Positive force pulls LEFT
+- [x] Negative force pulls RIGHT
+- [ ] Magnitude scaling feels appropriate (needs user testing)
+- [ ] Periodic effects still work (needs testing)
+- [ ] Condition effects still work (needs testing)
+- [ ] No regression in existing functionality (needs testing)
 
 ## Next Steps
 
