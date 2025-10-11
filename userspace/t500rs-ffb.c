@@ -309,38 +309,45 @@ static int t500rs_initialize(void)
 
 /* Send Report 0x02 continuous force update
  * Based on USB capture analysis:
- * - Bytes 3-4: Force magnitude (0-1500, little-endian)
- * - Byte 5: Direction flag (0x5e or 0x3f)
+ * - Bytes 3-4: SIGNED force value (little-endian, -1500 to +1500)
+ * - Byte 5: Direction flag (0x5e or 0x3f) - testing shows this may not control direction
  * - Byte 8: Constant 0x21
+ *
+ * TESTING RESULT: Direction flag alone doesn't work - both pull same direction
+ * HYPOTHESIS: Bytes 3-4 should be SIGNED value, not unsigned magnitude
  */
 static int send_force_update(int force_level)
 {
     unsigned char buf[9];
     int ret;
 
-    /* Calculate magnitude (0-1500 range from captures) */
-    unsigned int magnitude = (abs(force_level) * 1500) / 32767;
+    /* Scale force to -1500 to +1500 range (from captures)
+     * Keep the sign! */
+    int scaled_force = (force_level * 1500) / 32767;
 
-    /* Determine direction flag based on force sign
-     * From TShark analysis: 0x5e and 0x3f are the two values seen
-     * Testing needed to determine which is which direction */
+    /* Convert to little-endian signed 16-bit
+     * Negative values will have high bit set */
+    unsigned short force_word = (unsigned short)(short)scaled_force;
+
+    /* Direction flag - try both values to see if it matters
+     * Testing shows 0x5e vs 0x3f alone doesn't control direction */
     unsigned char direction = (force_level >= 0) ? 0x5e : 0x3f;
 
     memset(buf, 0, sizeof(buf));
     buf[0] = 0x02;
     buf[1] = 0x1c;
     buf[2] = 0x00;
-    buf[3] = magnitude & 0xff;        /* Magnitude low byte */
-    buf[4] = (magnitude >> 8) & 0xff; /* Magnitude high byte */
-    buf[5] = direction;                /* Direction flag */
+    buf[3] = force_word & 0xff;        /* Force low byte (SIGNED) */
+    buf[4] = (force_word >> 8) & 0xff; /* Force high byte (SIGNED) */
+    buf[5] = direction;                 /* Direction flag */
     buf[6] = 0x00;
     buf[7] = 0x00;
-    buf[8] = 0x21;                     /* Constant from captures */
+    buf[8] = 0x21;                      /* Constant from captures */
 
     ret = usb_send(buf, 9);
 
-    LOG_DEBUG("Force update: level=%d, magnitude=%u (0x%04x), direction=0x%02x",
-              force_level, magnitude, magnitude, direction);
+    LOG_DEBUG("Force update: level=%d, scaled=%d (0x%04x), direction=0x%02x",
+              force_level, scaled_force, force_word, direction);
 
     return ret;
 }
@@ -744,14 +751,36 @@ static int start_effect(int id)
         }
     }
 
-    /* For constant force, send Report 0x02 continuous update
-     * Based on USB capture analysis, Report 0x02 is used for continuous force updates
-     * NOT Report 0x03 (which was not found in TShark analysis)
+    /* For constant force, set the level using Report 0x03
+     * CORRECTED: Manual analysis shows Report 0x03 IS used!
+     * Format: 03 0e 00 [level]
+     * - Positive values (0x01-0x7F) = left pull
+     * - Negative values (0x80-0xFF) = right pull
+     * - 0xFF = neutral/middle
+     *
+     * Examples from manual analysis:
+     *   03 0e 00 01 = left small
+     *   03 0e 00 29 = left bigger
+     *   03 0e 00 cc = right bigger (-52 signed)
+     *   03 0e 00 ff = middle (-1 signed)
      */
     if (is_constant) {
-        ret = send_force_update(force);
+        /* Map force (-32767 to +32767) to signed byte (-128 to +127)
+         * Then cast to unsigned to preserve bit pattern */
+        signed char signed_level = (signed char)((force * 127) / 32767);
+        unsigned char level = (unsigned char)signed_level;
+
+        /* Report 0x03 - Set force level (SIGNED!) */
+        buf[0] = 0x03;
+        buf[1] = 0x0e;
+        buf[2] = 0x00;
+        buf[3] = level;  /* Signed value */
+        ret = usb_send(buf, 4);
         if (ret) return ret;
         usleep(5000);
+
+        LOG_DEBUG("Set constant force level to 0x%02x (force=%d, signed_level=%d)",
+                  level, force, signed_level);
     }
 
     /* For periodic effects, magnitude is set via Report 0x04 during upload
