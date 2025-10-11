@@ -477,12 +477,12 @@ void run_test(int fd, int test_num)
         upload_and_play_square(fd, 4096, 200);  /* Reduced magnitude, slower */
         break;
     case 15:
-        print_test_header("Test 15: Ramp - Very Weak to Strong (8 seconds)");
-        upload_and_play_ramp(fd, 512, 16384);  /* Very weak start to strong */
+        print_test_header("Test 15: Ramp - Weak to Moderate (8 seconds)");
+        upload_and_play_ramp(fd, 2000, 10000);  /* Weak to moderate (safer values) */
         break;
     case 16:
-        print_test_header("Test 16: Ramp - Strong to Weak (8 seconds)");
-        upload_and_play_ramp(fd, 16384, 2048);  /* Strong to weak ramp */
+        print_test_header("Test 16: Ramp - Moderate to Weak (8 seconds)");
+        upload_and_play_ramp(fd, 10000, 2000);  /* Moderate to weak (safer values) */
         break;
     default:
         printf("Invalid test number!\n");
