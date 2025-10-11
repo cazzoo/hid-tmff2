@@ -1503,29 +1503,15 @@ static void *force_update_thread_func(void *arg)
                 force = apply_envelope(force, &effects[i]);
             }
             else if (effects[i].is_periodic) {
-                /* Periodic effect - calculate waveform */
-                unsigned long elapsed_ms = get_elapsed_ms(&effects[i].start_time);
-
-                /* Calculate current phase based on elapsed time and period */
-                unsigned int phase = 0;
-                if (effects[i].periodic_period_ms > 0) {
-                    unsigned long phase_ms = elapsed_ms % effects[i].periodic_period_ms;
-                    phase = (phase_ms * 65535) / effects[i].periodic_period_ms;
-                }
-
-                /* Add initial phase offset */
-                phase = (phase + effects[i].periodic_phase) % 65536;
-
-                /* Calculate waveform value */
-                force = calculate_periodic_waveform(
-                    effects[i].periodic_waveform,
-                    phase,
-                    effects[i].periodic_magnitude,
-                    effects[i].periodic_offset
-                );
-
-                /* Apply envelope to periodic effect */
-                force = apply_envelope(force, &effects[i]);
+                /* Periodic effects are handled by the device hardware
+                 * We don't need to calculate the waveform in software
+                 * The device generates sine/triangle/square waves natively
+                 *
+                 * However, we CAN apply envelope modulation if needed
+                 * For now, skip periodic effects in the update loop
+                 * The device handles them completely via Report 0x04
+                 */
+                continue;
             }
             else {
                 /* Other effect types (condition effects handled by device) */
@@ -1542,8 +1528,12 @@ static void *force_update_thread_func(void *arg)
             /* Store target force for smoothing */
             effects[i].target_force = force;
 
-            /* Apply force smoothing */
-            force = apply_force_smoothing(force, effects[i].last_sent_force);
+            /* Apply force smoothing ONLY to constant force effects
+             * Periodic effects should oscillate sharply without smoothing
+             * Otherwise the oscillations get dampened and feel too subtle */
+            if (effects[i].is_constant) {
+                force = apply_force_smoothing(force, effects[i].last_sent_force);
+            }
 
             /* Track force delta for dynamic update rate */
             int force_delta = abs(force - effects[i].last_sent_force);
