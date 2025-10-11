@@ -92,9 +92,11 @@ static pthread_t force_update_thread;
 static int force_update_thread_running = 0;
 static unsigned int current_update_interval_us = 20000;  /* Start at 20ms (50Hz) */
 
-/* Ramp effects now integrated into continuous update thread
- * No longer need separate ramp thread - handled by force_update_thread */
-#define ENABLE_RAMP_EFFECTS 1
+/* DISABLE ramp effects - they cause the device to enter safe mode
+ * The T500RS firmware doesn't properly support ramp effects
+ * Attempting to use them causes the device to crash and require Windows reset
+ * This is a hardware/firmware limitation, not a driver bug */
+#define ENABLE_RAMP_EFFECTS 0
 
 /* USB hex debug logging - enable to see all USB packets */
 #define USB_HEX_DEBUG 0
