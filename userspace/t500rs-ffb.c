@@ -2097,12 +2097,14 @@ static void *input_reading_thread(void *arg)
          * T500RS actual format (from USB captures):
          * Byte 0: Report ID (0x07)
          * Bytes 1-2: Steering (16-bit little-endian)
-         * Bytes 3-4: Throttle (16-bit little-endian, 0-1023)
-         * Bytes 5-6: Brake (16-bit little-endian, 0-1023)
+         * Bytes 3-4: BRAKE (16-bit little-endian, 0-1023) - CORRECTED!
+         * Bytes 5-6: THROTTLE (16-bit little-endian, 0-1023) - CORRECTED!
          * Bytes 7-8: Clutch (16-bit little-endian, 0-1023)
          * Bytes 9-10: Unknown
          * Byte 11: Buttons (bit-packed)
          * Bytes 12-14: More buttons/data
+         *
+         * NOTE: Hardware has throttle and brake swapped compared to documentation!
          */
 
         if (buf[0] == 0x07 && transferred >= 15) {
@@ -2118,24 +2120,28 @@ static void *input_reading_thread(void *arg)
             ev.value = steering;
             write(uinput_fd, &ev, sizeof(ev));
 
-            /* Throttle - bytes 3-4 (little-endian 16-bit, 0-1023) */
-            uint16_t throttle = buf[3] | (buf[4] << 8);
-            int throttle_scaled = (throttle * 255) / 1023;
-            if (invert_throttle) {
-                throttle_scaled = 255 - throttle_scaled;
-            }
-            ev.code = ABS_Y;
-            ev.value = throttle_scaled;
-            write(uinput_fd, &ev, sizeof(ev));
+            /* CORRECTED: Hardware has throttle and brake swapped in USB report
+             * Bytes 3-4 are actually BRAKE (not throttle as documented)
+             * Bytes 5-6 are actually THROTTLE (not brake as documented) */
 
-            /* Brake - bytes 5-6 (little-endian 16-bit, 0-1023) */
-            uint16_t brake = buf[5] | (buf[6] << 8);
+            /* Brake - bytes 3-4 (little-endian 16-bit, 0-1023) */
+            uint16_t brake = buf[3] | (buf[4] << 8);
             int brake_scaled = (brake * 255) / 1023;
             if (invert_brake) {
                 brake_scaled = 255 - brake_scaled;
             }
             ev.code = ABS_Z;
             ev.value = brake_scaled;
+            write(uinput_fd, &ev, sizeof(ev));
+
+            /* Throttle - bytes 5-6 (little-endian 16-bit, 0-1023) */
+            uint16_t throttle = buf[5] | (buf[6] << 8);
+            int throttle_scaled = (throttle * 255) / 1023;
+            if (invert_throttle) {
+                throttle_scaled = 255 - throttle_scaled;
+            }
+            ev.code = ABS_Y;
+            ev.value = throttle_scaled;
             write(uinput_fd, &ev, sizeof(ev));
 
             /* Clutch - bytes 7-8 (little-endian 16-bit, 0-1023) */
