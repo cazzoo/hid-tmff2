@@ -4,33 +4,40 @@
 
 Two versions of the driver are now available for testing:
 
-### 1. Working Version (Before Runtime Config)
+### 1. Working Version (Monolithic Driver - Known Good)
 **Location:** `/home/caz/Documents/hid-tmff2-working/userspace/`
-**Git Commit:** `2930776` (FIX CRITICAL BUG: Correct USB endpoints)
+**Git Commit:** `e213b43` (Add envelope debug logging - envelope working perfectly!)
+**Type:** Monolithic driver (t500rs-ffb.c - single file)
+**Binary:** `t500rs-ffb` (NOT t500rs-ffb-modular)
 **Features:**
 - ✅ Force smoothing (always enabled)
 - ✅ Multi-effect mixing (always enabled)
 - ✅ Dynamic update rate (always enabled)
+- ✅ Envelope support
 - ❌ No runtime configuration
+- ❌ Not modular
 
-### 2. Current Version (With Runtime Config)
+### 2. Current Version (Modular Driver - With Runtime Config)
 **Location:** `/home/caz/Documents/hid-tmff2/userspace/`
 **Git Commit:** `930bf60` (Add extensive debug logging)
+**Type:** Modular driver (5 source files + 5 headers)
+**Binary:** `t500rs-ffb-modular`
 **Features:**
 - ✅ Force smoothing (toggleable)
 - ✅ Multi-effect mixing (toggleable)
 - ✅ Dynamic update rate (toggleable)
 - ✅ Runtime configuration via Python GUI
 - ✅ Debug logging
+- ✅ Modular architecture
 
 ## Quick Test Commands
 
 ```bash
-# Test WORKING version (known good)
+# Test WORKING version (monolithic driver - known good)
 cd ~/Documents/hid-tmff2-working/userspace
-sudo ./t500rs-ffb-modular
+sudo ./t500rs-ffb
 
-# Test CURRENT version (with config features)
+# Test CURRENT version (modular driver - with config features)
 cd ~/Documents/hid-tmff2/userspace
 sudo ./t500rs-ffb-modular
 
