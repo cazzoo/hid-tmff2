@@ -259,7 +259,7 @@ static void process_uinput_events(void)
 
         case EV_FF:
             /* Effect play/stop */
-            LOG_DEBUG("EV_FF event: code=%d, value=%d", ev.code, ev.value);
+            LOG_INFO("EV_FF event: code=0x%02x (%d), value=%d", ev.code, ev.code, ev.value);
 
             /* Handle special codes */
             if (ev.code == FF_GAIN) {
