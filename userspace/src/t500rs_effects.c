@@ -58,7 +58,11 @@ int apply_effect_gain(int force, int effect_type)
 int set_gain(uint16_t gain)
 {
     current_gain = gain;
-    LOG_INFO("Global gain set to %u (%.1f%%)", gain, (gain * 100.0f) / 65535.0f);
+    if (gain == 0) {
+        LOG_INFO("WARNING: Global gain set to 0%% - NO FORCE WILL BE FELT!");
+    } else {
+        LOG_INFO("Global gain set to %u (%.1f%%)", gain, (gain * 100.0f) / 65535.0f);
+    }
     return 0;
 }
 
