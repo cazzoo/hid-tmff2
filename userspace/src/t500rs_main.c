@@ -122,6 +122,7 @@ static int handle_ff_upload(struct uinput_ff_upload *upload)
 {
     int ret = 0;
     int id = upload->effect.id;
+    int was_active = 0;
 
     pthread_mutex_lock(&effects_lock);
 
@@ -132,9 +133,17 @@ static int handle_ff_upload(struct uinput_ff_upload *upload)
         return -1;
     }
 
+    /* Check if effect was already active (for re-upload while playing) */
+    was_active = effects[id].active;
+
     /* Store effect */
     effects[id].effect = upload->effect;
-    effects[id].active = 0;
+    /* Don't clear active flag if effect was already playing */
+    if (!was_active) {
+        effects[id].active = 0;
+    }
+
+    LOG_INFO("Upload effect %d (type=%d, was_active=%d)", id, upload->effect.type, was_active);
 
     /* Upload to device */
     switch (upload->effect.type) {
@@ -225,6 +234,9 @@ static void process_uinput_events(void)
 
         if (n != sizeof(ev))
             continue;
+
+        /* Log ALL events for debugging */
+        LOG_DEBUG("Event: type=0x%02x, code=0x%02x, value=%d", ev.type, ev.code, ev.value);
 
         switch (ev.type) {
         case EV_UINPUT:
