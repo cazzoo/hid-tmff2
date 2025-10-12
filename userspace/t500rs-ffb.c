@@ -331,22 +331,40 @@ static int t500rs_initialize(void)
      * Mode switch is triggered purely by the HID interrupt transfers above
      * The device will disconnect and reconnect automatically after receiving the init sequence */
 
-    /* CRITICAL: Send mode switch command (from kernel driver analysis)
-     * Command 0x0f with parameter 0x03 and target mode
-     * This is what actually triggers the mode switch! */
-    LOG_INFO("Sending mode switch command (0x0f)...");
-    memset(buf, 0, sizeof(buf));
-    buf[0] = 0x0f;  /* Mode switch command */
-    buf[1] = 0x03;  /* Parameter */
-    buf[2] = 0x01;  /* Target mode: 0x01 = normal mode (b65e) */
-    ret = usb_send(buf, 3);
-    if (ret) {
-        LOG_ERROR("Mode switch command failed");
-        return ret;
-    }
-    usleep(100000);  /* Wait 100ms for mode switch to process */
+    /* USB CONTROL REQUEST - Switch Mode
+     * This triggers the actual mode switch from boot mode to normal mode
+     * This is a vendor-specific USB control transfer that was in the original working code!
+     *
+     * bRequestType: 0x41 (host-to-device, vendor, device)
+     * bRequest: 83
+     * wValue: 0x0002 (T500RS switch value)
+     * wIndex: 0
+     * wLength: 0
+     */
+    LOG_INFO("Sending mode switch control request (value=0x0002)...");
 
-    LOG_INFO("Initialization complete (mode switch command sent)");
+    ret = libusb_control_transfer(usb_handle,
+        0x41,  /* bmRequestType: OUT, vendor, device */
+        83,    /* bRequest */
+        0x0002,/* wValue - T500RS switch value */
+        0,     /* wIndex */
+        NULL,  /* no data */
+        0,     /* wLength */
+        5000); /* timeout ms */
+
+    if (ret < 0) {
+        /* Device may disconnect before responding - this is normal */
+        if (ret == LIBUSB_ERROR_NO_DEVICE || ret == LIBUSB_ERROR_PIPE || ret == LIBUSB_ERROR_IO) {
+            LOG_INFO("Device disconnected during mode switch (expected behavior)");
+        } else {
+            LOG_ERROR("Mode switch control request failed: %s", libusb_error_name(ret));
+            return ret;
+        }
+    } else {
+        LOG_INFO("Mode switch control request sent successfully");
+    }
+
+    LOG_INFO("Initialization complete (mode switch triggered)");
     return 0;
 }
 
