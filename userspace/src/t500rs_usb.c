@@ -19,7 +19,7 @@
 #define EP_IN   0x82
 
 /* USB debug (set to 1 to enable hex dumps) */
-#define USB_HEX_DEBUG 0
+#define USB_HEX_DEBUG 1
 
 /* External running flag (from main) */
 extern int running;
@@ -48,7 +48,7 @@ int usb_send(const unsigned char *data, int len)
     if (ret < 0) {
         /* Don't log NO_DEVICE errors during shutdown - these are expected */
         if (ret != LIBUSB_ERROR_NO_DEVICE && running) {
-            LOG_ERROR("USB transfer failed: %s", libusb_error_name(ret));
+            LOG_ERROR("USB transfer failed: %s (ret=%d)", libusb_error_name(ret), ret);
         }
         return ret;
     }
@@ -57,6 +57,10 @@ int usb_send(const unsigned char *data, int len)
         LOG_ERROR("USB transfer incomplete: %d/%d bytes", transferred, len);
         return -1;
     }
+
+#if USB_HEX_DEBUG
+    fprintf(stderr, "[USB OK] Sent %d bytes successfully\n", transferred);
+#endif
 
     return 0;
 }
