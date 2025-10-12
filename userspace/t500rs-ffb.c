@@ -332,6 +332,19 @@ static int t500rs_initialize(void)
      * The device will disconnect and reconnect automatically after receiving the init sequence */
 
     LOG_INFO("Initialization complete (mode switch commands sent)");
+
+    /* Try USB reset to trigger re-enumeration */
+    LOG_DEBUG("Attempting USB reset to trigger mode switch...");
+    ret = libusb_reset_device(usb_handle);
+    if (ret == LIBUSB_ERROR_NOT_FOUND) {
+        LOG_DEBUG("Device disconnected during reset (expected for mode switch)");
+        return 0;  /* This is actually success - device is re-enumerating */
+    } else if (ret < 0) {
+        LOG_ERROR("USB reset failed: %s (device may still re-enumerate)", libusb_error_name(ret));
+        return 0;  /* Continue anyway - device might still switch */
+    }
+
+    LOG_DEBUG("USB reset completed");
     return 0;
 }
 
