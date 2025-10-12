@@ -498,6 +498,12 @@ int start_effect(int id)
     buf[2] = 0x41;  /* Always 0x41 for START */
     buf[3] = 0x01;  /* Action: start */
 
+    LOG_INFO("Starting effect %d: type=%d (spring=%d, periodic=%d, constant=%d)",
+             id, effects[id].effect.type,
+             effects[id].effect.type == FF_SPRING,
+             effects[id].effect.type == FF_PERIODIC,
+             effects[id].effect.type == FF_CONSTANT);
+
     return usb_send(buf, 4);
 }
 
