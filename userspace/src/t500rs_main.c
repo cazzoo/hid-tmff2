@@ -315,7 +315,9 @@ static void process_uinput_events(void)
             pthread_mutex_lock(&effects_lock);
             if (ev.code < MAX_EFFECTS) {
                 if (ev.value > 0) {
-                    LOG_DEBUG("Playing effect %d", ev.code);
+                    LOG_INFO("Playing effect %d (type=%d, uploaded=%d)",
+                             ev.code, effects[ev.code].effect.type,
+                             (effects[ev.code].effect.type != 0));
 
                     /* Initialize ramp state if this is a ramp effect */
                     if (effects[ev.code].effect.type == FF_RAMP) {
