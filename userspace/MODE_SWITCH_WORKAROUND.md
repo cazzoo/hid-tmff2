@@ -1,6 +1,21 @@
-# T500RS Mode Switch Workaround
+# T500RS Mode Switch - OBSOLETE DOCUMENT
 
-## Problem
+⚠️ **THIS DOCUMENT IS OBSOLETE** ⚠️
+
+**The mode switch now works automatically!** No Windows required.
+
+The issue was resolved by restoring the USB control transfer that was in the original working code:
+- bRequestType: 0x41
+- bRequest: 83
+- wValue: 0x0002
+
+See git commit c73f5c8 for details.
+
+---
+
+# Original Document (For Historical Reference)
+
+## Problem (RESOLVED)
 
 The T500RS has two USB modes:
 - **Boot Mode (044f:b65d)** - Initial state after power-on

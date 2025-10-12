@@ -8,9 +8,10 @@ The T500RS userspace force feedback driver is now **production-ready** with all 
 
 ### 1. Mode Switch (b65d → b65e)
 - ✅ Automatic detection of boot mode
-- ✅ HID report-based initialization (no USB control transfers)
+- ✅ USB control transfer mode switch (bRequest=83, wValue=0x0002)
 - ✅ Proper device re-enumeration handling
 - ✅ Robust error handling
+- ✅ No Windows required!
 - **Status:** Working perfectly
 
 ### 2. Input Support
@@ -160,14 +161,14 @@ The T500RS userspace force feedback driver is now **production-ready** with all 
 ### 1. Ramp Effects - Firmware Limitation
 - **Issue:** Ramp effects cause device to enter safe mode
 - **Root Cause:** T500RS firmware doesn't properly support ramp effects
-- **Symptom:** Device becomes unresponsive, requires Windows reset
+- **Symptom:** Device becomes unresponsive, requires power cycle
 - **Workaround:** Disabled via ENABLE_RAMP_EFFECTS=0
 - **Status:** Hardware/firmware limitation, not fixable in driver
 
-### 2. Pedal Mapping - Hardware Quirk
+### 2. Pedal Mapping - Hardware Quirk (FIXED)
 - **Issue:** Hardware sends throttle/brake swapped in USB report
 - **Resolution:** Driver swaps them back to correct mapping
-- **Status:** Fixed in driver (bytes 3-4=brake, bytes 5-6=throttle)
+- **Status:** ✅ Fixed in driver (bytes 3-4=brake, bytes 5-6=throttle)
 
 ## File Structure ✅
 
