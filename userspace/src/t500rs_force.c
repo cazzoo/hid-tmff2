@@ -234,147 +234,54 @@ static void *force_update_thread_func(void *arg)
             break;
         }
 
-        int max_force_delta = 0;  /* Track largest force change for dynamic update rate */
-        int forces[MAX_EFFECTS];  /* Array to hold individual forces for mixing */
-        int force_count = 0;       /* Number of active constant force effects */
-
-        /* Calculate all active constant force and ramp effects */
+        /* Update all active constant force effects */
         for (int i = 0; i < MAX_EFFECTS; i++) {
-            if (!effects[i].active) {
+            if (!effects[i].active || !effects[i].is_constant) {
                 continue;
             }
 
-            int force = 0;
+            /* Get current force level */
+            int force = effects[i].current_force_level;
 
-            /* Calculate force based on effect type */
-            if (effects[i].is_constant) {
-                /* Constant force effect */
-                force = effects[i].current_force_level;
+            /* Apply envelope (attack/fade) */
+            force = apply_envelope(force, &effects[i]);
 
-                /* Apply envelope (attack/fade) */
-                force = apply_envelope(force, &effects[i]);
+            /* Apply global gain */
+            force = (force * current_gain) / 65535;
 
-                /* Apply global gain */
-                force = (force * current_gain) / 65535;
+            /* Apply per-effect-type gain */
+            force = apply_effect_gain(force, FF_CONSTANT);
 
-                /* Apply per-effect-type gain */
-                force = apply_effect_gain(force, FF_CONSTANT);
+            /* Convert to signed byte */
+            signed char signed_level = (signed char)((force * 127) / 32767);
+            unsigned char level = (unsigned char)signed_level;
 
-                /* Store target force for this effect */
-                effects[i].target_force = force;
+            /* Send Report 0x03 - Force level update */
+            buf[0] = 0x03;
+            buf[1] = 0x0e;
+            buf[2] = 0x00;
+            buf[3] = level;
 
-                /* Add to forces array for mixing */
-                if (force_count < MAX_EFFECTS) {
-                    forces[force_count++] = force;
-                }
-            }
-            else if (effects[i].is_ramp) {
-                /* Ramp effect - calculate current force based on elapsed time */
-                unsigned long elapsed_ms = get_elapsed_ms(&effects[i].start_time);
-
-                /* Calculate ramp progress */
-                int current_level = effects[i].ramp_start_level;
-                if (effects[i].ramp_duration_ms > 0 && elapsed_ms < effects[i].ramp_duration_ms) {
-                    /* Interpolate between start and end level */
-                    int delta = effects[i].ramp_end_level - effects[i].ramp_start_level;
-                    int progress = (elapsed_ms * delta) / effects[i].ramp_duration_ms;
-                    current_level = effects[i].ramp_start_level + progress;
-                } else if (elapsed_ms >= effects[i].ramp_duration_ms) {
-                    /* Ramp complete - use end level */
-                    current_level = effects[i].ramp_end_level;
-                }
-
-                force = current_level;
-
-                /* Apply envelope (attack/fade) */
-                force = apply_envelope(force, &effects[i]);
-
-                /* Apply global gain */
-                force = (force * current_gain) / 65535;
-
-                /* Apply per-effect-type gain */
-                force = apply_effect_gain(force, FF_RAMP);
-
-                /* Store target force for this effect */
-                effects[i].target_force = force;
-
-                /* Add to forces array for mixing */
-                if (force_count < MAX_EFFECTS) {
-                    forces[force_count++] = force;
-                }
-            }
-            else if (effects[i].is_periodic) {
-                /* Periodic effects are handled by the device hardware */
-                continue;
-            }
-            else {
-                /* Other effect types (condition effects handled by device) */
-                continue;
-            }
-        }
-
-        /* Mix all active constant force effects */
-        int combined_force = 0;
-        if (force_count > 0) {
-            if (config.enable_multi_effect_mixing) {
-                /* Use advanced mixing when enabled */
-                combined_force = mix_forces(forces, force_count, MIX_CLAMPED_ADD);
-                LOG_DEBUG("Mixed %d effects: combined_force=%d", force_count, combined_force);
-            } else {
-                /* Simple: just use the first/strongest effect when disabled */
-                combined_force = forces[0];
-                LOG_DEBUG("Using single effect (mixing disabled): force=%d", combined_force);
-            }
-        }
-
-        /* Apply force smoothing to the combined force */
-        static int last_combined_force = 0;
-        combined_force = apply_force_smoothing(combined_force, last_combined_force);
-
-        /* Track force delta for dynamic update rate */
-        int force_delta = abs(combined_force - last_combined_force);
-        if (force_delta > max_force_delta) {
-            max_force_delta = force_delta;
-        }
-
-        /* Update last combined force */
-        last_combined_force = combined_force;
-
-        /* Convert to signed byte */
-        signed char signed_level = (signed char)((combined_force * 127) / 32767);
-        unsigned char level = (unsigned char)signed_level;
-
-        /* Send Report 0x03 - Combined force level */
-        buf[0] = 0x03;
-        buf[1] = 0x0e;
-        buf[2] = 0x00;
-        buf[3] = level;
-
-        /* Log force updates periodically */
-        if (loop_count % 50 == 0 || force_count > 0) {
-            LOG_DEBUG("Sending force: level=0x%02x, combined=%d, active_effects=%d",
-                     level, combined_force, force_count);
-        }
-
-        /* Send without holding lock for too long */
-        pthread_mutex_unlock(&effects_lock);
-        usb_send(buf, 4);
-        pthread_mutex_lock(&effects_lock);
-
-        /* Check if we should still continue after sending */
-        if (!force_update_thread_running || !usb_handle || !running) {
+            /* Send without holding lock for too long */
             pthread_mutex_unlock(&effects_lock);
-            break;
-        }
+            usb_send(buf, 4);
+            pthread_mutex_lock(&effects_lock);
+
+            /* Check if we should still continue after sending */
+            if (!force_update_thread_running || !usb_handle) {
+                pthread_mutex_unlock(&effects_lock);
+                goto thread_exit;
+            }
+        }  /* End of for loop */
 
         pthread_mutex_unlock(&effects_lock);
 
-        /* Dynamic update rate based on force change */
-        current_update_interval_us = calculate_update_interval(max_force_delta);
-        usleep(current_update_interval_us);
+        /* Sleep for update interval */
+        usleep(20000);  /* 20ms = 50Hz */
     }
 
-    LOG_DEBUG("Force update thread stopped");
+thread_exit:
+    LOG_INFO("Force update thread stopped");
     return NULL;
 }
 

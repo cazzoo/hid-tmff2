@@ -64,8 +64,12 @@ def monitor_events(device_path):
                 # Unpack: struct input_event
                 sec, usec, ev_type, ev_code, ev_value = struct.unpack('llHHi', data)
                 
+                # Only count FF and UINPUT events, ignore input events
+                if ev_type not in [EV_FF, EV_UINPUT]:
+                    continue
+
                 event_count += 1
-                
+
                 # Filter for FF-related events
                 if ev_type == EV_FF:
                     ff_event_count += 1
