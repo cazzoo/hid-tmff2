@@ -3,15 +3,22 @@
     "Context7": {
       "command": "npx",
       "args": ["-y", "@upstash/context7-mcp"]
+    },
+    "Sequential thinking": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-sequential-thinking"
+      ],
+      "env": {},
+      "working_directory": null
+    },
+    "ghidra": {
+      "command": "uv",
+      "args": [
+        "run",
+        "/home/caz/Downloads/GhydraMCP-Complete-v2.0.0-beta.4-20250522-125301/bridge_mcp_hydra.py"
+      ]
     }
-  },
-  "Sequential thinking": {
-    "command": "npx",
-    "args": [
-      "-y",
-      "@modelcontextprotocol/server-sequential-thinking"
-    ],
-    "env": {},
-    "working_directory": null
   }
 }

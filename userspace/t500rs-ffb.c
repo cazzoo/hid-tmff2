@@ -2782,8 +2782,10 @@ int main(int argc, char **argv)
             LOG_INFO("Trying to reopen anyway...");
         }
 
-        /* Close current handle */
+        /* Release interface and close current handle to allow re-enumeration */
         if (usb_handle) {
+            LOG_DEBUG("Releasing interface before re-enumeration...");
+            libusb_release_interface(usb_handle, INTERFACE);
             libusb_close(usb_handle);
             usb_handle = NULL;
         }
