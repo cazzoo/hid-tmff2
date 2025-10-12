@@ -130,11 +130,11 @@ extern FILE *log_file;
  * Custom Event Codes (for runtime configuration via Python GUI)
  * ============================================================================ */
 
-/* Advanced force feedback control codes (0x80-0x8F range) */
-#define FF_TOGGLE_SMOOTHING      0x80  /* Toggle force smoothing (value: 0=off, 1=on) */
-#define FF_TOGGLE_MIXING         0x81  /* Toggle multi-effect mixing (value: 0=off, 1=on) */
-#define FF_TOGGLE_DYNAMIC_RATE   0x82  /* Toggle dynamic update rate (value: 0=off, 1=on) */
-#define FF_GET_CONFIG            0x83  /* Get current configuration (returns via log) */
+/* Advanced force feedback control codes (0xC0-0xCF range to avoid effect ID conflicts) */
+#define FF_TOGGLE_SMOOTHING      0xC0  /* Toggle force smoothing (value: 0=off, 1=on) */
+#define FF_TOGGLE_MIXING         0xC1  /* Toggle multi-effect mixing (value: 0=off, 1=on) */
+#define FF_TOGGLE_DYNAMIC_RATE   0xC2  /* Toggle dynamic update rate (value: 0=off, 1=on) */
+#define FF_GET_CONFIG            0xC3  /* Get current configuration (returns via log) */
 
 /* ============================================================================
  * Global State (defined in t500rs_main.c)

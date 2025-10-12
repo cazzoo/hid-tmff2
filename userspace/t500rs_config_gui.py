@@ -22,10 +22,11 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 
 # Custom event codes (must match driver)
-FF_TOGGLE_SMOOTHING = 0x80
-FF_TOGGLE_MIXING = 0x81
-FF_TOGGLE_DYNAMIC_RATE = 0x82
-FF_GET_CONFIG = 0x83
+# Using 0xC0-0xCF range to avoid conflicts with effect IDs (0-63)
+FF_TOGGLE_SMOOTHING = 0xC0
+FF_TOGGLE_MIXING = 0xC1
+FF_TOGGLE_DYNAMIC_RATE = 0xC2
+FF_GET_CONFIG = 0xC3
 
 # Event types
 EV_FF = 0x15
