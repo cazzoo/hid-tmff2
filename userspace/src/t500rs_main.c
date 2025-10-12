@@ -35,7 +35,11 @@ pthread_mutex_t effects_lock = PTHREAD_MUTEX_INITIALIZER;
 struct t500rs_config config = {
     .invert_throttle = 1,
     .invert_brake = 1,
-    .invert_clutch = 1
+    .invert_clutch = 1,
+    /* Advanced FF settings - all enabled by default */
+    .enable_force_smoothing = 1,
+    .enable_multi_effect_mixing = 1,
+    .enable_dynamic_update_rate = 1
 };
 uint16_t current_gain = 0xffff;  /* Default: maximum */
 
@@ -267,6 +271,34 @@ static void process_uinput_events(void)
             if (ev.code == FF_AUTOCENTER) {
                 LOG_INFO("Autocenter control: %d (%.1f%%)", ev.value, (ev.value * 100.0) / 65535);
                 set_autocenter(ev.value);
+                break;
+            }
+
+            /* Advanced FF configuration controls */
+            if (ev.code == FF_TOGGLE_SMOOTHING) {
+                config.enable_force_smoothing = (ev.value != 0);
+                LOG_INFO("Force smoothing: %s", config.enable_force_smoothing ? "ENABLED" : "DISABLED");
+                break;
+            }
+
+            if (ev.code == FF_TOGGLE_MIXING) {
+                config.enable_multi_effect_mixing = (ev.value != 0);
+                LOG_INFO("Multi-effect mixing: %s", config.enable_multi_effect_mixing ? "ENABLED" : "DISABLED");
+                break;
+            }
+
+            if (ev.code == FF_TOGGLE_DYNAMIC_RATE) {
+                config.enable_dynamic_update_rate = (ev.value != 0);
+                LOG_INFO("Dynamic update rate: %s", config.enable_dynamic_update_rate ? "ENABLED" : "DISABLED");
+                break;
+            }
+
+            if (ev.code == FF_GET_CONFIG) {
+                LOG_INFO("=== Current Configuration ===");
+                LOG_INFO("Force smoothing: %s", config.enable_force_smoothing ? "ENABLED" : "DISABLED");
+                LOG_INFO("Multi-effect mixing: %s", config.enable_multi_effect_mixing ? "ENABLED" : "DISABLED");
+                LOG_INFO("Dynamic update rate: %s", config.enable_dynamic_update_rate ? "ENABLED" : "DISABLED");
+                LOG_INFO("============================");
                 break;
             }
 

@@ -52,6 +52,11 @@ unsigned long get_elapsed_ms(struct timespec *start_time)
 
 int apply_force_smoothing(int target_force, int last_force)
 {
+    /* Check if smoothing is enabled */
+    if (!config.enable_force_smoothing) {
+        return target_force;  /* No smoothing - return target directly */
+    }
+
     /* Smoothing factor (0.3 * 65535) */
     const int smoothing_factor = 19660;
 
@@ -76,6 +81,11 @@ int apply_force_smoothing(int target_force, int last_force)
 
 unsigned int calculate_update_interval(int force_delta)
 {
+    /* Check if dynamic update rate is enabled */
+    if (!config.enable_dynamic_update_rate) {
+        return 20000;  /* Fixed 20ms = 50Hz when disabled */
+    }
+
     int abs_delta = abs(force_delta);
 
     /* Thresholds for different update rates */
@@ -299,8 +309,15 @@ static void *force_update_thread_func(void *arg)
         /* Mix all active constant force effects */
         int combined_force = 0;
         if (force_count > 0) {
-            combined_force = mix_forces(forces, force_count, MIX_CLAMPED_ADD);
-            LOG_DEBUG("Mixed %d effects: combined_force=%d", force_count, combined_force);
+            if (config.enable_multi_effect_mixing) {
+                /* Use advanced mixing when enabled */
+                combined_force = mix_forces(forces, force_count, MIX_CLAMPED_ADD);
+                LOG_DEBUG("Mixed %d effects: combined_force=%d", force_count, combined_force);
+            } else {
+                /* Simple: just use the first/strongest effect when disabled */
+                combined_force = forces[0];
+                LOG_DEBUG("Using single effect (mixing disabled): force=%d", combined_force);
+            }
         }
 
         /* Apply force smoothing to the combined force */

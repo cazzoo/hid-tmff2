@@ -80,6 +80,11 @@ struct t500rs_config {
     int invert_throttle;            /* Invert throttle pedal */
     int invert_brake;               /* Invert brake pedal */
     int invert_clutch;              /* Invert clutch pedal */
+
+    /* Advanced force feedback settings (runtime configurable) */
+    int enable_force_smoothing;     /* Enable exponential force smoothing (default: 1) */
+    int enable_multi_effect_mixing; /* Enable multi-effect mixing (default: 1) */
+    int enable_dynamic_update_rate; /* Enable dynamic update rate (default: 1) */
 };
 
 /* ============================================================================
@@ -120,6 +125,16 @@ extern FILE *log_file;
 
 /* Ramp effects disabled - firmware limitation causes device crash */
 #define ENABLE_RAMP_EFFECTS 0
+
+/* ============================================================================
+ * Custom Event Codes (for runtime configuration via Python GUI)
+ * ============================================================================ */
+
+/* Advanced force feedback control codes (0x80-0x8F range) */
+#define FF_TOGGLE_SMOOTHING      0x80  /* Toggle force smoothing (value: 0=off, 1=on) */
+#define FF_TOGGLE_MIXING         0x81  /* Toggle multi-effect mixing (value: 0=off, 1=on) */
+#define FF_TOGGLE_DYNAMIC_RATE   0x82  /* Toggle dynamic update rate (value: 0=off, 1=on) */
+#define FF_GET_CONFIG            0x83  /* Get current configuration (returns via log) */
 
 /* ============================================================================
  * Global State (defined in t500rs_main.c)
