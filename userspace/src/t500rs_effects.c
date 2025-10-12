@@ -57,12 +57,17 @@ int apply_effect_gain(int force, int effect_type)
 
 int set_gain(uint16_t gain)
 {
-    current_gain = gain;
+    /* WORKAROUND: Some games (Automobilista 2) rapidly toggle gain between 0 and 100%
+     * Ignoring gain=0 commands seems to fix force feedback in these games.
+     * This matches behavior of some other drivers.
+     */
     if (gain == 0) {
-        LOG_INFO("WARNING: Global gain set to 0%% - NO FORCE WILL BE FELT!");
-    } else {
-        LOG_INFO("Global gain set to %u (%.1f%%)", gain, (gain * 100.0f) / 65535.0f);
+        LOG_INFO("Ignoring gain=0 command (workaround for game compatibility)");
+        return 0;
     }
+
+    current_gain = gain;
+    LOG_INFO("Global gain set to %u (%.1f%%)", gain, (gain * 100.0f) / 65535.0f);
     return 0;
 }
 
