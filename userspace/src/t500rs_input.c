@@ -22,7 +22,7 @@
 #include "../include/t500rs_common.h"
 
 /* USB endpoints */
-#define EP_IN   0x81
+#define EP_IN   0x82
 
 /* Input thread */
 static pthread_t input_thread = 0;

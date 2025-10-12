@@ -15,8 +15,8 @@
 #include "../include/t500rs_common.h"
 
 /* USB endpoints */
-#define EP_IN   0x81
-#define EP_OUT  0x02
+#define EP_OUT  0x01
+#define EP_IN   0x82
 
 /* USB debug (set to 1 to enable hex dumps) */
 #define USB_HEX_DEBUG 0
