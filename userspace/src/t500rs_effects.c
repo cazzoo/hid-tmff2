@@ -20,7 +20,7 @@
 #include "../include/t500rs_usb.h"
 
 /* Per-effect-type gain multipliers (0.0 to 1.0) */
-static float effect_type_gains[16] = {
+static float effect_type_gains[128] = {
     [FF_CONSTANT] = 1.0,
     [FF_PERIODIC] = 1.0,
     [FF_SPRING] = 1.0,
@@ -36,7 +36,7 @@ static float effect_type_gains[16] = {
 
 int apply_effect_gain(int force, int effect_type)
 {
-    if (effect_type < 0 || effect_type >= 16) {
+    if (effect_type < 0 || effect_type >= 128) {
         return force;
     }
     
@@ -427,7 +427,6 @@ int start_effect(int id)
 {
     unsigned char buf[4];
     int is_constant = 0;
-    int is_periodic = 0;
     int force = 0;
     int ret;
 
@@ -453,8 +452,6 @@ int start_effect(int id)
 
             LOG_DEBUG("Constant force initialized: level=%d", force);
         } else if (effects[id].effect.type == FF_PERIODIC) {
-            is_periodic = 1;
-
             /* Initialize periodic effect state */
             effects[id].is_periodic = 1;
             effects[id].periodic_magnitude = effects[id].effect.u.periodic.magnitude;

@@ -15,6 +15,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <errno.h>
+#include <pthread.h>
 #include <sys/time.h>
 #include <linux/uinput.h>
 #include "../include/t500rs_input.h"

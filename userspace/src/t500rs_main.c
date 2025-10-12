@@ -12,6 +12,8 @@
 #include <unistd.h>
 #include <signal.h>
 #include <errno.h>
+#include <pthread.h>
+#include <time.h>
 #include <sys/ioctl.h>
 #include <linux/uinput.h>
 #include "../include/t500rs_common.h"
