@@ -211,10 +211,17 @@ static void *force_update_thread_func(void *arg)
 {
     (void)arg;  /* Unused */
     unsigned char buf[4];
+    int loop_count = 0;
 
-    LOG_DEBUG("Force update thread started");
+    LOG_INFO("Force update thread started");
 
     while (force_update_thread_running && running) {
+        loop_count++;
+
+        /* Log every 100 iterations to show thread is alive */
+        if (loop_count % 100 == 0) {
+            LOG_DEBUG("Force update thread alive (iteration %d)", loop_count);
+        }
         /* Try to lock with timeout to avoid deadlock */
         if (pthread_mutex_trylock(&effects_lock) != 0) {
             usleep(10000);  /* Wait 10ms and try again */
@@ -342,6 +349,12 @@ static void *force_update_thread_func(void *arg)
         buf[1] = 0x0e;
         buf[2] = 0x00;
         buf[3] = level;
+
+        /* Log force updates periodically */
+        if (loop_count % 50 == 0 || force_count > 0) {
+            LOG_DEBUG("Sending force: level=0x%02x, combined=%d, active_effects=%d",
+                     level, combined_force, force_count);
+        }
 
         /* Send without holding lock for too long */
         pthread_mutex_unlock(&effects_lock);
