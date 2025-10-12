@@ -235,15 +235,10 @@ static void *force_update_thread_func(void *arg)
         }
 
         /* Update all active constant force effects */
-        int active_count = 0;
         for (int i = 0; i < MAX_EFFECTS; i++) {
             if (!effects[i].active || !effects[i].is_constant) {
                 continue;
             }
-
-            active_count++;
-            LOG_INFO("Processing effect %d: active=%d, is_constant=%d, force_level=%d",
-                     i, effects[i].active, effects[i].is_constant, effects[i].current_force_level);
 
             /* Get current force level */
             int force = effects[i].current_force_level;
@@ -260,8 +255,6 @@ static void *force_update_thread_func(void *arg)
             /* Convert to signed byte */
             signed char signed_level = (signed char)((force * 127) / 32767);
             unsigned char level = (unsigned char)signed_level;
-
-            LOG_INFO("Effect %d: force=%d, level=0x%02x", i, force, level);
 
             /* Send Report 0x03 - Force level update */
             buf[0] = 0x03;
@@ -280,10 +273,6 @@ static void *force_update_thread_func(void *arg)
                 goto thread_exit;
             }
         }  /* End of for loop */
-
-        if (loop_count % 50 == 0) {
-            LOG_DEBUG("Force update loop %d: active_effects=%d", loop_count, active_count);
-        }
 
         pthread_mutex_unlock(&effects_lock);
 

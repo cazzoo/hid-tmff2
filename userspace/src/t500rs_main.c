@@ -143,7 +143,7 @@ static int handle_ff_upload(struct uinput_ff_upload *upload)
         effects[id].active = 0;
     }
 
-    LOG_INFO("Upload effect %d (type=%d, was_active=%d)", id, upload->effect.type, was_active);
+    LOG_DEBUG("Upload effect %d (type=%d)", id, upload->effect.type);
 
     /* Upload to device */
     switch (upload->effect.type) {
@@ -235,9 +235,6 @@ static void process_uinput_events(void)
         if (n != sizeof(ev))
             continue;
 
-        /* Log ALL events for debugging */
-        LOG_DEBUG("Event: type=0x%02x, code=0x%02x, value=%d", ev.type, ev.code, ev.value);
-
         switch (ev.type) {
         case EV_UINPUT:
             switch (ev.code) {
@@ -271,7 +268,7 @@ static void process_uinput_events(void)
 
         case EV_FF:
             /* Effect play/stop */
-            LOG_INFO("EV_FF event: code=0x%02x (%d), value=%d", ev.code, ev.code, ev.value);
+            LOG_DEBUG("EV_FF event: code=0x%02x, value=%d", ev.code, ev.value);
 
             /* Handle special codes */
             if (ev.code == FF_GAIN) {

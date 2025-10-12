@@ -430,7 +430,7 @@ int start_effect(int id)
     int force = 0;
     int ret;
 
-    LOG_INFO("Starting effect %d (type=%d)", id, effects[id].effect.type);
+    LOG_DEBUG("Starting effect %d (type=%d)", id, effects[id].effect.type);
 
     /* Check effect type (mutex already locked by caller) */
     if (id >= 0 && id < MAX_EFFECTS) {
@@ -450,8 +450,7 @@ int start_effect(int id)
             effects[id].fade_level = effects[id].effect.u.constant.envelope.fade_level;
             effects[id].duration_ms = effects[id].effect.replay.length;
 
-            LOG_INFO("Constant force initialized: id=%d, level=%d, is_constant=%d",
-                     id, force, effects[id].is_constant);
+            LOG_DEBUG("Constant force initialized: id=%d, level=%d", id, force);
         } else if (effects[id].effect.type == FF_PERIODIC) {
             /* Initialize periodic effect state */
             effects[id].is_periodic = 1;
