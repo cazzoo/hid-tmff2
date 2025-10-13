@@ -4,6 +4,77 @@ User-facing tools for controlling and configuring the T500RS driver.
 
 ## Available Tools
 
+### install_windows_drivers.sh
+**Install Windows drivers in Wine/Proton prefix for gaming**
+
+#### Purpose
+Installs the Thrustmaster Windows drivers into a Wine/Proton prefix so that Windows games running under Wine/Proton can properly detect and use the T500RS wheel.
+
+#### Requirements
+- Wine or Proton installed
+- T500RS connected
+- Thrustmaster Windows drivers downloaded
+
+#### Usage
+
+**For Steam/Proton games**:
+```bash
+# Install to default Steam Proton prefix
+./install_windows_drivers.sh
+
+# Install to specific game's prefix
+WINEPREFIX=~/.steam/steam/steamapps/compatdata/244210/pfx ./install_windows_drivers.sh
+```
+
+**For Wine games**:
+```bash
+# Install to default Wine prefix
+WINEPREFIX=~/.wine ./install_windows_drivers.sh
+
+# Install to custom prefix
+WINEPREFIX=/path/to/prefix ./install_windows_drivers.sh
+```
+
+#### What It Does
+1. Detects Wine/Proton prefix
+2. Downloads/locates Thrustmaster drivers
+3. Installs drivers into the prefix
+4. Configures registry entries
+5. Verifies installation
+
+#### Common Use Cases
+
+**Assetto Corsa Competizione**:
+```bash
+# Find the game's app ID (e.g., 805550)
+WINEPREFIX=~/.steam/steam/steamapps/compatdata/805550/pfx ./install_windows_drivers.sh
+```
+
+**Automobilista 2**:
+```bash
+# Find the game's app ID (e.g., 1066890)
+WINEPREFIX=~/.steam/steam/steamapps/compatdata/1066890/pfx ./install_windows_drivers.sh
+```
+
+**Generic Wine game**:
+```bash
+WINEPREFIX=~/.wine ./install_windows_drivers.sh
+```
+
+#### Troubleshooting
+
+**Driver not detected in game**:
+- Verify installation: Check Windows Device Manager in Wine
+- Restart the game
+- Check game's controller settings
+
+**Installation fails**:
+- Ensure Wine/Proton is installed
+- Check WINEPREFIX path is correct
+- Run with sudo if permission denied
+
+---
+
 ### t500rs_control.py
 **Command-line control utility for the T500RS driver**
 

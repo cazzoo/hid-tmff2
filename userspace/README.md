@@ -45,6 +45,9 @@ See [tests/README.md](tests/README.md) for complete testing guide.
 ### Tools
 
 ```bash
+# Install Windows drivers for Wine/Proton games
+./tools/install_windows_drivers.sh
+
 # Command-line control
 python3 tools/t500rs_control.py --help
 
