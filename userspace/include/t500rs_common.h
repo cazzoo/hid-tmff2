@@ -17,6 +17,7 @@
 /* Include new infrastructure */
 #include "t500rs_config.h"
 #include "t500rs_logging.h"
+#include "t500rs_error.h"
 
 /* ============================================================================
  * USB Device Identifiers
