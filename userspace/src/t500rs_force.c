@@ -212,6 +212,8 @@ static void *force_update_thread_func(void *arg)
     (void)arg;  /* Unused */
     unsigned char buf[4];
     int loop_count = 0;
+    static unsigned char last_force_byte = 0x80;  /* Center position */
+    static int skip_count = 0;
 
     LOG_INFO("Force update thread started");
 
@@ -281,16 +283,28 @@ static void *force_update_thread_func(void *arg)
             signed char signed_level = (signed char)((force * 127) / 32767);
             unsigned char level = (unsigned char)signed_level;
 
-            /* Send Report 0x03 - Force level update */
-            buf[0] = 0x03;
-            buf[1] = 0x0e;
-            buf[2] = 0x00;
-            buf[3] = level;
+            /* Only send if force changed (optimization to prevent USB spam) */
+            if (level != last_force_byte) {
+                last_force_byte = level;
+                skip_count = 0;
 
-            /* Send without holding lock for too long */
-            pthread_mutex_unlock(&effects_lock);
-            usb_send(buf, 4);
-            pthread_mutex_lock(&effects_lock);
+                /* Send Report 0x03 - Force level update */
+                buf[0] = 0x03;
+                buf[1] = 0x0e;
+                buf[2] = 0x00;
+                buf[3] = level;
+
+                /* Send without holding lock for too long */
+                pthread_mutex_unlock(&effects_lock);
+                usb_send(buf, 4);
+                pthread_mutex_lock(&effects_lock);
+            } else {
+                skip_count++;
+                /* Log every 100 skips to show we're optimizing */
+                if (skip_count % 100 == 0) {
+                    LOG_DEBUG("Skipped %d identical force updates (level=0x%02x)", skip_count, level);
+                }
+            }
 
             /* Check if we should still continue after sending */
             if (!force_update_thread_running || !usb_handle) {
