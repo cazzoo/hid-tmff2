@@ -18,6 +18,7 @@
 #include "t500rs_config.h"
 #include "t500rs_logging.h"
 #include "t500rs_error.h"
+#include "t500rs_stats.h"
 
 /* ============================================================================
  * USB Device Identifiers

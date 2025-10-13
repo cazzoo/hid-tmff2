@@ -61,6 +61,9 @@ static void cleanup(void)
 {
     LOG_INFO("Cleaning up...");
 
+    /* Print statistics before shutdown */
+    stats_print();
+
     /* Stop threads */
     running = 0;
     input_thread_stop();
@@ -358,6 +361,9 @@ int main(int argc, char **argv)
 
     /* Initialize logging system */
     logging_init(g_config.log.level, g_config.log.use_colors, g_config.log.show_timestamps);
+
+    /* Initialize statistics */
+    stats_init();
 
     printf("========================================\n");
     printf("T500RS Force Feedback Driver\n");
