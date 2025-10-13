@@ -44,25 +44,30 @@ int usb_send(const unsigned char *data, int len)
     fprintf(stderr, "\n");
 #endif
 
-    ret = libusb_interrupt_transfer(usb_handle, EP_OUT, (unsigned char *)data, len, &transferred, 1000);
+    ret = libusb_interrupt_transfer(usb_handle, EP_OUT, (unsigned char *)data, len, &transferred,
+                                    g_config.usb.timeout_ms);
     if (ret < 0) {
         /* Don't log NO_DEVICE errors during shutdown - these are expected */
         if (ret != LIBUSB_ERROR_NO_DEVICE && running) {
-            LOG_ERROR("USB transfer failed: %s (ret=%d)", libusb_error_name(ret), ret);
+            if (ret == LIBUSB_ERROR_TIMEOUT) {
+                t500rs_log_error(T500RS_ERR_USB_TIMEOUT, "USB send");
+            } else {
+                LOG_ERROR("USB transfer failed: %s (ret=%d)", libusb_error_name(ret), ret);
+            }
         }
-        return ret;
+        return T500RS_ERR_USB_TRANSFER;
     }
 
     if (transferred != len) {
         LOG_ERROR("USB transfer incomplete: %d/%d bytes", transferred, len);
-        return -1;
+        return T500RS_ERR_USB_TRANSFER;
     }
 
 #if USB_HEX_DEBUG
     fprintf(stderr, "[USB OK] Sent %d bytes successfully\n", transferred);
 #endif
 
-    return 0;
+    return T500RS_OK;
 }
 
 int usb_receive(unsigned char *data, int len, int timeout)
