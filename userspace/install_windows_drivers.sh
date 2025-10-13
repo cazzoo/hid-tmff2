@@ -106,8 +106,8 @@ echo -e "${GREEN}Found game prefix: $PREFIX${NC}"
 echo
 
 # Download Thrustmaster drivers
-DRIVER_URL="https://ts.thrustmaster.com/download/accessories/pc/t500rs/T500RS_Drivers_2014.exe"
-DRIVER_FILE="/tmp/T500RS_Drivers_2014.exe"
+DRIVER_URL="https://ts.thrustmaster.com/download/pub/webupdate/T500RS/2024_TTRS_1.exe"
+DRIVER_FILE="/tmp/2024_TTRS_1.exe"
 
 echo "Downloading Thrustmaster T500RS drivers..."
 if command -v wget &> /dev/null; then
