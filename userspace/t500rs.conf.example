@@ -1,0 +1,84 @@
+# T500RS Force Feedback Driver Configuration
+# Copy this file to t500rs.conf and customize as needed
+
+# ========================================
+# Force Feedback Settings
+# ========================================
+
+# Force update frequency in Hz (default: 50)
+# Higher values = smoother force feedback but more CPU/USB usage
+# Recommended: 50-100 Hz
+update_rate_hz=50
+
+# Skip sending identical force values to reduce USB traffic (default: true)
+# Recommended: true (prevents USB spam and improves performance)
+skip_identical_updates=true
+
+# Default master gain 0-65535 (default: 65535 = 100%)
+# This is the initial gain when driver starts
+default_gain=65535
+
+# Ignore gain=0 commands from games (default: true)
+# Some games send gain=0 which disables all FFB
+# Enable this workaround to ignore those commands
+ignore_zero_gain=true
+
+# Effect slot for autocenter spring effect (default: 15)
+# Must match the slot expected by T500RS firmware
+# DO NOT CHANGE unless you know what you're doing
+autocenter_effect_id=15
+
+# Minimum autocenter strength 0-100 (default: 10)
+# Values below this are clamped to this minimum
+min_autocenter_strength=10
+
+# Thread priorities (default: 0 = normal)
+# Higher values = higher priority (requires root)
+# Use with caution - can cause system instability
+force_thread_priority=0
+input_thread_priority=0
+
+# ========================================
+# USB Settings
+# ========================================
+
+# USB transfer timeout in milliseconds (default: 1000)
+usb_timeout_ms=1000
+
+# Maximum retry attempts for failed USB transfers (default: 3)
+usb_max_retries=3
+
+# Enable USB hex dumps for debugging (default: false)
+# WARNING: Generates a LOT of output!
+usb_hex_debug=false
+
+# ========================================
+# Logging Settings
+# ========================================
+
+# Log level: error, warn, info, debug (default: info)
+# error = only errors
+# warn  = warnings and errors
+# info  = info, warnings, and errors
+# debug = all messages (very verbose!)
+log_level=info
+
+# Use ANSI colors in terminal output (default: true)
+log_use_colors=true
+
+# Show timestamps in log messages (default: false)
+log_show_timestamps=false
+
+# ========================================
+# Advanced Settings
+# ========================================
+
+# These settings are for advanced users only
+# Changing them may cause unexpected behavior
+
+# Force calculation settings
+# (Currently hardcoded, may be configurable in future)
+
+# Effect gain multipliers
+# (Currently hardcoded, may be configurable in future)
+
