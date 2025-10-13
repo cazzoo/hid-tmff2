@@ -41,7 +41,7 @@ struct t500rs_config config = {
     .enable_multi_effect_mixing = 1,
     .enable_dynamic_update_rate = 1
 };
-uint16_t current_gain = 0xffff;  /* Default: maximum */
+uint16_t current_gain = 0xffff;  /* Will be initialized from config */
 
 /* ============================================================================
  * Signal Handling
@@ -369,6 +369,11 @@ int main(int argc, char **argv)
 
     /* Initialize effects array */
     memset(effects, 0, sizeof(effects));
+
+    /* Initialize gain from config */
+    current_gain = g_config.ffb.default_gain;
+    LOG_INFO("Initial gain set to %u (%.1f%%) from config",
+             current_gain, (current_gain * 100.0f) / 65535.0f);
 
     /* Open USB device */
     ret = usb_device_open();

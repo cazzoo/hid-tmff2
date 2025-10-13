@@ -64,9 +64,10 @@ int set_gain(uint16_t gain)
     /* WORKAROUND: Some games (Automobilista 2) rapidly toggle gain between 0 and 100%
      * Ignoring gain=0 commands seems to fix force feedback in these games.
      * This matches behavior of some other drivers.
+     * Can be disabled via config: ignore_zero_gain=false
      */
-    if (gain == 0) {
-        LOG_INFO("Ignoring gain=0 command (workaround for game compatibility)");
+    if (gain == 0 && g_config.ffb.ignore_zero_gain) {
+        LOG_INFO("Ignoring gain=0 command (workaround enabled in config)");
         return 0;
     }
 
@@ -93,14 +94,14 @@ int set_autocenter(uint16_t autocenter)
 
         /* Stop effect */
         buf[0] = 0x41;
-        buf[1] = AUTOCENTER_EFFECT_ID;
+        buf[1] = g_config.ffb.autocenter_effect_id;
         buf[2] = 0x00;
         buf[3] = 0x01;
         usb_send(buf, 4);
 
         /* Mark as inactive */
         pthread_mutex_lock(&effects_lock);
-        effects[AUTOCENTER_EFFECT_ID].active = 0;
+        effects[g_config.ffb.autocenter_effect_id].active = 0;
         pthread_mutex_unlock(&effects_lock);
 
         current_autocenter = 0;
@@ -111,7 +112,9 @@ int set_autocenter(uint16_t autocenter)
     /* Upload spring effect for autocenter */
     /* Scale to 0-100 like working spring effects */
     unsigned char strength_val = (abs(spring_coefficient) * 100) / 32767;
-    if (strength_val < 10) strength_val = 10;  /* Minimum strength */
+    if (strength_val < g_config.ffb.min_autocenter_strength) {
+        strength_val = g_config.ffb.min_autocenter_strength;  /* Minimum strength from config */
+    }
 
     LOG_INFO("Enabling autocenter with strength=%d (0x%02x)", strength_val, strength_val);
 
@@ -152,7 +155,7 @@ int set_autocenter(uint16_t autocenter)
     /* Report 0x01 - Effect upload */
     memset(buf, 0, sizeof(buf));
     buf[0] = 0x01;
-    buf[1] = AUTOCENTER_EFFECT_ID;
+    buf[1] = g_config.ffb.autocenter_effect_id;
     buf[2] = 0x40;  /* Spring type */
     buf[3] = 0x40;
     buf[4] = 0x17;
@@ -172,7 +175,7 @@ int set_autocenter(uint16_t autocenter)
 
     /* Start the autocenter spring effect */
     buf[0] = 0x41;
-    buf[1] = AUTOCENTER_EFFECT_ID;
+    buf[1] = g_config.ffb.autocenter_effect_id;
     buf[2] = 0x41;
     buf[3] = 0x01;
     ret = usb_send(buf, 4);
@@ -180,8 +183,8 @@ int set_autocenter(uint16_t autocenter)
 
     /* Mark as active */
     pthread_mutex_lock(&effects_lock);
-    effects[AUTOCENTER_EFFECT_ID].active = 1;
-    effects[AUTOCENTER_EFFECT_ID].effect.type = FF_SPRING;
+    effects[g_config.ffb.autocenter_effect_id].active = 1;
+    effects[g_config.ffb.autocenter_effect_id].effect.type = FF_SPRING;
     pthread_mutex_unlock(&effects_lock);
 
     current_autocenter = autocenter;

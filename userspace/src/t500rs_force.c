@@ -25,9 +25,6 @@
 static pthread_t force_update_thread = 0;
 static int force_update_thread_running = 0;
 
-/* Current update interval (microseconds) */
-static unsigned int current_update_interval_us = 20000;  /* Start at 20ms (50Hz) */
-
 /* External running flag (from main) */
 extern int running;
 
@@ -284,7 +281,10 @@ static void *force_update_thread_func(void *arg)
             unsigned char level = (unsigned char)signed_level;
 
             /* Only send if force changed (optimization to prevent USB spam) */
-            if (level != last_force_byte) {
+            /* Check config to see if we should skip identical updates */
+            int should_send = (level != last_force_byte) || !g_config.ffb.skip_identical_updates;
+
+            if (should_send) {
                 last_force_byte = level;
                 skip_count = 0;
 
@@ -317,8 +317,9 @@ static void *force_update_thread_func(void *arg)
 
         pthread_mutex_unlock(&effects_lock);
 
-        /* Sleep for update interval */
-        usleep(20000);  /* 20ms = 50Hz */
+        /* Sleep for update interval (calculated from config update rate) */
+        int sleep_us = 1000000 / g_config.ffb.update_rate_hz;
+        usleep(sleep_us);
     }
 
 thread_exit:
