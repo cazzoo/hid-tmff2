@@ -43,8 +43,6 @@ struct t500rs_config config = {
 };
 uint16_t current_gain = 0xffff;  /* Default: maximum */
 
-FILE *log_file = NULL;
-
 /* ============================================================================
  * Signal Handling
  * ============================================================================ */
@@ -104,12 +102,6 @@ static void cleanup(void)
 
     /* Close USB device */
     usb_device_close();
-
-    /* Close log file */
-    if (log_file) {
-        fclose(log_file);
-        log_file = NULL;
-    }
 
     LOG_INFO("Cleanup complete");
 }
@@ -353,8 +345,19 @@ int main(int argc, char **argv)
 {
     int ret;
 
-    (void)argc;  /* Unused */
-    (void)argv;  /* Unused */
+    (void)argc;  /* Unused for now - could add command line args later */
+    (void)argv;  /* Unused for now */
+
+    /* Initialize configuration system */
+    g_config = get_default_config();
+
+    /* Try to load config from file (optional) */
+    if (load_config_from_file("t500rs.conf", &g_config) == 0) {
+        /* Config loaded successfully */
+    }
+
+    /* Initialize logging system */
+    logging_init(g_config.log.level, g_config.log.use_colors, g_config.log.show_timestamps);
 
     printf("========================================\n");
     printf("T500RS Force Feedback Driver\n");
