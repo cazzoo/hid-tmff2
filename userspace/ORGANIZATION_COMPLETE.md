@@ -62,10 +62,11 @@ userspace/
 │   ├── python/                  (7 Python test scripts)
 │   └── scripts/                 (5 utility scripts)
 │
-└── tools/                       ← User tools (2 tools)
+└── tools/                       ← User tools (3 tools)
     ├── README.md
-    ├── t500rs_control.py        (CLI control)
-    └── t500rs_config_gui.py     (GUI config)
+    ├── install_windows_drivers.sh  (Wine/Proton driver installer)
+    ├── t500rs_control.py           (CLI control)
+    └── t500rs_config_gui.py        (GUI config)
 ```
 
 ---
@@ -94,7 +95,8 @@ userspace/
 - **Comprehensive README** with usage guide
 
 ### ✅ Tool Organization
-- **2 user-facing tools** in tools/
+- **3 user-facing tools** in tools/
+- **Wine/Proton driver installer** (install_windows_drivers.sh)
 - **CLI control utility** (t500rs_control.py)
 - **GUI configuration** (t500rs_config_gui.py)
 - **Complete documentation** (tools/README.md)
@@ -141,7 +143,7 @@ userspace/
 - **Code**: 18 files (9 source + 9 headers)
 - **Documentation**: 45+ files
 - **Tests**: 17 files (5 C + 7 Python + 5 scripts)
-- **Tools**: 2 files
+- **Tools**: 3 files (Wine/Proton installer + CLI + GUI)
 - **Total**: 80+ files organized
 
 ### Directories Created
@@ -152,8 +154,8 @@ userspace/
 - `tests/` - Tests (3 subdirs)
 - `tools/` - User tools
 
-### Files Removed
-- `install_windows_drivers.sh` - Not needed for Linux
+### Files Moved
+- `install_windows_drivers.sh` - Moved to tools/ (essential for Wine/Proton gaming)
 
 ### Documentation Created
 - `docs/INDEX.md` - Complete documentation index
