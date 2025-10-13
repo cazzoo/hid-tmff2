@@ -253,6 +253,17 @@ static void *force_update_thread_func(void *arg)
             /* Get current force level */
             int force = effects[i].current_force_level;
 
+            /* WORKAROUND: Some games send force_level=-1 which appears to be invalid/uninitialized
+             * Treat -1 as 0 (no force) to prevent game freezing
+             * This matches behavior seen in other drivers
+             */
+            if (force == -1) {
+                if (log_counter % 50 == 0) {
+                    LOG_WARN("Effect %d has invalid force_level=-1, treating as 0 (game bug workaround)", i);
+                }
+                force = 0;
+            }
+
             /* Log periodically to see what's happening */
             if (log_counter % 50 == 0) {
                 LOG_INFO("Effect %d: active=%d, is_constant=%d, force_level=%d",
