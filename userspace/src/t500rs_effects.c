@@ -548,7 +548,9 @@ int start_effect(int id)
             effects[id].fade_level = effects[id].effect.u.constant.envelope.fade_level;
             effects[id].duration_ms = effects[id].effect.replay.length;
 
-            LOG_DEBUG("Constant force initialized: id=%d, level=%d", id, force);
+            LOG_INFO("Constant force initialized: id=%d, level=%d, attack_len=%dms, attack_lvl=%d, fade_len=%dms, fade_lvl=%d, duration=%dms",
+                     id, force, effects[id].attack_length_ms, effects[id].attack_level,
+                     effects[id].fade_length_ms, effects[id].fade_level, effects[id].duration_ms);
         } else if (effects[id].effect.type == FF_PERIODIC) {
             /* Initialize periodic effect state */
             effects[id].is_periodic = 1;
