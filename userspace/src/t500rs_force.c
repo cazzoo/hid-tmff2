@@ -237,7 +237,17 @@ static void *force_update_thread_func(void *arg)
         /* Update all active constant force effects */
         static int log_counter = 0;
         for (int i = 0; i < MAX_EFFECTS; i++) {
-            if (!effects[i].active || !effects[i].is_constant) {
+            if (!effects[i].active) {
+                continue;
+            }
+
+            /* Skip periodic effects - they're handled by device hardware */
+            if (effects[i].is_periodic) {
+                continue;
+            }
+
+            /* Skip non-constant effects (spring, damper, etc.) */
+            if (!effects[i].is_constant) {
                 continue;
             }
 

@@ -401,8 +401,8 @@ int upload_periodic_effect(int id, struct ff_effect *effect)
     unsigned short period = effect->u.periodic.period;
     if (period == 0) period = 100;  /* Default 100ms = 10Hz */
 
-    LOG_DEBUG("Uploading %s effect %d, magnitude=0x%02x, period=%dms",
-              type_name, id, mag, period);
+    LOG_INFO("Uploading %s effect %d, magnitude=0x%02x (%d), period=%dms",
+              type_name, id, mag, magnitude, period);
 
     /* Report 0x02 - Envelope */
     memset(buf, 0, sizeof(buf));
@@ -568,7 +568,8 @@ int start_effect(int id)
             effects[id].fade_level = effects[id].effect.u.periodic.envelope.fade_level;
             effects[id].duration_ms = effects[id].effect.replay.length;
 
-            LOG_DEBUG("Periodic effect initialized: waveform=%d", effects[id].periodic_waveform);
+            LOG_INFO("Periodic effect initialized: id=%d, waveform=%d, magnitude=%d, period=%dms",
+                     id, effects[id].periodic_waveform, effects[id].periodic_magnitude, effects[id].periodic_period_ms);
         }
     }
 
