@@ -11,14 +11,7 @@
 
 #include <stdio.h>
 #include <time.h>
-
-/* Forward declare config types to avoid circular dependency */
-typedef enum {
-    LOG_LEVEL_ERROR = 0,
-    LOG_LEVEL_WARN = 1,
-    LOG_LEVEL_INFO = 2,
-    LOG_LEVEL_DEBUG = 3
-} log_level_t;
+#include "t500rs_config.h"  /* For log_level_t */
 
 /* ANSI color codes */
 #define COLOR_RESET   "\033[0m"

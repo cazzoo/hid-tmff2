@@ -14,6 +14,10 @@
 #include <linux/input.h>
 #include <libusb-1.0/libusb.h>
 
+/* Include new infrastructure */
+#include "t500rs_config.h"
+#include "t500rs_logging.h"
+
 /* ============================================================================
  * USB Device Identifiers
  * ============================================================================ */
@@ -92,33 +96,9 @@ struct t500rs_config {
  * Logging Macros
  * ============================================================================ */
 
-extern FILE *log_file;
-
-#define LOG_ERROR(fmt, ...) \
-    do { \
-        fprintf(stderr, "[ERROR] " fmt "\n", ##__VA_ARGS__); \
-        if (log_file) { \
-            fprintf(log_file, "[ERROR] " fmt "\n", ##__VA_ARGS__); \
-            fflush(log_file); \
-        } \
-    } while(0)
-
-#define LOG_INFO(fmt, ...) \
-    do { \
-        printf("[INFO] " fmt "\n", ##__VA_ARGS__); \
-        if (log_file) { \
-            fprintf(log_file, "[INFO] " fmt "\n", ##__VA_ARGS__); \
-            fflush(log_file); \
-        } \
-    } while(0)
-
-#define LOG_DEBUG(fmt, ...) \
-    do { \
-        if (log_file) { \
-            fprintf(log_file, "[DEBUG] " fmt "\n", ##__VA_ARGS__); \
-            fflush(log_file); \
-        } \
-    } while(0)
+/* Logging is now handled by t500rs_logging.h
+ * The LOG_ERROR, LOG_WARN, LOG_INFO, LOG_DEBUG macros are defined there
+ */
 
 /* ============================================================================
  * Feature Flags
