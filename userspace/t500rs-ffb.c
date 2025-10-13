@@ -99,7 +99,7 @@ static unsigned int current_update_interval_us = 20000;  /* Start at 20ms (50Hz)
 #define ENABLE_RAMP_EFFECTS 0
 
 /* USB hex debug logging - enable to see all USB packets */
-#define USB_HEX_DEBUG 0
+#define USB_HEX_DEBUG 1
 
 /* Gain control state */
 static int current_gain = 0xffff;  /* Default: maximum (0-65535) */

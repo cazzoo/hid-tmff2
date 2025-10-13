@@ -19,7 +19,7 @@
 #define EP_IN   0x82
 
 /* USB debug (set to 1 to enable hex dumps) */
-#define USB_HEX_DEBUG 0
+#define USB_HEX_DEBUG 1
 
 /* External running flag (from main) */
 extern int running;

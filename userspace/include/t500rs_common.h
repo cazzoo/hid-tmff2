@@ -28,7 +28,7 @@
  * ============================================================================ */
 
 #define MAX_EFFECTS         64
-#define AUTOCENTER_EFFECT_ID 63  /* Reserved slot for autocenter spring effect */
+#define AUTOCENTER_EFFECT_ID 15  /* Reserved slot for autocenter spring effect (must match monolithic!) */
 
 /**
  * @brief State information for a single force feedback effect
