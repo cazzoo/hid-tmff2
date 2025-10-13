@@ -60,11 +60,39 @@ else
     STEAM_APP_ID="$1"
 fi
 
-# Find the game's prefix
-COMPAT_DATA="$STEAM_DIR/steamapps/compatdata/$STEAM_APP_ID"
+# Find the game's prefix by searching all Steam library locations
+COMPAT_DATA=""
 
-if [ ! -d "$COMPAT_DATA" ]; then
-    echo -e "${RED}ERROR: Game prefix not found at: $COMPAT_DATA${NC}"
+# Check default location first
+if [ -d "$STEAM_DIR/steamapps/compatdata/$STEAM_APP_ID" ]; then
+    COMPAT_DATA="$STEAM_DIR/steamapps/compatdata/$STEAM_APP_ID"
+else
+    # Parse libraryfolders.vdf to find all library locations
+    LIBRARY_FILE="$STEAM_DIR/steamapps/libraryfolders.vdf"
+    if [ -f "$LIBRARY_FILE" ]; then
+        # Extract library paths
+        LIBRARY_PATHS=$(grep -oP '(?<="path"\s{2}")[^"]+' "$LIBRARY_FILE")
+
+        # Search each library for the game
+        for LIB_PATH in $LIBRARY_PATHS; do
+            if [ -d "$LIB_PATH/steamapps/compatdata/$STEAM_APP_ID" ]; then
+                COMPAT_DATA="$LIB_PATH/steamapps/compatdata/$STEAM_APP_ID"
+                break
+            fi
+        done
+    fi
+fi
+
+if [ -z "$COMPAT_DATA" ] || [ ! -d "$COMPAT_DATA" ]; then
+    echo -e "${RED}ERROR: Game prefix not found for App ID $STEAM_APP_ID${NC}"
+    echo
+    echo "Searched locations:"
+    echo "  - $STEAM_DIR/steamapps/compatdata/$STEAM_APP_ID"
+    if [ -f "$LIBRARY_FILE" ]; then
+        for LIB_PATH in $LIBRARY_PATHS; do
+            echo "  - $LIB_PATH/steamapps/compatdata/$STEAM_APP_ID"
+        done
+    fi
     echo
     echo "Make sure:"
     echo "  1. You've run the game at least once"
