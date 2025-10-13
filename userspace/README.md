@@ -31,6 +31,29 @@ cp t500rs.conf.example t500rs.conf
 
 See `t500rs.conf.example` for all available options.
 
+### Testing
+
+```bash
+# Build and run tests
+cd tests
+make
+sudo ./c/test_all_effects
+```
+
+See [tests/README.md](tests/README.md) for complete testing guide.
+
+### Tools
+
+```bash
+# Command-line control
+python3 tools/t500rs_control.py --help
+
+# GUI configuration
+python3 tools/t500rs_config_gui.py
+```
+
+See [tools/README.md](tools/README.md) for tool documentation.
+
 ### Documentation
 
 - **[docs/](docs/)** - Complete documentation (see [docs/INDEX.md](docs/INDEX.md))
