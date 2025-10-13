@@ -33,7 +33,10 @@ See `t500rs.conf.example` for all available options.
 
 ### Documentation
 
-- **REFACTORING_UNIFIED.md** - Complete refactoring plan and progress
+- **[docs/](docs/)** - Complete documentation (see [docs/INDEX.md](docs/INDEX.md))
+  - **[Refactoring Summary](docs/refactoring/REFACTORING_COMPLETE.md)** - What was accomplished
+  - **[Protocol Reference](docs/technical/FFB_PROTOCOL_COMPLETE.md)** - Technical details
+  - **[Development Guide](docs/development/QUICK_REFERENCE.md)** - Developer reference
 - **t500rs.conf.example** - Configuration file with all options documented
 - **Source code** - Comprehensive Doxygen-style comments
 
