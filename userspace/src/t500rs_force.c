@@ -235,6 +235,7 @@ static void *force_update_thread_func(void *arg)
         }
 
         /* Update all active constant force effects */
+        static int log_counter = 0;
         for (int i = 0; i < MAX_EFFECTS; i++) {
             if (!effects[i].active || !effects[i].is_constant) {
                 continue;
@@ -242,6 +243,12 @@ static void *force_update_thread_func(void *arg)
 
             /* Get current force level */
             int force = effects[i].current_force_level;
+
+            /* Log periodically to see what's happening */
+            if (log_counter % 50 == 0) {
+                LOG_INFO("Effect %d: active=%d, is_constant=%d, force_level=%d",
+                         i, effects[i].active, effects[i].is_constant, force);
+            }
 
             /* Apply envelope (attack/fade) */
             force = apply_envelope(force, &effects[i]);
@@ -273,6 +280,8 @@ static void *force_update_thread_func(void *arg)
                 goto thread_exit;
             }
         }  /* End of for loop */
+
+        log_counter++;
 
         pthread_mutex_unlock(&effects_lock);
 
