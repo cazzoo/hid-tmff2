@@ -28,6 +28,7 @@
  * ============================================================================ */
 
 #define MAX_EFFECTS         64
+#define AUTOCENTER_EFFECT_ID 63  /* Reserved slot for autocenter spring effect */
 
 /**
  * @brief State information for a single force feedback effect
@@ -147,6 +148,7 @@ extern struct effect_state effects[MAX_EFFECTS];
 extern pthread_mutex_t effects_lock;
 extern struct t500rs_config config;
 extern uint16_t current_gain;
+extern uint16_t current_autocenter;
 
 #endif /* T500RS_COMMON_H */
 

@@ -15,9 +15,13 @@
 #include <string.h>
 #include <unistd.h>
 #include <math.h>
+#include <pthread.h>
 #include "../include/t500rs_effects.h"
 #include "../include/t500rs_common.h"
 #include "../include/t500rs_usb.h"
+
+/* Global autocenter strength */
+uint16_t current_autocenter = 0;
 
 /* Per-effect-type gain multipliers (0.0 to 1.0) */
 static float effect_type_gains[128] = {
@@ -71,32 +75,117 @@ int set_gain(uint16_t gain)
     return 0;
 }
 
-int set_autocenter(uint16_t strength)
+int set_autocenter(uint16_t autocenter)
 {
-    unsigned char buf[4];
+    unsigned char buf[64];
     int ret;
 
-    LOG_INFO("Setting autocenter to %u (%.1f%%)", strength, (strength * 100.0f) / 65535.0f);
+    LOG_INFO("Autocenter requested: %d%% (raw=%d)",
+             (autocenter * 100) / 65535, autocenter);
 
-    /* Report 0x43 - Autocenter
-     * Format from captures:
-     * buf[0] = 0x43 (report ID)
-     * buf[1] = strength (0-255, scaled from 0-65535)
-     * buf[2] = 0x00
-     * buf[3] = 0x00
-     */
-    memset(buf, 0, sizeof(buf));
-    buf[0] = 0x43;
-    buf[1] = (strength * 255) / 65535;  /* Scale to 0-255 */
-    buf[2] = 0x00;
-    buf[3] = 0x00;
+    /* Autocenter is implemented as a spring effect on T500RS */
+    /* Scale autocenter (0-65535) to spring coefficient (0-32767) */
+    int spring_coefficient = (autocenter * 32767) / 65535;
 
-    ret = usb_send(buf, 4);
-    if (ret) {
-        LOG_ERROR("Failed to set autocenter");
-        return ret;
+    if (autocenter == 0) {
+        /* Stop and remove autocenter spring effect */
+        LOG_INFO("Disabling autocenter (stopping spring effect)");
+
+        /* Stop effect */
+        buf[0] = 0x41;
+        buf[1] = AUTOCENTER_EFFECT_ID;
+        buf[2] = 0x00;
+        buf[3] = 0x01;
+        usb_send(buf, 4);
+
+        /* Mark as inactive */
+        pthread_mutex_lock(&effects_lock);
+        effects[AUTOCENTER_EFFECT_ID].active = 0;
+        pthread_mutex_unlock(&effects_lock);
+
+        current_autocenter = 0;
+        LOG_INFO("Autocenter disabled");
+        return 0;
     }
 
+    /* Upload spring effect for autocenter */
+    /* Scale to 0-100 like working spring effects */
+    unsigned char strength_val = (abs(spring_coefficient) * 100) / 32767;
+    if (strength_val < 10) strength_val = 10;  /* Minimum strength */
+
+    LOG_INFO("Enabling autocenter with strength=%d (0x%02x)", strength_val, strength_val);
+
+    /* Report 0x05 - First report (0x0e) - Coefficients */
+    memset(buf, 0, sizeof(buf));
+    buf[0] = 0x05;
+    buf[1] = 0x0e;
+    buf[2] = 0x00;
+    buf[3] = strength_val;  /* Right coefficient */
+    buf[4] = strength_val;  /* Left coefficient */
+    buf[5] = 0x00;
+    buf[6] = 0x00;
+    buf[7] = 0x00;
+    buf[8] = 0x00;
+    buf[9] = 0x54;   /* Right saturation */
+    buf[10] = 0x54;  /* Left saturation */
+    ret = usb_send(buf, 11);
+    if (ret) return ret;
+    usleep(5000);
+
+    /* Report 0x05 - Second report (0x1c) - Deadband and center */
+    memset(buf, 0, sizeof(buf));
+    buf[0] = 0x05;
+    buf[1] = 0x1c;
+    buf[2] = 0x00;
+    buf[3] = 0x00;  /* Deadband */
+    buf[4] = 0x00;  /* Center position */
+    buf[5] = 0x00;
+    buf[6] = 0x00;
+    buf[7] = 0x00;
+    buf[8] = 0x00;
+    buf[9] = 0x46;   /* Right saturation */
+    buf[10] = 0x54;  /* Left saturation */
+    ret = usb_send(buf, 11);
+    if (ret) return ret;
+    usleep(5000);
+
+    /* Report 0x01 - Effect upload */
+    memset(buf, 0, sizeof(buf));
+    buf[0] = 0x01;
+    buf[1] = AUTOCENTER_EFFECT_ID;
+    buf[2] = 0x40;  /* Spring type */
+    buf[3] = 0x40;
+    buf[4] = 0x17;
+    buf[5] = 0x25;
+    buf[6] = 0x00;
+    buf[7] = 0xff;
+    buf[8] = 0xff;
+    buf[9] = 0x0e;
+    buf[10] = 0x00;
+    buf[11] = 0x1c;
+    buf[12] = 0x00;
+    buf[13] = 0x00;
+    buf[14] = 0x00;
+    ret = usb_send(buf, 15);
+    if (ret) return ret;
+    usleep(5000);
+
+    /* Start the autocenter spring effect */
+    buf[0] = 0x41;
+    buf[1] = AUTOCENTER_EFFECT_ID;
+    buf[2] = 0x41;
+    buf[3] = 0x01;
+    ret = usb_send(buf, 4);
+    if (ret) return ret;
+
+    /* Mark as active */
+    pthread_mutex_lock(&effects_lock);
+    effects[AUTOCENTER_EFFECT_ID].active = 1;
+    effects[AUTOCENTER_EFFECT_ID].effect.type = FF_SPRING;
+    pthread_mutex_unlock(&effects_lock);
+
+    current_autocenter = autocenter;
+    LOG_INFO("Autocenter enabled");
     return 0;
 }
 
