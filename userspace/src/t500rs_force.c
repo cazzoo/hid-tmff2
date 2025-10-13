@@ -253,15 +253,42 @@ static void *force_update_thread_func(void *arg)
             /* Get current force level */
             int force = effects[i].current_force_level;
 
-            /* WORKAROUND: Some games send force_level=-1 which appears to be invalid/uninitialized
-             * Treat -1 as 0 (no force) to prevent game freezing
-             * This matches behavior seen in other drivers
+            /* WORKAROUND: Some games (AMS2, ACC under Wine/Proton) send force_level=-1
+             * which appears to be invalid/uninitialized. This can cause performance issues.
+             *
+             * Strategy (configurable):
+             * 1. Treat -1 as 0 (no force) to prevent issues
+             * 2. Track consecutive invalid frames
+             * 3. Auto-stop effect if it stays invalid too long (optional)
              */
             if (force == -1) {
+                effects[i].invalid_force_count++;
+
+                /* Check if we should auto-stop this effect */
+                if (g_config.ffb.stop_invalid_effects &&
+                    effects[i].invalid_force_count >= g_config.ffb.invalid_effect_threshold) {
+
+                    if (log_counter % 50 == 0) {
+                        LOG_WARN("Effect %d stuck at force=-1 for %d frames, auto-stopping (Wine/Proton workaround)",
+                                 i, effects[i].invalid_force_count);
+                    }
+
+                    /* Stop the effect */
+                    pthread_mutex_unlock(&effects_lock);
+                    stop_effect(i);
+                    pthread_mutex_lock(&effects_lock);
+                    continue;
+                }
+
+                /* Treat -1 as 0 for now */
                 if (log_counter % 50 == 0) {
-                    LOG_WARN("Effect %d has invalid force_level=-1, treating as 0 (game bug workaround)", i);
+                    LOG_WARN("Effect %d has invalid force_level=-1 (count=%d), treating as 0",
+                             i, effects[i].invalid_force_count);
                 }
                 force = 0;
+            } else {
+                /* Valid force, reset counter */
+                effects[i].invalid_force_count = 0;
             }
 
             /* Log periodically to see what's happening */

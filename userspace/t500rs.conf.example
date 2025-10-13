@@ -32,6 +32,28 @@ autocenter_effect_id=15
 # Values below this are clamped to this minimum
 min_autocenter_strength=10
 
+# ========================================
+# Wine/Proton Workarounds
+# ========================================
+
+# Auto-stop effects stuck at force=-1 (default: true)
+# Some games (AMS2, ACC) under Wine/Proton initialize effects with
+# force=-1 and never update them, causing performance issues.
+# This workaround automatically stops effects that remain invalid.
+# Set to false if you experience issues with effects stopping unexpectedly.
+stop_invalid_effects=true
+
+# Frames before stopping invalid effect (default: 100)
+# How many consecutive frames an effect can have force=-1 before
+# being automatically stopped. Higher = more tolerant of temporary
+# invalid values. Lower = faster cleanup of stuck effects.
+# Only used if stop_invalid_effects=true
+invalid_effect_threshold=100
+
+# ========================================
+# Advanced Settings
+# ========================================
+
 # Thread priorities (default: 0 = normal)
 # Higher values = higher priority (requires root)
 # Use with caution - can cause system instability

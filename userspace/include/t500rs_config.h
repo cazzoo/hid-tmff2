@@ -29,15 +29,19 @@ typedef struct {
     /* Force update settings */
     int update_rate_hz;           /**< Force update frequency (default: 50Hz) */
     bool skip_identical_updates;  /**< Skip sending identical force values (default: true) */
-    
+
     /* Gain settings */
     uint16_t default_gain;        /**< Default master gain 0-65535 (default: 65535) */
     bool ignore_zero_gain;        /**< Ignore gain=0 commands (default: true) */
-    
+
     /* Effect settings */
     int autocenter_effect_id;     /**< Effect slot for autocenter (default: 15) */
     int min_autocenter_strength;  /**< Minimum autocenter strength (default: 10) */
-    
+
+    /* Wine/Proton workarounds */
+    bool stop_invalid_effects;    /**< Auto-stop effects stuck at force=-1 (default: true) */
+    int invalid_effect_threshold; /**< Frames before stopping invalid effect (default: 100) */
+
     /* Performance settings */
     int force_thread_priority;    /**< Force update thread priority (default: 0) */
     int input_thread_priority;    /**< Input reading thread priority (default: 0) */

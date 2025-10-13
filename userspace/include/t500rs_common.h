@@ -74,6 +74,9 @@ struct effect_state {
     /* Force smoothing */
     int last_sent_force;            /* Last force sent to device */
     int target_force;               /* Target force before smoothing */
+
+    /* Invalid effect tracking (Wine/Proton workaround) */
+    int invalid_force_count;        /* Consecutive frames with force=-1 */
 };
 
 /* ============================================================================

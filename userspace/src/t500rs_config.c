@@ -25,6 +25,8 @@ driver_config_t get_default_config(void)
             .ignore_zero_gain = true,
             .autocenter_effect_id = 15,
             .min_autocenter_strength = 10,
+            .stop_invalid_effects = true,
+            .invalid_effect_threshold = 100,
             .force_thread_priority = 0,
             .input_thread_priority = 0,
         },
@@ -80,6 +82,10 @@ static int parse_config_line(const char *line, driver_config_t *config)
         config->ffb.autocenter_effect_id = atoi(v);
     } else if (strcmp(k, "min_autocenter_strength") == 0) {
         config->ffb.min_autocenter_strength = atoi(v);
+    } else if (strcmp(k, "stop_invalid_effects") == 0) {
+        config->ffb.stop_invalid_effects = (strcmp(v, "true") == 0 || strcmp(v, "1") == 0);
+    } else if (strcmp(k, "invalid_effect_threshold") == 0) {
+        config->ffb.invalid_effect_threshold = atoi(v);
     }
     /* Parse USB settings */
     else if (strcmp(k, "usb_timeout_ms") == 0) {
@@ -141,7 +147,9 @@ int save_config_to_file(const char *filename, const driver_config_t *config)
     fprintf(f, "default_gain=%u\n", config->ffb.default_gain);
     fprintf(f, "ignore_zero_gain=%s\n", config->ffb.ignore_zero_gain ? "true" : "false");
     fprintf(f, "autocenter_effect_id=%d\n", config->ffb.autocenter_effect_id);
-    fprintf(f, "min_autocenter_strength=%d\n\n", config->ffb.min_autocenter_strength);
+    fprintf(f, "min_autocenter_strength=%d\n", config->ffb.min_autocenter_strength);
+    fprintf(f, "stop_invalid_effects=%s\n", config->ffb.stop_invalid_effects ? "true" : "false");
+    fprintf(f, "invalid_effect_threshold=%d\n\n", config->ffb.invalid_effect_threshold);
     
     fprintf(f, "# USB Settings\n");
     fprintf(f, "usb_timeout_ms=%d\n", config->usb.timeout_ms);
@@ -180,7 +188,9 @@ void print_config(const driver_config_t *config)
            config->ffb.default_gain * 100.0 / 65535.0);
     printf("  Ignore zero gain: %s\n", config->ffb.ignore_zero_gain ? "Yes" : "No");
     printf("  Autocenter effect ID: %d\n", config->ffb.autocenter_effect_id);
-    printf("  Min autocenter strength: %d\n\n", config->ffb.min_autocenter_strength);
+    printf("  Min autocenter strength: %d\n", config->ffb.min_autocenter_strength);
+    printf("  Stop invalid effects: %s\n", config->ffb.stop_invalid_effects ? "Yes" : "No");
+    printf("  Invalid effect threshold: %d frames\n\n", config->ffb.invalid_effect_threshold);
     
     printf("USB:\n");
     printf("  Timeout: %d ms\n", config->usb.timeout_ms);
