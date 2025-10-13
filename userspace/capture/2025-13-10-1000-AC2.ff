@@ -1,0 +1,31 @@
+{
+  "device": "/dev/input/event2",
+  "duration": 22.767414,
+  "event_count": 4,
+  "events": [
+    {
+      "time": 0.0,
+      "type": 21,
+      "code": 1,
+      "value": 1
+    },
+    {
+      "time": 5.375852,
+      "type": 21,
+      "code": 0,
+      "value": 1
+    },
+    {
+      "time": 19.519496,
+      "type": 21,
+      "code": 0,
+      "value": 0
+    },
+    {
+      "time": 22.767414,
+      "type": 21,
+      "code": 0,
+      "value": 1
+    }
+  ]
+}

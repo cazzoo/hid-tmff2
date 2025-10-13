@@ -254,10 +254,18 @@ static void *force_update_thread_func(void *arg)
             force = apply_envelope(force, &effects[i]);
 
             /* Apply global gain */
+            int force_before_gain = force;
             force = (force * current_gain) / 65535;
 
             /* Apply per-effect-type gain */
             force = apply_effect_gain(force, FF_CONSTANT);
+
+            /* Log force calculation periodically */
+            if (log_counter % 50 == 0) {
+                LOG_INFO("Force calc: raw=%d, after_gain=%d (gain=%d), final=%d",
+                         force_before_gain, (force_before_gain * current_gain) / 65535,
+                         current_gain, force);
+            }
 
             /* Convert to signed byte */
             signed char signed_level = (signed char)((force * 127) / 32767);

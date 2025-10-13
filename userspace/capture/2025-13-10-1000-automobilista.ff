@@ -1,0 +1,43 @@
+{
+  "device": "/dev/input/event2",
+  "duration": 0.40001,
+  "event_count": 6,
+  "events": [
+    {
+      "time": 0.0,
+      "type": 21,
+      "code": 96,
+      "value": 65535
+    },
+    {
+      "time": 0.0,
+      "type": 21,
+      "code": 96,
+      "value": 0
+    },
+    {
+      "time": 0.10600699999999996,
+      "type": 21,
+      "code": 96,
+      "value": 65535
+    },
+    {
+      "time": 0.34798300000000004,
+      "type": 21,
+      "code": 96,
+      "value": 65535
+    },
+    {
+      "time": 0.40001,
+      "type": 21,
+      "code": 0,
+      "value": 2147483647
+    },
+    {
+      "time": 0.40001,
+      "type": 21,
+      "code": 1,
+      "value": 2147483647
+    }
+  ]
+}
