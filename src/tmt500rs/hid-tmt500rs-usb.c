@@ -885,24 +885,81 @@ int t500rs_set_gain(void *data, u16 gain)
 int t500rs_set_autocenter(void *data, u16 autocenter)
 {
 	struct t500rs_device_entry *t500rs = data;
-	u8 *buf = t500rs->send_buffer;  /* Use DMA-safe buffer */
+	u8 *buf;
+	int ret;
+	u8 autocenter_percent;
 
 	if (!t500rs)
 		return -ENODEV;
 
-	hid_info(t500rs->hdev, "Set autocenter: %u%%\n",
-		 (autocenter * 100) / 65535);
+	/* Convert from 0-65535 range to 0-100 percentage */
+	autocenter_percent = (u8)((autocenter * 100) / 65535);
 
-	if (autocenter == 0) {
-		/* Stop autocenter spring effect (ID 15) */
-		buf[0] = 0x41;
-		buf[1] = 15;  /* Reserved autocenter effect ID */
-		buf[2] = 0x00;  /* STOP */
-		buf[3] = 0x01;
-		return t500rs_send_usb(t500rs, buf, 4);
+	hid_info(t500rs->hdev, "Set autocenter: %u%% (value=%u)\n",
+		 autocenter_percent, autocenter);
+
+	/* Allocate separate buffer to avoid conflicts with FFB operations */
+	buf = kzalloc(t500rs->buffer_length, GFP_KERNEL);
+	if (!buf) {
+		hid_err(t500rs->hdev, "Failed to allocate buffer for autocenter\n");
+		return -ENOMEM;
 	}
 
-	/* TODO: Upload and start spring effect for autocenter */
+	if (autocenter == 0) {
+		/* Disable autocenter: Report 0x40 0x04 0x00 */
+		buf[0] = 0x40;
+		buf[1] = 0x04;
+		buf[2] = 0x00;  /* Disable */
+		buf[3] = 0x00;
+		ret = t500rs_send_usb(t500rs, buf, 4);
+		if (ret) {
+			hid_err(t500rs->hdev, "Failed to disable autocenter: %d\n", ret);
+			kfree(buf);
+			return ret;
+		}
+		hid_info(t500rs->hdev, "Autocenter disabled\n");
+	} else {
+		/* Enable autocenter: Report 0x40 0x04 0x01 */
+		buf[0] = 0x40;
+		buf[1] = 0x04;
+		buf[2] = 0x01;  /* Enable */
+		buf[3] = 0x00;
+		ret = t500rs_send_usb(t500rs, buf, 4);
+		if (ret) {
+			hid_err(t500rs->hdev, "Failed to enable autocenter: %d\n", ret);
+			kfree(buf);
+			return ret;
+		}
+
+		/* Small delay to ensure enable command is processed */
+		usleep_range(5000, 6000);
+
+		/* Set autocenter strength: Report 0x40 0x03 [value] */
+		buf[0] = 0x40;
+		buf[1] = 0x03;
+		buf[2] = autocenter_percent;  /* 0-100 percentage */
+		buf[3] = 0x00;
+		ret = t500rs_send_usb(t500rs, buf, 4);
+		if (ret) {
+			hid_err(t500rs->hdev, "Failed to set autocenter strength: %d\n", ret);
+			kfree(buf);
+			return ret;
+		}
+
+		hid_info(t500rs->hdev, "Autocenter enabled at %u%%\n", autocenter_percent);
+	}
+
+	/* Apply settings: Report 0x42 0x05 */
+	buf[0] = 0x42;
+	buf[1] = 0x05;
+	ret = t500rs_send_usb(t500rs, buf, 2);
+	if (ret) {
+		hid_err(t500rs->hdev, "Failed to apply autocenter settings: %d\n", ret);
+		kfree(buf);
+		return ret;
+	}
+
+	kfree(buf);
 	return 0;
 }
 
