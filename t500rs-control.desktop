@@ -1,0 +1,11 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=T500RS Control
+Comment=Control panel for Thrustmaster T500RS force feedback settings
+Exec=sudo /home/caz/Documents/hid-tmff2/t500rs-control-gui.py
+Icon=input-gaming
+Terminal=false
+Categories=Game;Settings;
+Keywords=thrustmaster;t500rs;wheel;force;feedback;ffb;
+
