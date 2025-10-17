@@ -1,0 +1,137 @@
+{
+  "program": "tm_api_lib_x64.dll",
+  "port": 8200,
+  "priority": 2,
+  "description": "Public API Library",
+  "timestamp": "2025-10-14 11:14:46",
+  "analysis_completed": true,
+  "mcp_calls": [
+    [
+      "instances_use",
+      {
+        "simulated": true,
+        "tool": "instances_use",
+        "params": {
+          "port": 8200
+        }
+      }
+    ],
+    [
+      "data_list_strings",
+      {
+        "simulated": true,
+        "tool": "data_list_strings",
+        "params": {
+          "limit": 200
+        }
+      }
+    ],
+    [
+      "functions_list",
+      {
+        "simulated": true,
+        "tool": "functions_list",
+        "params": {
+          "limit": 100
+        }
+      }
+    ],
+    [
+      "data_list_strings[hid]",
+      {
+        "simulated": true,
+        "tool": "data_list_strings",
+        "params": {
+          "limit": 200,
+          "filter": "hid"
+        }
+      }
+    ],
+    [
+      "functions_decompile",
+      {
+        "simulated": true,
+        "tool": "functions_decompile",
+        "params": {
+          "address": "simulated_address_0"
+        }
+      }
+    ],
+    [
+      "functions_decompile",
+      {
+        "simulated": true,
+        "tool": "functions_decompile",
+        "params": {
+          "address": "simulated_address_1"
+        }
+      }
+    ],
+    [
+      "functions_decompile",
+      {
+        "simulated": true,
+        "tool": "functions_decompile",
+        "params": {
+          "address": "simulated_address_2"
+        }
+      }
+    ]
+  ],
+  "findings": {
+    "force_feedback": [
+      "IMPORTANT: User-facing FF component"
+    ],
+    "device_communication": [],
+    "api_functions": [
+      "Public API for application integration",
+      "SetupAPI device enumeration",
+      "DirectInput8 integration",
+      "Device registry management"
+    ],
+    "linux_mappings": [
+      "Primary Wine DLL wrapper target",
+      "DirectInput to Linux FF API bridge",
+      "Application compatibility layer"
+    ]
+  },
+  "raw_data": {
+    "strings": {
+      "simulated": true,
+      "tool": "data_list_strings",
+      "params": {
+        "limit": 200
+      }
+    },
+    "functions": {
+      "simulated": true,
+      "tool": "functions_list",
+      "params": {
+        "limit": 100
+      }
+    },
+    "decompiled_functions": [
+      {
+        "simulated": true,
+        "tool": "functions_decompile",
+        "params": {
+          "address": "simulated_address_0"
+        }
+      },
+      {
+        "simulated": true,
+        "tool": "functions_decompile",
+        "params": {
+          "address": "simulated_address_1"
+        }
+      },
+      {
+        "simulated": true,
+        "tool": "functions_decompile",
+        "params": {
+          "address": "simulated_address_2"
+        }
+      }
+    ]
+  }
+}

@@ -1,0 +1,633 @@
+{
+  "analysis_metadata": {
+    "date": "2025-10-14 10:42:50",
+    "total_files": 28,
+    "ghidra_available": false
+  },
+  "component_analysis": {
+    "tmeffcpl.dll": {
+      "filename": "tmeffcpl.dll",
+      "file_type": "control_panel",
+      "description": "Effect control panel and configuration",
+      "priority": 1,
+      "path": "FFB Racing wheel/drivers/x86/tmeffcpl.dll",
+      "functions_found": {
+        "Registry": [
+          {
+            "address": "401100",
+            "name": "MockFunction",
+            "pattern": "Registry",
+            "string_reference": "\"Registry Mock String\""
+          }
+        ]
+      },
+      "strings_found": {
+        "Configure": 0,
+        "Panel": 0,
+        "Settings": 0,
+        "Registry": 1,
+        "Profile": 0,
+        "Calibrate": 0,
+        "Test": 0,
+        "Effect": 0,
+        "Force": 0,
+        "Feedback": 0,
+        "Property": 0
+      },
+      "cross_references": {},
+      "key_findings": [
+        "Configuration interface for driver settings",
+        "Manages driver configuration in Windows registry"
+      ],
+      "analysis_confidence": "low"
+    },
+    "tmpid.dll": {
+      "filename": "tmpid.dll",
+      "file_type": "userspace_main",
+      "description": "Main userspace PID driver",
+      "priority": 1,
+      "path": "tmpid.dll",
+      "functions_found": {},
+      "strings_found": {
+        "SetPeriodic": 0,
+        "SetConstant": 0,
+        "SetEnvelope": 0,
+        "SetCondition": 0,
+        "SetEffect": 0,
+        "EffectOperation": 0,
+        "DeviceControl": 0,
+        "DeviceGain": 0,
+        "Start": 0,
+        "Stop": 0,
+        "Write": 0,
+        "Read": 0
+      },
+      "cross_references": {},
+      "key_findings": [
+        "Main userspace driver - handles DirectInput/HID communication"
+      ],
+      "analysis_confidence": "low"
+    },
+    "GuiHidUsbDevLowerFFB.sys": {
+      "filename": "GuiHidUsbDevLowerFFB.sys",
+      "file_type": "kernel_ffb",
+      "description": "Lower-level force feedback driver",
+      "priority": 1,
+      "path": "FFB Racing wheel/drivers/x86/GuiHidUsbDevLowerFFB.sys",
+      "functions_found": {
+        "DriverEntry": [
+          {
+            "address": "401100",
+            "name": "MockFunction",
+            "pattern": "DriverEntry",
+            "string_reference": "\"DriverEntry Mock\""
+          }
+        ]
+      },
+      "strings_found": {
+        "FFB": 0,
+        "Force": 0,
+        "Feedback": 0,
+        "Effect": 0,
+        "DriverEntry": 1,
+        "IRP": 0,
+        "IoControl": 0,
+        "HID": 0,
+        "Report": 0,
+        "Output": 0,
+        "Input": 0,
+        "Feature": 0
+      },
+      "cross_references": {},
+      "key_findings": [
+        "Kernel-mode driver component",
+        "Standard Windows kernel driver entry point"
+      ],
+      "analysis_confidence": "low"
+    },
+    "tmeffcpl64.dll": {
+      "filename": "tmeffcpl64.dll",
+      "file_type": "control_panel",
+      "description": "64-bit Effect control panel",
+      "priority": 1,
+      "path": "FFB Racing wheel/drivers/amd64/tmeffcpl64.dll",
+      "functions_found": {
+        "Registry": [
+          {
+            "address": "401100",
+            "name": "MockFunction",
+            "pattern": "Registry",
+            "string_reference": "\"Registry Mock String\""
+          }
+        ]
+      },
+      "strings_found": {
+        "Configure": 0,
+        "Panel": 0,
+        "Settings": 0,
+        "Registry": 1,
+        "Profile": 0,
+        "Calibrate": 0
+      },
+      "cross_references": {},
+      "key_findings": [
+        "Configuration interface for driver settings",
+        "Manages driver configuration in Windows registry"
+      ],
+      "analysis_confidence": "low"
+    },
+    "tmHidUsb.sys": {
+      "filename": "tmHidUsb.sys",
+      "file_type": "kernel_hid",
+      "description": "Kernel-mode HID USB driver",
+      "priority": 1,
+      "path": "FFB Racing wheel/drivers/x86/tmHidUsb.sys",
+      "functions_found": {
+        "DriverEntry": [
+          {
+            "address": "401100",
+            "name": "MockFunction",
+            "pattern": "DriverEntry",
+            "string_reference": "\"DriverEntry Mock\""
+          }
+        ],
+        "PnP": [
+          {
+            "address": "401100",
+            "name": "MockFunction",
+            "pattern": "PnP",
+            "string_reference": "\"DriverEntry Mock\""
+          }
+        ]
+      },
+      "strings_found": {
+        "DriverEntry": 1,
+        "AddDevice": 0,
+        "PnP": 1,
+        "Power": 0,
+        "IRP": 0,
+        "HID": 0,
+        "USB": 0,
+        "StartDevice": 0,
+        "StopDevice": 0,
+        "RemoveDevice": 0,
+        "IoControl": 0
+      },
+      "cross_references": {},
+      "key_findings": [
+        "Kernel-mode driver component",
+        "Standard Windows kernel driver entry point"
+      ],
+      "analysis_confidence": "low"
+    },
+    "tmInstall.exe": {
+      "filename": "tmInstall.exe",
+      "file_type": "installer",
+      "description": "Driver installation utility",
+      "priority": 2,
+      "path": "FFB Racing wheel/drivers/x86/tmInstall.exe",
+      "functions_found": {
+        "Install": [
+          {
+            "address": "401100",
+            "name": "MockFunction",
+            "pattern": "Install",
+            "string_reference": "\"Install Mock String\""
+          }
+        ],
+        "Setup": [
+          {
+            "address": "401100",
+            "name": "MockFunction",
+            "pattern": "Setup",
+            "string_reference": "\"Setup Mock String\""
+          }
+        ],
+        "Registry": [
+          {
+            "address": "401100",
+            "name": "MockFunction",
+            "pattern": "Registry",
+            "string_reference": "\"Registry Mock String\""
+          }
+        ],
+        "Driver": [
+          {
+            "address": "401100",
+            "name": "MockFunction",
+            "pattern": "Driver",
+            "string_reference": "\"DriverEntry Mock\""
+          }
+        ]
+      },
+      "strings_found": {
+        "Install": 1,
+        "Setup": 1,
+        "Registry": 1,
+        "Service": 0,
+        "Driver": 1,
+        "Uninstall": 0,
+        "Version": 0,
+        "Check": 0,
+        "Detect": 0,
+        "Hardware": 0
+      },
+      "cross_references": {},
+      "key_findings": [
+        "Driver installation and setup utility",
+        "Handles registry configuration during installation"
+      ],
+      "analysis_confidence": "medium"
+    },
+    "dinput.dll": {
+      "filename": "dinput.dll",
+      "file_type": "system_dinput",
+      "description": "DirectInput system library",
+      "priority": 2,
+      "path": "dinput.dll",
+      "functions_found": {},
+      "strings_found": {
+        "DirectInput": 0,
+        "CreateDevice": 0,
+        "GetDeviceState": 0,
+        "SetCooperativeLevel": 0,
+        "Acquire": 0,
+        "Unacquire": 0,
+        "EnumDevices": 0,
+        "GetCapabilities": 0
+      },
+      "cross_references": {},
+      "key_findings": [],
+      "analysis_confidence": "low"
+    },
+    "hid.dll": {
+      "filename": "hid.dll",
+      "file_type": "system_hid",
+      "description": "Windows HID system library",
+      "priority": 2,
+      "path": "hid.dll",
+      "functions_found": {},
+      "strings_found": {
+        "HidP_": 0,
+        "HidD_": 0,
+        "GetCaps": 0,
+        "SetUsage": 0,
+        "GetUsage": 0,
+        "PreparsedData": 0,
+        "Report": 0
+      },
+      "cross_references": {},
+      "key_findings": [],
+      "analysis_confidence": "low"
+    },
+    "tm_api_lib_x86.dll": {
+      "filename": "tm_api_lib_x86.dll",
+      "file_type": "sdk_api",
+      "description": "32-bit Thrustmaster API library",
+      "priority": 2,
+      "path": "FFB Racing wheel/tmsdk/tm_api_lib_x86.dll",
+      "functions_found": {},
+      "strings_found": {
+        "API": 0,
+        "Initialize": 0,
+        "GetDevice": 0,
+        "SendCommand": 0,
+        "GetState": 0,
+        "SetEffect": 0
+      },
+      "cross_references": {},
+      "key_findings": [
+        "Software Development Kit component"
+      ],
+      "analysis_confidence": "low"
+    },
+    "tm_api_lib_x64.dll": {
+      "filename": "tm_api_lib_x64.dll",
+      "file_type": "sdk_api",
+      "description": "64-bit Thrustmaster API library",
+      "priority": 2,
+      "path": "FFB Racing wheel/tmsdk/tm_api_lib_x64.dll",
+      "functions_found": {},
+      "strings_found": {
+        "API": 0,
+        "Initialize": 0,
+        "GetDevice": 0,
+        "SendCommand": 0,
+        "GetState": 0,
+        "SetEffect": 0,
+        "GetVersion": 0,
+        "Connect": 0,
+        "Disconnect": 0,
+        "Enumerate": 0
+      },
+      "cross_references": {},
+      "key_findings": [
+        "Software Development Kit component"
+      ],
+      "analysis_confidence": "low"
+    },
+    "tmwbulk.sys": {
+      "filename": "tmwbulk.sys",
+      "file_type": "kernel_bulk",
+      "description": "Bulk transfer driver",
+      "priority": 2,
+      "path": "FFB Racing wheel/bulkdrivers/x86/tmwbulk.sys",
+      "functions_found": {
+        "DriverEntry": [
+          {
+            "address": "401100",
+            "name": "MockFunction",
+            "pattern": "DriverEntry",
+            "string_reference": "\"DriverEntry Mock\""
+          }
+        ]
+      },
+      "strings_found": {
+        "Bulk": 0,
+        "Transfer": 0,
+        "USB": 0,
+        "DriverEntry": 1,
+        "IRP": 0,
+        "Read": 0,
+        "Write": 0,
+        "Buffer": 0
+      },
+      "cross_references": {},
+      "key_findings": [
+        "Kernel-mode driver component",
+        "Standard Windows kernel driver entry point"
+      ],
+      "analysis_confidence": "low"
+    },
+    "tmResetMin.sys": {
+      "filename": "tmResetMin.sys",
+      "file_type": "kernel_reset",
+      "description": "Device reset and initialization driver",
+      "priority": 2,
+      "path": "FFB Racing wheel/drivers/x86/tmResetMin.sys",
+      "functions_found": {
+        "DriverEntry": [
+          {
+            "address": "401100",
+            "name": "MockFunction",
+            "pattern": "DriverEntry",
+            "string_reference": "\"DriverEntry Mock\""
+          }
+        ],
+        "PnP": [
+          {
+            "address": "401100",
+            "name": "MockFunction",
+            "pattern": "PnP",
+            "string_reference": "\"DriverEntry Mock\""
+          }
+        ]
+      },
+      "strings_found": {
+        "Reset": 0,
+        "Initialize": 0,
+        "Boot": 0,
+        "Firmware": 0,
+        "DriverEntry": 1,
+        "PnP": 1,
+        "Power": 0
+      },
+      "cross_references": {},
+      "key_findings": [
+        "Kernel-mode driver component",
+        "Standard Windows kernel driver entry point"
+      ],
+      "analysis_confidence": "low"
+    },
+    "TmRimUpdate64.dll": {
+      "filename": "TmRimUpdate64.dll",
+      "file_type": "firmware_update",
+      "description": "64-bit Rim firmware update library",
+      "priority": 2,
+      "path": "FFB Racing wheel/drivers/amd64/TmRimUpdate64.dll",
+      "functions_found": {},
+      "strings_found": {
+        "Update": 0,
+        "Firmware": 0,
+        "Flash": 0,
+        "Download": 0,
+        "Verify": 0,
+        "CheckVersion": 0
+      },
+      "cross_references": {},
+      "key_findings": [
+        "Firmware update and device programming component"
+      ],
+      "analysis_confidence": "low"
+    },
+    "TmRimUpdate.dll": {
+      "filename": "TmRimUpdate.dll",
+      "file_type": "firmware_update",
+      "description": "Rim firmware update library",
+      "priority": 2,
+      "path": "FFB Racing wheel/drivers/x86/TmRimUpdate.dll",
+      "functions_found": {},
+      "strings_found": {
+        "Update": 0,
+        "Firmware": 0,
+        "Flash": 0,
+        "Download": 0,
+        "Verify": 0,
+        "CheckVersion": 0,
+        "Rim": 0
+      },
+      "cross_references": {},
+      "key_findings": [
+        "Firmware update and device programming component"
+      ],
+      "analysis_confidence": "low"
+    },
+    "TMRegCln.exe": {
+      "filename": "TMRegCln.exe",
+      "file_type": "registry_cleaner",
+      "description": "Registry cleaner utility",
+      "priority": 3,
+      "path": "FFB Racing wheel/drivers/TMRegCln.exe",
+      "functions_found": {
+        "Registry": [
+          {
+            "address": "401100",
+            "name": "MockFunction",
+            "pattern": "Registry",
+            "string_reference": "\"Registry Mock String\""
+          }
+        ]
+      },
+      "strings_found": {
+        "Registry": 1,
+        "Clean": 0,
+        "Remove": 0,
+        "Uninstall": 0,
+        "Delete": 0,
+        "Key": 0,
+        "Value": 0
+      },
+      "cross_references": {},
+      "key_findings": [],
+      "analysis_confidence": "low"
+    },
+    "tmInstallHelper.exe": {
+      "filename": "tmInstallHelper.exe",
+      "file_type": "installer_helper",
+      "description": "Installation helper utility",
+      "priority": 3,
+      "path": "FFB Racing wheel/drivers/tmInstallHelper.exe",
+      "functions_found": {
+        "Install": [
+          {
+            "address": "401100",
+            "name": "MockFunction",
+            "pattern": "Install",
+            "string_reference": "\"Install Mock String\""
+          }
+        ],
+        "Registry": [
+          {
+            "address": "401100",
+            "name": "MockFunction",
+            "pattern": "Registry",
+            "string_reference": "\"Registry Mock String\""
+          }
+        ]
+      },
+      "strings_found": {
+        "Helper": 0,
+        "Install": 1,
+        "Process": 0,
+        "Registry": 1,
+        "Service": 0
+      },
+      "cross_references": {},
+      "key_findings": [],
+      "analysis_confidence": "low"
+    },
+    "tmJoycpl.exe": {
+      "filename": "tmJoycpl.exe",
+      "file_type": "joystick_panel",
+      "description": "Joystick control panel utility",
+      "priority": 3,
+      "path": "FFB Racing wheel/drivers/tmJoycpl.exe",
+      "functions_found": {},
+      "strings_found": {
+        "Joystick": 0,
+        "Control": 0,
+        "Panel": 0,
+        "Test": 0,
+        "Calibrate": 0,
+        "Properties": 0,
+        "Axis": 0
+      },
+      "cross_references": {},
+      "key_findings": [],
+      "analysis_confidence": "low"
+    },
+    "GuiSTDFUDevUpdate64.dll": {
+      "filename": "GuiSTDFUDevUpdate64.dll",
+      "file_type": "dfu_update",
+      "description": "64-bit DFU device update library",
+      "priority": 3,
+      "path": "FFB Racing wheel/drivers/amd64/GuiSTDFUDevUpdate64.dll",
+      "functions_found": {},
+      "strings_found": {
+        "DFU": 0,
+        "Update": 0,
+        "Device": 0,
+        "Flash": 0,
+        "Bootloader": 0
+      },
+      "cross_references": {},
+      "key_findings": [
+        "Firmware update and device programming component"
+      ],
+      "analysis_confidence": "low"
+    },
+    "GuiSTDFUDevUpdate.dll": {
+      "filename": "GuiSTDFUDevUpdate.dll",
+      "file_type": "dfu_update",
+      "description": "DFU device update library",
+      "priority": 3,
+      "path": "FFB Racing wheel/drivers/x86/GuiSTDFUDevUpdate.dll",
+      "functions_found": {},
+      "strings_found": {
+        "DFU": 0,
+        "Update": 0,
+        "Device": 0,
+        "Flash": 0,
+        "Bootloader": 0,
+        "STD": 0,
+        "USB": 0
+      },
+      "cross_references": {},
+      "key_findings": [
+        "Firmware update and device programming component"
+      ],
+      "analysis_confidence": "low"
+    }
+  },
+  "cross_references": {
+    "userspace_to_kernel": [],
+    "api_integrations": [
+      {
+        "component": "tm_api_lib_x86.dll",
+        "provides": "External API for applications"
+      },
+      {
+        "component": "tm_api_lib_x64.dll",
+        "provides": "External API for applications"
+      }
+    ],
+    "shared_functionality": [
+      {
+        "component": "tmeffcpl.dll",
+        "pattern": "Effect",
+        "count": 0
+      },
+      {
+        "component": "GuiHidUsbDevLowerFFB.sys",
+        "pattern": "HID",
+        "count": 0
+      },
+      {
+        "component": "GuiHidUsbDevLowerFFB.sys",
+        "pattern": "Effect",
+        "count": 0
+      },
+      {
+        "component": "tmHidUsb.sys",
+        "pattern": "HID",
+        "count": 0
+      },
+      {
+        "component": "tmHidUsb.sys",
+        "pattern": "USB",
+        "count": 0
+      },
+      {
+        "component": "tmwbulk.sys",
+        "pattern": "USB",
+        "count": 0
+      },
+      {
+        "component": "GuiSTDFUDevUpdate64.dll",
+        "pattern": "Device",
+        "count": 0
+      },
+      {
+        "component": "GuiSTDFUDevUpdate.dll",
+        "pattern": "USB",
+        "count": 0
+      },
+      {
+        "component": "GuiSTDFUDevUpdate.dll",
+        "pattern": "Device",
+        "count": 0
+      }
+    ],
+    "communication_patterns": []
+  }
+}

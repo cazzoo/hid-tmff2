@@ -1,0 +1,25 @@
+{
+  "program": "tmResetMin.sys",
+  "port": 8197,
+  "priority": 5,
+  "description": "Device Reset Driver - State management",
+  "analysis_status": "pending",
+  "force_feedback_focus": {
+    "api_functions": [],
+    "effect_types": [],
+    "device_commands": [],
+    "configuration_interfaces": []
+  },
+  "linux_compatibility": {
+    "ff_api_mappings": [],
+    "hidraw_interfaces": [],
+    "uinput_requirements": [],
+    "wine_integration": []
+  },
+  "reverse_engineering": {
+    "key_functions": [],
+    "data_structures": [],
+    "communication_protocols": [],
+    "device_interfaces": []
+  }
+}

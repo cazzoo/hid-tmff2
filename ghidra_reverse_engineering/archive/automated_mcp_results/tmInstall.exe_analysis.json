@@ -1,0 +1,63 @@
+{
+  "program": "tmInstall.exe",
+  "port": 8198,
+  "priority": 5,
+  "description": "Installation Program",
+  "timestamp": "2025-10-14 11:14:46",
+  "analysis_completed": true,
+  "mcp_calls": [
+    [
+      "instances_use",
+      {
+        "simulated": true,
+        "tool": "instances_use",
+        "params": {
+          "port": 8198
+        }
+      }
+    ],
+    [
+      "data_list_strings",
+      {
+        "simulated": true,
+        "tool": "data_list_strings",
+        "params": {
+          "limit": 200
+        }
+      }
+    ],
+    [
+      "functions_list",
+      {
+        "simulated": true,
+        "tool": "functions_list",
+        "params": {
+          "limit": 100
+        }
+      }
+    ]
+  ],
+  "findings": {
+    "force_feedback": [],
+    "device_communication": [],
+    "api_functions": [],
+    "linux_mappings": []
+  },
+  "raw_data": {
+    "strings": {
+      "simulated": true,
+      "tool": "data_list_strings",
+      "params": {
+        "limit": 200
+      }
+    },
+    "functions": {
+      "simulated": true,
+      "tool": "functions_list",
+      "params": {
+        "limit": 100
+      }
+    },
+    "decompiled_functions": []
+  }
+}

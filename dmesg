@@ -1,0 +1,1035 @@
+[17044.604986] watchdog: BUG: soft lockup - CPU#6 stuck for 9329s! [winedevice.exe:12921]
+[17044.604992] Modules linked in: hid_tmff_new(OE) usb_tminit_new(OE) hid_tminit_new(OE) rfcomm snd_seq_dummy snd_hrtimer snd_seq nft_masq nft_ct nft_reject_ipv4 nf_reject_ipv4 nft_reject act_csum cls_u32 sch_htb xt_conntrack xt_MASQUERADE bridge stp llc xt_set ip_set nft_chain_nat nf_nat nf_conntrack nf_defrag_ipv6 nf_defrag_ipv4 xt_addrtype nft_compat nf_tables vboxnetadp(OE) vboxnetflt(OE) overlay vboxdrv(OE) qrtr cmac algif_hash algif_skcipher af_alg bnep uinput nvidia_uvm(POE) squashfs snd_usb_audio snd_usbmidi_lib snd_ump snd_rawmidi mousedev snd_seq_device mc intel_rapl_msr btusb intel_rapl_common joydev btrtl btintel x86_pkg_temp_thermal intel_powerclamp btbcm btmtk raid0 coretemp ext4 eeepc_wmi bluetooth asus_wmi kvm_intel sparse_keymap snd_hda_codec_realtek platform_profile iTCO_wdt snd_hda_codec_ca0110 mbcache at24 i8042 intel_pmc_bxt nvidia_drm(POE) jbd2 iTCO_vendor_support nvidia_modeset(POE) ecdh_generic serio snd_hda_codec_generic kvm irqbypass snd_hda_codec_hdmi ledtrig_audio crct10dif_pclmul crc32_pclmul
+[17044.605030]  polyval_clmulni polyval_generic snd_hda_intel gf128mul snd_intel_dspcfg snd_intel_sdw_acpi ghash_clmulni_intel snd_hda_codec sha512_ssse3 sha1_ssse3 snd_hda_core aesni_intel snd_hwdep crypto_simd cryptd snd_pcm snd_timer rapl intel_cstate i2c_i801 snd mei_me intel_uncore rfkill crc16 pcspkr wmi_bmof i2c_smbus lpc_ich soundcore e1000e mei md_mod mac_hid nvidia(POE) i2c_dev sg dm_mod fuse crypto_user loop nfnetlink bpf_preload ip_tables x_tables usbhid btrfs blake2b_generic libcrc32c crc32c_generic xor mxm_wmi raid6_pq sha256_ssse3 xhci_pci xhci_pci_renesas video wmi crc32c_intel
+[17044.605053] Unloaded tainted modules: hid_tminit_new(OE):4 usb_tminit_new(OE):4 hid_tmff_new(OE):5 [last unloaded: hid_tminit_new(OE)]
+[17044.605057] CPU: 6 PID: 12921 Comm: winedevice.exe Tainted: P        W  OEL     6.6.107-1-MANJARO #1 817a58fad5dd0668fe9f292579813a9e8c38bd20
+[17044.605059] Hardware name: System manufacturer System Product Name/P8Z68-V PRO, BIOS 0902 09/19/2011
+[17044.605060] RIP: 0010:native_queued_spin_lock_slowpath+0x2ba/0x2f0
+[17044.605065] Code: ea 12 83 e0 03 83 ea 01 48 c1 e0 05 48 63 d2 48 05 00 50 03 00 48 03 04 d5 c0 8d 90 9c 4c 89 08 41 8b 41 08 85 c0 75 0a f3 90 <41> 8b 41 08 85 c0 74 f6 49 8b 11 48 85 d2 0f 84 6a ff ff ff 0f 18
+[17044.605066] RSP: 0018:ffffccae1019f928 EFLAGS: 00000246
+[17044.605067] RAX: 0000000000000000 RBX: ffff899dc1846890 RCX: ffff899dc1846890
+[17044.605068] RDX: 0000000000000007 RSI: 0000000000205500 RDI: ffff899dc1846890
+[17044.605069] RBP: ffffccae1019f9b8 R08: 00000000001c0000 R09: ffff899eaf5b5000
+[17044.605070] R10: 00000000001c0000 R11: 0000000000000000 R12: 0000000000000002
+[17044.605071] R13: ffff899e61c59400 R14: ffff899ccebcd038 R15: ffff899dc1846888
+[17044.605072] FS:  00000001005ff6c0(0000) GS:ffff899eaf580000(0000) knlGS:000000007ff70000
+[17044.605073] CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+[17044.605074] CR2: 00003e4c00470000 CR3: 00000003fc756006 CR4: 00000000000606e0
+[17044.605075] Call Trace:
+[17044.605076]  <TASK>
+[17044.605078]  _raw_spin_lock+0x29/0x30
+[17044.605080]  __mutex_lock.constprop.0+0x130/0x760
+[17044.605084]  usbhid_open+0x25/0x100 [usbhid afeadd22dd1cae5d810a19d2e53fc1be6cf2d819]
+[17044.605090]  hid_hw_open+0x66/0x80
+[17044.605093]  input_open_device+0x6b/0xc0
+[17044.605095]  evdev_open+0x1db/0x210
+[17044.605097]  chrdev_open+0xc9/0x260
+[17044.605099]  ? __pfx_chrdev_open+0x10/0x10
+[17044.605101]  do_dentry_open+0x23d/0x540
+[17044.605102]  path_openat+0xcad/0x10c0
+[17044.605105]  ? syscall_exit_to_user_mode+0x27/0x50
+[17044.605107]  ? do_syscall_64+0x66/0x80
+[17044.605109]  do_filp_open+0xb3/0x160
+[17044.605111]  ? kmem_cache_free+0x24/0x380
+[17044.605114]  do_sys_openat2+0xab/0xe0
+[17044.605116]  __x64_sys_openat+0x62/0xa0
+[17044.605118]  do_syscall_64+0x5a/0x80
+[17044.605120]  ? mntput_no_expire+0x4c/0x270
+[17044.605121]  ? kmem_cache_free+0x24/0x380
+[17044.605123]  ? __call_rcu_common+0xfb/0x730
+[17044.605125]  ? syscall_exit_to_user_mode+0x27/0x50
+[17044.605127]  ? do_syscall_64+0x66/0x80
+[17044.605129]  ? kmem_cache_free+0x24/0x380
+[17044.605130]  ? do_sys_openat2+0x96/0xe0
+[17044.605132]  ? __x64_sys_openat+0x62/0xa0
+[17044.605133]  ? syscall_exit_to_user_mode+0x27/0x50
+[17044.605135]  ? do_syscall_64+0x66/0x80
+[17044.605137]  ? do_syscall_64+0x66/0x80
+[17044.605138]  ? syscall_exit_to_user_mode+0x27/0x50
+[17044.605140]  ? do_syscall_64+0x66/0x80
+[17044.605141]  ? do_syscall_64+0x66/0x80
+[17044.605143]  ? exit_to_user_mode_prepare+0x1ab/0x240
+[17044.605145]  entry_SYSCALL_64_after_hwframe+0x78/0xe2
+[17044.605148] RIP: 0033:0x7f3d2a975fc5
+[17044.605163] Code: 8b 55 d0 48 89 45 b0 75 9e 44 89 55 9c e8 03 53 f8 ff 44 8b 55 9c 89 da 4c 89 e6 41 89 c0 bf 9c ff ff ff b8 01 01 00 00 0f 05 <48> 3d 00 f0 ff ff 77 33 44 89 c7 89 45 9c e8 58 53 f8 ff 8b 45 9c
+[17044.605164] RSP: 002b:00000001005fd770 EFLAGS: 00000293 ORIG_RAX: 0000000000000101
+[17044.605165] RAX: ffffffffffffffda RBX: 0000000000080000 RCX: 00007f3d2a975fc5
+[17044.605166] RDX: 0000000000080000 RSI: 00000001005fd850 RDI: 00000000ffffff9c
+[17044.605167] RBP: 00000001005fd7e0 R08: 0000000000000000 R09: 0000000000000006
+[17044.605168] R10: 0000000000000000 R11: 0000000000000293 R12: 00000001005fd850
+[17044.605168] R13: 00000001005fd848 R14: 0000000000000130 R15: 00000001005fd84a
+[17044.605170]  </TASK>
+[17072.605432] watchdog: BUG: soft lockup - CPU#6 stuck for 9355s! [winedevice.exe:12921]
+[17072.605438] Modules linked in: hid_tmff_new(OE) usb_tminit_new(OE) hid_tminit_new(OE) rfcomm snd_seq_dummy snd_hrtimer snd_seq nft_masq nft_ct nft_reject_ipv4 nf_reject_ipv4 nft_reject act_csum cls_u32 sch_htb xt_conntrack xt_MASQUERADE bridge stp llc xt_set ip_set nft_chain_nat nf_nat nf_conntrack nf_defrag_ipv6 nf_defrag_ipv4 xt_addrtype nft_compat nf_tables vboxnetadp(OE) vboxnetflt(OE) overlay vboxdrv(OE) qrtr cmac algif_hash algif_skcipher af_alg bnep uinput nvidia_uvm(POE) squashfs snd_usb_audio snd_usbmidi_lib snd_ump snd_rawmidi mousedev snd_seq_device mc intel_rapl_msr btusb intel_rapl_common joydev btrtl btintel x86_pkg_temp_thermal intel_powerclamp btbcm btmtk raid0 coretemp ext4 eeepc_wmi bluetooth asus_wmi kvm_intel sparse_keymap snd_hda_codec_realtek platform_profile iTCO_wdt snd_hda_codec_ca0110 mbcache at24 i8042 intel_pmc_bxt nvidia_drm(POE) jbd2 iTCO_vendor_support nvidia_modeset(POE) ecdh_generic serio snd_hda_codec_generic kvm irqbypass snd_hda_codec_hdmi ledtrig_audio crct10dif_pclmul crc32_pclmul
+[17072.605475]  polyval_clmulni polyval_generic snd_hda_intel gf128mul snd_intel_dspcfg snd_intel_sdw_acpi ghash_clmulni_intel snd_hda_codec sha512_ssse3 sha1_ssse3 snd_hda_core aesni_intel snd_hwdep crypto_simd cryptd snd_pcm snd_timer rapl intel_cstate i2c_i801 snd mei_me intel_uncore rfkill crc16 pcspkr wmi_bmof i2c_smbus lpc_ich soundcore e1000e mei md_mod mac_hid nvidia(POE) i2c_dev sg dm_mod fuse crypto_user loop nfnetlink bpf_preload ip_tables x_tables usbhid btrfs blake2b_generic libcrc32c crc32c_generic xor mxm_wmi raid6_pq sha256_ssse3 xhci_pci xhci_pci_renesas video wmi crc32c_intel
+[17072.605498] Unloaded tainted modules: hid_tminit_new(OE):4 usb_tminit_new(OE):4 hid_tmff_new(OE):5 [last unloaded: hid_tminit_new(OE)]
+[17072.605502] CPU: 6 PID: 12921 Comm: winedevice.exe Tainted: P        W  OEL     6.6.107-1-MANJARO #1 817a58fad5dd0668fe9f292579813a9e8c38bd20
+[17072.605505] Hardware name: System manufacturer System Product Name/P8Z68-V PRO, BIOS 0902 09/19/2011
+[17072.605506] RIP: 0010:native_queued_spin_lock_slowpath+0x2ba/0x2f0
+[17072.605510] Code: ea 12 83 e0 03 83 ea 01 48 c1 e0 05 48 63 d2 48 05 00 50 03 00 48 03 04 d5 c0 8d 90 9c 4c 89 08 41 8b 41 08 85 c0 75 0a f3 90 <41> 8b 41 08 85 c0 74 f6 49 8b 11 48 85 d2 0f 84 6a ff ff ff 0f 18
+[17072.605511] RSP: 0018:ffffccae1019f928 EFLAGS: 00000246
+[17072.605513] RAX: 0000000000000000 RBX: ffff899dc1846890 RCX: ffff899dc1846890
+[17072.605514] RDX: 0000000000000007 RSI: 0000000000205500 RDI: ffff899dc1846890
+[17072.605514] RBP: ffffccae1019f9b8 R08: 00000000001c0000 R09: ffff899eaf5b5000
+[17072.605515] R10: 00000000001c0000 R11: 0000000000000000 R12: 0000000000000002
+[17072.605516] R13: ffff899e61c59400 R14: ffff899ccebcd038 R15: ffff899dc1846888
+[17072.605517] FS:  00000001005ff6c0(0000) GS:ffff899eaf580000(0000) knlGS:000000007ff70000
+[17072.605518] CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+[17072.605519] CR2: 00003e4c00470000 CR3: 00000003fc756006 CR4: 00000000000606e0
+[17072.605520] Call Trace:
+[17072.605522]  <TASK>
+[17072.605523]  _raw_spin_lock+0x29/0x30
+[17072.605526]  __mutex_lock.constprop.0+0x130/0x760
+[17072.605529]  usbhid_open+0x25/0x100 [usbhid afeadd22dd1cae5d810a19d2e53fc1be6cf2d819]
+[17072.605536]  hid_hw_open+0x66/0x80
+[17072.605538]  input_open_device+0x6b/0xc0
+[17072.605541]  evdev_open+0x1db/0x210
+[17072.605543]  chrdev_open+0xc9/0x260
+[17072.605545]  ? __pfx_chrdev_open+0x10/0x10
+[17072.605546]  do_dentry_open+0x23d/0x540
+[17072.605548]  path_openat+0xcad/0x10c0
+[17072.605550]  ? syscall_exit_to_user_mode+0x27/0x50
+[17072.605552]  ? do_syscall_64+0x66/0x80
+[17072.605555]  do_filp_open+0xb3/0x160
+[17072.605557]  ? kmem_cache_free+0x24/0x380
+[17072.605560]  do_sys_openat2+0xab/0xe0
+[17072.605562]  __x64_sys_openat+0x62/0xa0
+[17072.605563]  do_syscall_64+0x5a/0x80
+[17072.605565]  ? mntput_no_expire+0x4c/0x270
+[17072.605567]  ? kmem_cache_free+0x24/0x380
+[17072.605568]  ? __call_rcu_common+0xfb/0x730
+[17072.605570]  ? syscall_exit_to_user_mode+0x27/0x50
+[17072.605572]  ? do_syscall_64+0x66/0x80
+[17072.605574]  ? kmem_cache_free+0x24/0x380
+[17072.605575]  ? do_sys_openat2+0x96/0xe0
+[17072.605577]  ? __x64_sys_openat+0x62/0xa0
+[17072.605579]  ? syscall_exit_to_user_mode+0x27/0x50
+[17072.605580]  ? do_syscall_64+0x66/0x80
+[17072.605582]  ? do_syscall_64+0x66/0x80
+[17072.605584]  ? syscall_exit_to_user_mode+0x27/0x50
+[17072.605585]  ? do_syscall_64+0x66/0x80
+[17072.605587]  ? do_syscall_64+0x66/0x80
+[17072.605588]  ? exit_to_user_mode_prepare+0x1ab/0x240
+[17072.605591]  entry_SYSCALL_64_after_hwframe+0x78/0xe2
+[17072.605593] RIP: 0033:0x7f3d2a975fc5
+[17072.605609] Code: 8b 55 d0 48 89 45 b0 75 9e 44 89 55 9c e8 03 53 f8 ff 44 8b 55 9c 89 da 4c 89 e6 41 89 c0 bf 9c ff ff ff b8 01 01 00 00 0f 05 <48> 3d 00 f0 ff ff 77 33 44 89 c7 89 45 9c e8 58 53 f8 ff 8b 45 9c
+[17072.605610] RSP: 002b:00000001005fd770 EFLAGS: 00000293 ORIG_RAX: 0000000000000101
+[17072.605612] RAX: ffffffffffffffda RBX: 0000000000080000 RCX: 00007f3d2a975fc5
+[17072.605612] RDX: 0000000000080000 RSI: 00000001005fd850 RDI: 00000000ffffff9c
+[17072.605613] RBP: 00000001005fd7e0 R08: 0000000000000000 R09: 0000000000000006
+[17072.605614] R10: 0000000000000000 R11: 0000000000000293 R12: 00000001005fd850
+[17072.605615] R13: 00000001005fd848 R14: 0000000000000130 R15: 00000001005fd84a
+[17072.605617]  </TASK>
+[17100.605877] watchdog: BUG: soft lockup - CPU#6 stuck for 9381s! [winedevice.exe:12921]
+[17100.605882] Modules linked in: hid_tmff_new(OE) usb_tminit_new(OE) hid_tminit_new(OE) rfcomm snd_seq_dummy snd_hrtimer snd_seq nft_masq nft_ct nft_reject_ipv4 nf_reject_ipv4 nft_reject act_csum cls_u32 sch_htb xt_conntrack xt_MASQUERADE bridge stp llc xt_set ip_set nft_chain_nat nf_nat nf_conntrack nf_defrag_ipv6 nf_defrag_ipv4 xt_addrtype nft_compat nf_tables vboxnetadp(OE) vboxnetflt(OE) overlay vboxdrv(OE) qrtr cmac algif_hash algif_skcipher af_alg bnep uinput nvidia_uvm(POE) squashfs snd_usb_audio snd_usbmidi_lib snd_ump snd_rawmidi mousedev snd_seq_device mc intel_rapl_msr btusb intel_rapl_common joydev btrtl btintel x86_pkg_temp_thermal intel_powerclamp btbcm btmtk raid0 coretemp ext4 eeepc_wmi bluetooth asus_wmi kvm_intel sparse_keymap snd_hda_codec_realtek platform_profile iTCO_wdt snd_hda_codec_ca0110 mbcache at24 i8042 intel_pmc_bxt nvidia_drm(POE) jbd2 iTCO_vendor_support nvidia_modeset(POE) ecdh_generic serio snd_hda_codec_generic kvm irqbypass snd_hda_codec_hdmi ledtrig_audio crct10dif_pclmul crc32_pclmul
+[17100.605919]  polyval_clmulni polyval_generic snd_hda_intel gf128mul snd_intel_dspcfg snd_intel_sdw_acpi ghash_clmulni_intel snd_hda_codec sha512_ssse3 sha1_ssse3 snd_hda_core aesni_intel snd_hwdep crypto_simd cryptd snd_pcm snd_timer rapl intel_cstate i2c_i801 snd mei_me intel_uncore rfkill crc16 pcspkr wmi_bmof i2c_smbus lpc_ich soundcore e1000e mei md_mod mac_hid nvidia(POE) i2c_dev sg dm_mod fuse crypto_user loop nfnetlink bpf_preload ip_tables x_tables usbhid btrfs blake2b_generic libcrc32c crc32c_generic xor mxm_wmi raid6_pq sha256_ssse3 xhci_pci xhci_pci_renesas video wmi crc32c_intel
+[17100.605942] Unloaded tainted modules: hid_tminit_new(OE):4 usb_tminit_new(OE):4 hid_tmff_new(OE):5 [last unloaded: hid_tminit_new(OE)]
+[17100.605946] CPU: 6 PID: 12921 Comm: winedevice.exe Tainted: P        W  OEL     6.6.107-1-MANJARO #1 817a58fad5dd0668fe9f292579813a9e8c38bd20
+[17100.605948] Hardware name: System manufacturer System Product Name/P8Z68-V PRO, BIOS 0902 09/19/2011
+[17100.605949] RIP: 0010:native_queued_spin_lock_slowpath+0x2b8/0x2f0
+[17100.605953] Code: f6 c1 ea 12 83 e0 03 83 ea 01 48 c1 e0 05 48 63 d2 48 05 00 50 03 00 48 03 04 d5 c0 8d 90 9c 4c 89 08 41 8b 41 08 85 c0 75 0a <f3> 90 41 8b 41 08 85 c0 74 f6 49 8b 11 48 85 d2 0f 84 6a ff ff ff
+[17100.605954] RSP: 0018:ffffccae1019f928 EFLAGS: 00000246
+[17100.605955] RAX: 0000000000000000 RBX: ffff899dc1846890 RCX: ffff899dc1846890
+[17100.605956] RDX: 0000000000000007 RSI: 0000000000205500 RDI: ffff899dc1846890
+[17100.605957] RBP: ffffccae1019f9b8 R08: 00000000001c0000 R09: ffff899eaf5b5000
+[17100.605958] R10: 00000000001c0000 R11: 0000000000000000 R12: 0000000000000002
+[17100.605959] R13: ffff899e61c59400 R14: ffff899ccebcd038 R15: ffff899dc1846888
+[17100.605959] FS:  00000001005ff6c0(0000) GS:ffff899eaf580000(0000) knlGS:000000007ff70000
+[17100.605961] CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+[17100.605962] CR2: 00003e4c00470000 CR3: 00000003fc756006 CR4: 00000000000606e0
+[17100.605963] Call Trace:
+[17100.605964]  <TASK>
+[17100.605965]  _raw_spin_lock+0x29/0x30
+[17100.605967]  __mutex_lock.constprop.0+0x130/0x760
+[17100.605970]  usbhid_open+0x25/0x100 [usbhid afeadd22dd1cae5d810a19d2e53fc1be6cf2d819]
+[17100.605977]  hid_hw_open+0x66/0x80
+[17100.605979]  input_open_device+0x6b/0xc0
+[17100.605982]  evdev_open+0x1db/0x210
+[17100.605984]  chrdev_open+0xc9/0x260
+[17100.605986]  ? __pfx_chrdev_open+0x10/0x10
+[17100.605987]  do_dentry_open+0x23d/0x540
+[17100.605989]  path_openat+0xcad/0x10c0
+[17100.605991]  ? syscall_exit_to_user_mode+0x27/0x50
+[17100.605993]  ? do_syscall_64+0x66/0x80
+[17100.605996]  do_filp_open+0xb3/0x160
+[17100.605998]  ? kmem_cache_free+0x24/0x380
+[17100.606000]  do_sys_openat2+0xab/0xe0
+[17100.606003]  __x64_sys_openat+0x62/0xa0
+[17100.606004]  do_syscall_64+0x5a/0x80
+[17100.606006]  ? mntput_no_expire+0x4c/0x270
+[17100.606008]  ? kmem_cache_free+0x24/0x380
+[17100.606009]  ? __call_rcu_common+0xfb/0x730
+[17100.606011]  ? syscall_exit_to_user_mode+0x27/0x50
+[17100.606013]  ? do_syscall_64+0x66/0x80
+[17100.606015]  ? kmem_cache_free+0x24/0x380
+[17100.606016]  ? do_sys_openat2+0x96/0xe0
+[17100.606018]  ? __x64_sys_openat+0x62/0xa0
+[17100.606020]  ? syscall_exit_to_user_mode+0x27/0x50
+[17100.606021]  ? do_syscall_64+0x66/0x80
+[17100.606023]  ? do_syscall_64+0x66/0x80
+[17100.606024]  ? syscall_exit_to_user_mode+0x27/0x50
+[17100.606026]  ? do_syscall_64+0x66/0x80
+[17100.606027]  ? do_syscall_64+0x66/0x80
+[17100.606029]  ? exit_to_user_mode_prepare+0x1ab/0x240
+[17100.606031]  entry_SYSCALL_64_after_hwframe+0x78/0xe2
+[17100.606034] RIP: 0033:0x7f3d2a975fc5
+[17100.606048] Code: 8b 55 d0 48 89 45 b0 75 9e 44 89 55 9c e8 03 53 f8 ff 44 8b 55 9c 89 da 4c 89 e6 41 89 c0 bf 9c ff ff ff b8 01 01 00 00 0f 05 <48> 3d 00 f0 ff ff 77 33 44 89 c7 89 45 9c e8 58 53 f8 ff 8b 45 9c
+[17100.606049] RSP: 002b:00000001005fd770 EFLAGS: 00000293 ORIG_RAX: 0000000000000101
+[17100.606051] RAX: ffffffffffffffda RBX: 0000000000080000 RCX: 00007f3d2a975fc5
+[17100.606052] RDX: 0000000000080000 RSI: 00000001005fd850 RDI: 00000000ffffff9c
+[17100.606052] RBP: 00000001005fd7e0 R08: 0000000000000000 R09: 0000000000000006
+[17100.606053] R10: 0000000000000000 R11: 0000000000000293 R12: 00000001005fd850
+[17100.606054] R13: 00000001005fd848 R14: 0000000000000130 R15: 00000001005fd84a
+[17100.606056]  </TASK>
+[17128.606325] watchdog: BUG: soft lockup - CPU#6 stuck for 9407s! [winedevice.exe:12921]
+[17128.606332] Modules linked in: hid_tmff_new(OE) usb_tminit_new(OE) hid_tminit_new(OE) rfcomm snd_seq_dummy snd_hrtimer snd_seq nft_masq nft_ct nft_reject_ipv4 nf_reject_ipv4 nft_reject act_csum cls_u32 sch_htb xt_conntrack xt_MASQUERADE bridge stp llc xt_set ip_set nft_chain_nat nf_nat nf_conntrack nf_defrag_ipv6 nf_defrag_ipv4 xt_addrtype nft_compat nf_tables vboxnetadp(OE) vboxnetflt(OE) overlay vboxdrv(OE) qrtr cmac algif_hash algif_skcipher af_alg bnep uinput nvidia_uvm(POE) squashfs snd_usb_audio snd_usbmidi_lib snd_ump snd_rawmidi mousedev snd_seq_device mc intel_rapl_msr btusb intel_rapl_common joydev btrtl btintel x86_pkg_temp_thermal intel_powerclamp btbcm btmtk raid0 coretemp ext4 eeepc_wmi bluetooth asus_wmi kvm_intel sparse_keymap snd_hda_codec_realtek platform_profile iTCO_wdt snd_hda_codec_ca0110 mbcache at24 i8042 intel_pmc_bxt nvidia_drm(POE) jbd2 iTCO_vendor_support nvidia_modeset(POE) ecdh_generic serio snd_hda_codec_generic kvm irqbypass snd_hda_codec_hdmi ledtrig_audio crct10dif_pclmul crc32_pclmul
+[17128.606369]  polyval_clmulni polyval_generic snd_hda_intel gf128mul snd_intel_dspcfg snd_intel_sdw_acpi ghash_clmulni_intel snd_hda_codec sha512_ssse3 sha1_ssse3 snd_hda_core aesni_intel snd_hwdep crypto_simd cryptd snd_pcm snd_timer rapl intel_cstate i2c_i801 snd mei_me intel_uncore rfkill crc16 pcspkr wmi_bmof i2c_smbus lpc_ich soundcore e1000e mei md_mod mac_hid nvidia(POE) i2c_dev sg dm_mod fuse crypto_user loop nfnetlink bpf_preload ip_tables x_tables usbhid btrfs blake2b_generic libcrc32c crc32c_generic xor mxm_wmi raid6_pq sha256_ssse3 xhci_pci xhci_pci_renesas video wmi crc32c_intel
+[17128.606393] Unloaded tainted modules: hid_tminit_new(OE):4 usb_tminit_new(OE):4 hid_tmff_new(OE):5 [last unloaded: hid_tminit_new(OE)]
+[17128.606397] CPU: 6 PID: 12921 Comm: winedevice.exe Tainted: P        W  OEL     6.6.107-1-MANJARO #1 817a58fad5dd0668fe9f292579813a9e8c38bd20
+[17128.606399] Hardware name: System manufacturer System Product Name/P8Z68-V PRO, BIOS 0902 09/19/2011
+[17128.606400] RIP: 0010:native_queued_spin_lock_slowpath+0x2be/0x2f0
+[17128.606405] Code: 03 83 ea 01 48 c1 e0 05 48 63 d2 48 05 00 50 03 00 48 03 04 d5 c0 8d 90 9c 4c 89 08 41 8b 41 08 85 c0 75 0a f3 90 41 8b 41 08 <85> c0 74 f6 49 8b 11 48 85 d2 0f 84 6a ff ff ff 0f 18 0a e9 62 ff
+[17128.606406] RSP: 0018:ffffccae1019f928 EFLAGS: 00000246
+[17128.606407] RAX: 0000000000000000 RBX: ffff899dc1846890 RCX: ffff899dc1846890
+[17128.606408] RDX: 0000000000000007 RSI: 0000000000205500 RDI: ffff899dc1846890
+[17128.606409] RBP: ffffccae1019f9b8 R08: 00000000001c0000 R09: ffff899eaf5b5000
+[17128.606410] R10: 00000000001c0000 R11: 0000000000000000 R12: 0000000000000002
+[17128.606411] R13: ffff899e61c59400 R14: ffff899ccebcd038 R15: ffff899dc1846888
+[17128.606412] FS:  00000001005ff6c0(0000) GS:ffff899eaf580000(0000) knlGS:000000007ff70000
+[17128.606413] CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+[17128.606414] CR2: 00003e4c00470000 CR3: 00000003fc756006 CR4: 00000000000606e0
+[17128.606415] Call Trace:
+[17128.606416]  <TASK>
+[17128.606418]  _raw_spin_lock+0x29/0x30
+[17128.606420]  __mutex_lock.constprop.0+0x130/0x760
+[17128.606424]  usbhid_open+0x25/0x100 [usbhid afeadd22dd1cae5d810a19d2e53fc1be6cf2d819]
+[17128.606431]  hid_hw_open+0x66/0x80
+[17128.606434]  input_open_device+0x6b/0xc0
+[17128.606436]  evdev_open+0x1db/0x210
+[17128.606438]  chrdev_open+0xc9/0x260
+[17128.606440]  ? __pfx_chrdev_open+0x10/0x10
+[17128.606442]  do_dentry_open+0x23d/0x540
+[17128.606444]  path_openat+0xcad/0x10c0
+[17128.606446]  ? syscall_exit_to_user_mode+0x27/0x50
+[17128.606448]  ? do_syscall_64+0x66/0x80
+[17128.606451]  do_filp_open+0xb3/0x160
+[17128.606453]  ? kmem_cache_free+0x24/0x380
+[17128.606456]  do_sys_openat2+0xab/0xe0
+[17128.606458]  __x64_sys_openat+0x62/0xa0
+[17128.606459]  do_syscall_64+0x5a/0x80
+[17128.606461]  ? mntput_no_expire+0x4c/0x270
+[17128.606463]  ? kmem_cache_free+0x24/0x380
+[17128.606464]  ? __call_rcu_common+0xfb/0x730
+[17128.606466]  ? syscall_exit_to_user_mode+0x27/0x50
+[17128.606468]  ? do_syscall_64+0x66/0x80
+[17128.606470]  ? kmem_cache_free+0x24/0x380
+[17128.606471]  ? do_sys_openat2+0x96/0xe0
+[17128.606473]  ? __x64_sys_openat+0x62/0xa0
+[17128.606475]  ? syscall_exit_to_user_mode+0x27/0x50
+[17128.606476]  ? do_syscall_64+0x66/0x80
+[17128.606478]  ? do_syscall_64+0x66/0x80
+[17128.606479]  ? syscall_exit_to_user_mode+0x27/0x50
+[17128.606481]  ? do_syscall_64+0x66/0x80
+[17128.606483]  ? do_syscall_64+0x66/0x80
+[17128.606484]  ? exit_to_user_mode_prepare+0x1ab/0x240
+[17128.606487]  entry_SYSCALL_64_after_hwframe+0x78/0xe2
+[17128.606489] RIP: 0033:0x7f3d2a975fc5
+[17128.606506] Code: 8b 55 d0 48 89 45 b0 75 9e 44 89 55 9c e8 03 53 f8 ff 44 8b 55 9c 89 da 4c 89 e6 41 89 c0 bf 9c ff ff ff b8 01 01 00 00 0f 05 <48> 3d 00 f0 ff ff 77 33 44 89 c7 89 45 9c e8 58 53 f8 ff 8b 45 9c
+[17128.606507] RSP: 002b:00000001005fd770 EFLAGS: 00000293 ORIG_RAX: 0000000000000101
+[17128.606508] RAX: ffffffffffffffda RBX: 0000000000080000 RCX: 00007f3d2a975fc5
+[17128.606509] RDX: 0000000000080000 RSI: 00000001005fd850 RDI: 00000000ffffff9c
+[17128.606510] RBP: 00000001005fd7e0 R08: 0000000000000000 R09: 0000000000000006
+[17128.606511] R10: 0000000000000000 R11: 0000000000000293 R12: 00000001005fd850
+[17128.606512] R13: 00000001005fd848 R14: 0000000000000130 R15: 00000001005fd84a
+[17128.606514]  </TASK>
+[17156.606769] watchdog: BUG: soft lockup - CPU#6 stuck for 9433s! [winedevice.exe:12921]
+[17156.606776] Modules linked in: hid_tmff_new(OE) usb_tminit_new(OE) hid_tminit_new(OE) rfcomm snd_seq_dummy snd_hrtimer snd_seq nft_masq nft_ct nft_reject_ipv4 nf_reject_ipv4 nft_reject act_csum cls_u32 sch_htb xt_conntrack xt_MASQUERADE bridge stp llc xt_set ip_set nft_chain_nat nf_nat nf_conntrack nf_defrag_ipv6 nf_defrag_ipv4 xt_addrtype nft_compat nf_tables vboxnetadp(OE) vboxnetflt(OE) overlay vboxdrv(OE) qrtr cmac algif_hash algif_skcipher af_alg bnep uinput nvidia_uvm(POE) squashfs snd_usb_audio snd_usbmidi_lib snd_ump snd_rawmidi mousedev snd_seq_device mc intel_rapl_msr btusb intel_rapl_common joydev btrtl btintel x86_pkg_temp_thermal intel_powerclamp btbcm btmtk raid0 coretemp ext4 eeepc_wmi bluetooth asus_wmi kvm_intel sparse_keymap snd_hda_codec_realtek platform_profile iTCO_wdt snd_hda_codec_ca0110 mbcache at24 i8042 intel_pmc_bxt nvidia_drm(POE) jbd2 iTCO_vendor_support nvidia_modeset(POE) ecdh_generic serio snd_hda_codec_generic kvm irqbypass snd_hda_codec_hdmi ledtrig_audio crct10dif_pclmul crc32_pclmul
+[17156.606814]  polyval_clmulni polyval_generic snd_hda_intel gf128mul snd_intel_dspcfg snd_intel_sdw_acpi ghash_clmulni_intel snd_hda_codec sha512_ssse3 sha1_ssse3 snd_hda_core aesni_intel snd_hwdep crypto_simd cryptd snd_pcm snd_timer rapl intel_cstate i2c_i801 snd mei_me intel_uncore rfkill crc16 pcspkr wmi_bmof i2c_smbus lpc_ich soundcore e1000e mei md_mod mac_hid nvidia(POE) i2c_dev sg dm_mod fuse crypto_user loop nfnetlink bpf_preload ip_tables x_tables usbhid btrfs blake2b_generic libcrc32c crc32c_generic xor mxm_wmi raid6_pq sha256_ssse3 xhci_pci xhci_pci_renesas video wmi crc32c_intel
+[17156.606836] Unloaded tainted modules: hid_tminit_new(OE):4 usb_tminit_new(OE):4 hid_tmff_new(OE):5 [last unloaded: hid_tminit_new(OE)]
+[17156.606840] CPU: 6 PID: 12921 Comm: winedevice.exe Tainted: P        W  OEL     6.6.107-1-MANJARO #1 817a58fad5dd0668fe9f292579813a9e8c38bd20
+[17156.606843] Hardware name: System manufacturer System Product Name/P8Z68-V PRO, BIOS 0902 09/19/2011
+[17156.606844] RIP: 0010:native_queued_spin_lock_slowpath+0x2be/0x2f0
+[17156.606848] Code: 03 83 ea 01 48 c1 e0 05 48 63 d2 48 05 00 50 03 00 48 03 04 d5 c0 8d 90 9c 4c 89 08 41 8b 41 08 85 c0 75 0a f3 90 41 8b 41 08 <85> c0 74 f6 49 8b 11 48 85 d2 0f 84 6a ff ff ff 0f 18 0a e9 62 ff
+[17156.606849] RSP: 0018:ffffccae1019f928 EFLAGS: 00000246
+[17156.606851] RAX: 0000000000000000 RBX: ffff899dc1846890 RCX: ffff899dc1846890
+[17156.606852] RDX: 0000000000000007 RSI: 0000000000205500 RDI: ffff899dc1846890
+[17156.606852] RBP: ffffccae1019f9b8 R08: 00000000001c0000 R09: ffff899eaf5b5000
+[17156.606853] R10: 00000000001c0000 R11: 0000000000000000 R12: 0000000000000002
+[17156.606854] R13: ffff899e61c59400 R14: ffff899ccebcd038 R15: ffff899dc1846888
+[17156.606855] FS:  00000001005ff6c0(0000) GS:ffff899eaf580000(0000) knlGS:000000007ff70000
+[17156.606856] CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+[17156.606857] CR2: 00003e4c00470000 CR3: 00000003fc756006 CR4: 00000000000606e0
+[17156.606858] Call Trace:
+[17156.606860]  <TASK>
+[17156.606862]  _raw_spin_lock+0x29/0x30
+[17156.606864]  __mutex_lock.constprop.0+0x130/0x760
+[17156.606867]  usbhid_open+0x25/0x100 [usbhid afeadd22dd1cae5d810a19d2e53fc1be6cf2d819]
+[17156.606874]  hid_hw_open+0x66/0x80
+[17156.606876]  input_open_device+0x6b/0xc0
+[17156.606878]  evdev_open+0x1db/0x210
+[17156.606880]  chrdev_open+0xc9/0x260
+[17156.606882]  ? __pfx_chrdev_open+0x10/0x10
+[17156.606884]  do_dentry_open+0x23d/0x540
+[17156.606885]  path_openat+0xcad/0x10c0
+[17156.606887]  ? syscall_exit_to_user_mode+0x27/0x50
+[17156.606890]  ? do_syscall_64+0x66/0x80
+[17156.606892]  do_filp_open+0xb3/0x160
+[17156.606894]  ? kmem_cache_free+0x24/0x380
+[17156.606897]  do_sys_openat2+0xab/0xe0
+[17156.606899]  __x64_sys_openat+0x62/0xa0
+[17156.606901]  do_syscall_64+0x5a/0x80
+[17156.606903]  ? mntput_no_expire+0x4c/0x270
+[17156.606904]  ? kmem_cache_free+0x24/0x380
+[17156.606905]  ? __call_rcu_common+0xfb/0x730
+[17156.606908]  ? syscall_exit_to_user_mode+0x27/0x50
+[17156.606909]  ? do_syscall_64+0x66/0x80
+[17156.606911]  ? kmem_cache_free+0x24/0x380
+[17156.606913]  ? do_sys_openat2+0x96/0xe0
+[17156.606914]  ? __x64_sys_openat+0x62/0xa0
+[17156.606916]  ? syscall_exit_to_user_mode+0x27/0x50
+[17156.606918]  ? do_syscall_64+0x66/0x80
+[17156.606919]  ? do_syscall_64+0x66/0x80
+[17156.606921]  ? syscall_exit_to_user_mode+0x27/0x50
+[17156.606922]  ? do_syscall_64+0x66/0x80
+[17156.606924]  ? do_syscall_64+0x66/0x80
+[17156.606925]  ? exit_to_user_mode_prepare+0x1ab/0x240
+[17156.606928]  entry_SYSCALL_64_after_hwframe+0x78/0xe2
+[17156.606930] RIP: 0033:0x7f3d2a975fc5
+[17156.606946] Code: 8b 55 d0 48 89 45 b0 75 9e 44 89 55 9c e8 03 53 f8 ff 44 8b 55 9c 89 da 4c 89 e6 41 89 c0 bf 9c ff ff ff b8 01 01 00 00 0f 05 <48> 3d 00 f0 ff ff 77 33 44 89 c7 89 45 9c e8 58 53 f8 ff 8b 45 9c
+[17156.606947] RSP: 002b:00000001005fd770 EFLAGS: 00000293 ORIG_RAX: 0000000000000101
+[17156.606948] RAX: ffffffffffffffda RBX: 0000000000080000 RCX: 00007f3d2a975fc5
+[17156.606949] RDX: 0000000000080000 RSI: 00000001005fd850 RDI: 00000000ffffff9c
+[17156.606950] RBP: 00000001005fd7e0 R08: 0000000000000000 R09: 0000000000000006
+[17156.606951] R10: 0000000000000000 R11: 0000000000000293 R12: 00000001005fd850
+[17156.606952] R13: 00000001005fd848 R14: 0000000000000130 R15: 00000001005fd84a
+[17156.606954]  </TASK>
+[17162.424699] rcu: INFO: rcu_preempt detected expedited stalls on CPUs/tasks: { 6-.... } 1394659 jiffies s: 1709 root: 0x40/.
+[17162.424709] rcu: blocking rcu_node structures (internal RCU debug):
+[17162.424711] Sending NMI from CPU 7 to CPUs 6:
+[17162.424717] NMI backtrace for cpu 6
+[17162.424719] CPU: 6 PID: 12921 Comm: winedevice.exe Tainted: P        W  OEL     6.6.107-1-MANJARO #1 817a58fad5dd0668fe9f292579813a9e8c38bd20
+[17162.424721] Hardware name: System manufacturer System Product Name/P8Z68-V PRO, BIOS 0902 09/19/2011
+[17162.424722] RIP: 0010:native_queued_spin_lock_slowpath+0x2ba/0x2f0
+[17162.424728] Code: ea 12 83 e0 03 83 ea 01 48 c1 e0 05 48 63 d2 48 05 00 50 03 00 48 03 04 d5 c0 8d 90 9c 4c 89 08 41 8b 41 08 85 c0 75 0a f3 90 <41> 8b 41 08 85 c0 74 f6 49 8b 11 48 85 d2 0f 84 6a ff ff ff 0f 18
+[17162.424729] RSP: 0018:ffffccae1019f928 EFLAGS: 00000246
+[17162.424731] RAX: 0000000000000000 RBX: ffff899dc1846890 RCX: ffff899dc1846890
+[17162.424732] RDX: 0000000000000007 RSI: 0000000000205500 RDI: ffff899dc1846890
+[17162.424733] RBP: ffffccae1019f9b8 R08: 00000000001c0000 R09: ffff899eaf5b5000
+[17162.424734] R10: 00000000001c0000 R11: 0000000000000000 R12: 0000000000000002
+[17162.424735] R13: ffff899e61c59400 R14: ffff899ccebcd038 R15: ffff899dc1846888
+[17162.424736] FS:  00000001005ff6c0(0000) GS:ffff899eaf580000(0000) knlGS:000000007ff70000
+[17162.424737] CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+[17162.424738] CR2: 00003e4c00470000 CR3: 00000003fc756006 CR4: 00000000000606e0
+[17162.424739] Call Trace:
+[17162.424741]  <TASK>
+[17162.424743]  _raw_spin_lock+0x29/0x30
+[17162.424746]  __mutex_lock.constprop.0+0x130/0x760
+[17162.424750]  usbhid_open+0x25/0x100 [usbhid afeadd22dd1cae5d810a19d2e53fc1be6cf2d819]
+[17162.424758]  hid_hw_open+0x66/0x80
+[17162.424761]  input_open_device+0x6b/0xc0
+[17162.424764]  evdev_open+0x1db/0x210
+[17162.424766]  chrdev_open+0xc9/0x260
+[17162.424769]  ? __pfx_chrdev_open+0x10/0x10
+[17162.424771]  do_dentry_open+0x23d/0x540
+[17162.424773]  path_openat+0xcad/0x10c0
+[17162.424776]  ? syscall_exit_to_user_mode+0x27/0x50
+[17162.424779]  ? do_syscall_64+0x66/0x80
+[17162.424781]  do_filp_open+0xb3/0x160
+[17162.424783]  ? kmem_cache_free+0x24/0x380
+[17162.424786]  do_sys_openat2+0xab/0xe0
+[17162.424788]  __x64_sys_openat+0x62/0xa0
+[17162.424790]  do_syscall_64+0x5a/0x80
+[17162.424791]  ? mntput_no_expire+0x4c/0x270
+[17162.424793]  ? kmem_cache_free+0x24/0x380
+[17162.424794]  ? __call_rcu_common+0xfb/0x730
+[17162.424796]  ? syscall_exit_to_user_mode+0x27/0x50
+[17162.424797]  ? do_syscall_64+0x66/0x80
+[17162.424799]  ? kmem_cache_free+0x24/0x380
+[17162.424800]  ? do_sys_openat2+0x96/0xe0
+[17162.424802]  ? __x64_sys_openat+0x62/0xa0
+[17162.424803]  ? syscall_exit_to_user_mode+0x27/0x50
+[17162.424805]  ? do_syscall_64+0x66/0x80
+[17162.424806]  ? do_syscall_64+0x66/0x80
+[17162.424808]  ? syscall_exit_to_user_mode+0x27/0x50
+[17162.424809]  ? do_syscall_64+0x66/0x80
+[17162.424810]  ? do_syscall_64+0x66/0x80
+[17162.424812]  ? exit_to_user_mode_prepare+0x1ab/0x240
+[17162.424814]  entry_SYSCALL_64_after_hwframe+0x78/0xe2
+[17162.424817] RIP: 0033:0x7f3d2a975fc5
+[17162.424832] Code: 8b 55 d0 48 89 45 b0 75 9e 44 89 55 9c e8 03 53 f8 ff 44 8b 55 9c 89 da 4c 89 e6 41 89 c0 bf 9c ff ff ff b8 01 01 00 00 0f 05 <48> 3d 00 f0 ff ff 77 33 44 89 c7 89 45 9c e8 58 53 f8 ff 8b 45 9c
+[17162.424832] RSP: 002b:00000001005fd770 EFLAGS: 00000293 ORIG_RAX: 0000000000000101
+[17162.424834] RAX: ffffffffffffffda RBX: 0000000000080000 RCX: 00007f3d2a975fc5
+[17162.424834] RDX: 0000000000080000 RSI: 00000001005fd850 RDI: 00000000ffffff9c
+[17162.424835] RBP: 00000001005fd7e0 R08: 0000000000000000 R09: 0000000000000006
+[17162.424835] R10: 0000000000000000 R11: 0000000000000293 R12: 00000001005fd850
+[17162.424836] R13: 00000001005fd848 R14: 0000000000000130 R15: 00000001005fd84a
+[17162.424838]  </TASK>
+[17171.651485] rcu: INFO: rcu_preempt self-detected stall on CPU
+[17171.651490] rcu: 	6-....: (3042167 ticks this GP) idle=3c04/1/0x4000000000000000 softirq=155513/155513 fqs=1513903
+[17171.651495] rcu: 	(t=3042168 jiffies g=393641 q=1734802 ncpus=8)
+[17171.651497] CPU: 6 PID: 12921 Comm: winedevice.exe Tainted: P        W  OEL     6.6.107-1-MANJARO #1 817a58fad5dd0668fe9f292579813a9e8c38bd20
+[17171.651501] Hardware name: System manufacturer System Product Name/P8Z68-V PRO, BIOS 0902 09/19/2011
+[17171.651502] RIP: 0010:native_queued_spin_lock_slowpath+0x2be/0x2f0
+[17171.651508] Code: 03 83 ea 01 48 c1 e0 05 48 63 d2 48 05 00 50 03 00 48 03 04 d5 c0 8d 90 9c 4c 89 08 41 8b 41 08 85 c0 75 0a f3 90 41 8b 41 08 <85> c0 74 f6 49 8b 11 48 85 d2 0f 84 6a ff ff ff 0f 18 0a e9 62 ff
+[17171.651510] RSP: 0018:ffffccae1019f928 EFLAGS: 00000246
+[17171.651512] RAX: 0000000000000000 RBX: ffff899dc1846890 RCX: ffff899dc1846890
+[17171.651514] RDX: 0000000000000007 RSI: 0000000000205500 RDI: ffff899dc1846890
+[17171.651515] RBP: ffffccae1019f9b8 R08: 00000000001c0000 R09: ffff899eaf5b5000
+[17171.651516] R10: 00000000001c0000 R11: 0000000000000000 R12: 0000000000000002
+[17171.651518] R13: ffff899e61c59400 R14: ffff899ccebcd038 R15: ffff899dc1846888
+[17171.651519] FS:  00000001005ff6c0(0000) GS:ffff899eaf580000(0000) knlGS:000000007ff70000
+[17171.651521] CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+[17171.651523] CR2: 00003e4c00470000 CR3: 00000003fc756006 CR4: 00000000000606e0
+[17171.651524] Call Trace:
+[17171.651526]  <TASK>
+[17171.651529]  _raw_spin_lock+0x29/0x30
+[17171.651532]  __mutex_lock.constprop.0+0x130/0x760
+[17171.651536]  usbhid_open+0x25/0x100 [usbhid afeadd22dd1cae5d810a19d2e53fc1be6cf2d819]
+[17171.651546]  hid_hw_open+0x66/0x80
+[17171.651550]  input_open_device+0x6b/0xc0
+[17171.651553]  evdev_open+0x1db/0x210
+[17171.651556]  chrdev_open+0xc9/0x260
+[17171.651559]  ? __pfx_chrdev_open+0x10/0x10
+[17171.651561]  do_dentry_open+0x23d/0x540
+[17171.651564]  path_openat+0xcad/0x10c0
+[17171.651568]  ? syscall_exit_to_user_mode+0x27/0x50
+[17171.651571]  ? do_syscall_64+0x66/0x80
+[17171.651575]  do_filp_open+0xb3/0x160
+[17171.651578]  ? kmem_cache_free+0x24/0x380
+[17171.651582]  do_sys_openat2+0xab/0xe0
+[17171.651585]  __x64_sys_openat+0x62/0xa0
+[17171.651588]  do_syscall_64+0x5a/0x80
+[17171.651591]  ? mntput_no_expire+0x4c/0x270
+[17171.651593]  ? kmem_cache_free+0x24/0x380
+[17171.651595]  ? __call_rcu_common+0xfb/0x730
+[17171.651599]  ? syscall_exit_to_user_mode+0x27/0x50
+[17171.651601]  ? do_syscall_64+0x66/0x80
+[17171.651604]  ? kmem_cache_free+0x24/0x380
+[17171.651606]  ? do_sys_openat2+0x96/0xe0
+[17171.651609]  ? __x64_sys_openat+0x62/0xa0
+[17171.651611]  ? syscall_exit_to_user_mode+0x27/0x50
+[17171.651614]  ? do_syscall_64+0x66/0x80
+[17171.651616]  ? do_syscall_64+0x66/0x80
+[17171.651619]  ? syscall_exit_to_user_mode+0x27/0x50
+[17171.651621]  ? do_syscall_64+0x66/0x80
+[17171.651623]  ? do_syscall_64+0x66/0x80
+[17171.651625]  ? exit_to_user_mode_prepare+0x1ab/0x240
+[17171.651629]  entry_SYSCALL_64_after_hwframe+0x78/0xe2
+[17171.651633] RIP: 0033:0x7f3d2a975fc5
+[17171.651651] Code: 8b 55 d0 48 89 45 b0 75 9e 44 89 55 9c e8 03 53 f8 ff 44 8b 55 9c 89 da 4c 89 e6 41 89 c0 bf 9c ff ff ff b8 01 01 00 00 0f 05 <48> 3d 00 f0 ff ff 77 33 44 89 c7 89 45 9c e8 58 53 f8 ff 8b 45 9c
+[17171.651652] RSP: 002b:00000001005fd770 EFLAGS: 00000293 ORIG_RAX: 0000000000000101
+[17171.651655] RAX: ffffffffffffffda RBX: 0000000000080000 RCX: 00007f3d2a975fc5
+[17171.651656] RDX: 0000000000080000 RSI: 00000001005fd850 RDI: 00000000ffffff9c
+[17171.651657] RBP: 00000001005fd7e0 R08: 0000000000000000 R09: 0000000000000006
+[17171.651659] R10: 0000000000000000 R11: 0000000000000293 R12: 00000001005fd850
+[17171.651660] R13: 00000001005fd848 R14: 0000000000000130 R15: 00000001005fd84a
+[17171.651663]  </TASK>
+[17196.607406] watchdog: BUG: soft lockup - CPU#6 stuck for 9470s! [winedevice.exe:12921]
+[17196.607412] Modules linked in: hid_tmff_new(OE) usb_tminit_new(OE) hid_tminit_new(OE) rfcomm snd_seq_dummy snd_hrtimer snd_seq nft_masq nft_ct nft_reject_ipv4 nf_reject_ipv4 nft_reject act_csum cls_u32 sch_htb xt_conntrack xt_MASQUERADE bridge stp llc xt_set ip_set nft_chain_nat nf_nat nf_conntrack nf_defrag_ipv6 nf_defrag_ipv4 xt_addrtype nft_compat nf_tables vboxnetadp(OE) vboxnetflt(OE) overlay vboxdrv(OE) qrtr cmac algif_hash algif_skcipher af_alg bnep uinput nvidia_uvm(POE) squashfs snd_usb_audio snd_usbmidi_lib snd_ump snd_rawmidi mousedev snd_seq_device mc intel_rapl_msr btusb intel_rapl_common joydev btrtl btintel x86_pkg_temp_thermal intel_powerclamp btbcm btmtk raid0 coretemp ext4 eeepc_wmi bluetooth asus_wmi kvm_intel sparse_keymap snd_hda_codec_realtek platform_profile iTCO_wdt snd_hda_codec_ca0110 mbcache at24 i8042 intel_pmc_bxt nvidia_drm(POE) jbd2 iTCO_vendor_support nvidia_modeset(POE) ecdh_generic serio snd_hda_codec_generic kvm irqbypass snd_hda_codec_hdmi ledtrig_audio crct10dif_pclmul crc32_pclmul
+[17196.607449]  polyval_clmulni polyval_generic snd_hda_intel gf128mul snd_intel_dspcfg snd_intel_sdw_acpi ghash_clmulni_intel snd_hda_codec sha512_ssse3 sha1_ssse3 snd_hda_core aesni_intel snd_hwdep crypto_simd cryptd snd_pcm snd_timer rapl intel_cstate i2c_i801 snd mei_me intel_uncore rfkill crc16 pcspkr wmi_bmof i2c_smbus lpc_ich soundcore e1000e mei md_mod mac_hid nvidia(POE) i2c_dev sg dm_mod fuse crypto_user loop nfnetlink bpf_preload ip_tables x_tables usbhid btrfs blake2b_generic libcrc32c crc32c_generic xor mxm_wmi raid6_pq sha256_ssse3 xhci_pci xhci_pci_renesas video wmi crc32c_intel
+[17196.607472] Unloaded tainted modules: hid_tminit_new(OE):4 usb_tminit_new(OE):4 hid_tmff_new(OE):5 [last unloaded: hid_tminit_new(OE)]
+[17196.607475] CPU: 6 PID: 12921 Comm: winedevice.exe Tainted: P        W  OEL     6.6.107-1-MANJARO #1 817a58fad5dd0668fe9f292579813a9e8c38bd20
+[17196.607478] Hardware name: System manufacturer System Product Name/P8Z68-V PRO, BIOS 0902 09/19/2011
+[17196.607479] RIP: 0010:native_queued_spin_lock_slowpath+0x2be/0x2f0
+[17196.607483] Code: 03 83 ea 01 48 c1 e0 05 48 63 d2 48 05 00 50 03 00 48 03 04 d5 c0 8d 90 9c 4c 89 08 41 8b 41 08 85 c0 75 0a f3 90 41 8b 41 08 <85> c0 74 f6 49 8b 11 48 85 d2 0f 84 6a ff ff ff 0f 18 0a e9 62 ff
+[17196.607484] RSP: 0018:ffffccae1019f928 EFLAGS: 00000246
+[17196.607486] RAX: 0000000000000000 RBX: ffff899dc1846890 RCX: ffff899dc1846890
+[17196.607487] RDX: 0000000000000007 RSI: 0000000000205500 RDI: ffff899dc1846890
+[17196.607488] RBP: ffffccae1019f9b8 R08: 00000000001c0000 R09: ffff899eaf5b5000
+[17196.607489] R10: 00000000001c0000 R11: 0000000000000000 R12: 0000000000000002
+[17196.607489] R13: ffff899e61c59400 R14: ffff899ccebcd038 R15: ffff899dc1846888
+[17196.607490] FS:  00000001005ff6c0(0000) GS:ffff899eaf580000(0000) knlGS:000000007ff70000
+[17196.607492] CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+[17196.607492] CR2: 00003e4c00470000 CR3: 00000003fc756006 CR4: 00000000000606e0
+[17196.607494] Call Trace:
+[17196.607495]  <TASK>
+[17196.607497]  _raw_spin_lock+0x29/0x30
+[17196.607499]  __mutex_lock.constprop.0+0x130/0x760
+[17196.607502]  usbhid_open+0x25/0x100 [usbhid afeadd22dd1cae5d810a19d2e53fc1be6cf2d819]
+[17196.607509]  hid_hw_open+0x66/0x80
+[17196.607512]  input_open_device+0x6b/0xc0
+[17196.607514]  evdev_open+0x1db/0x210
+[17196.607516]  chrdev_open+0xc9/0x260
+[17196.607518]  ? __pfx_chrdev_open+0x10/0x10
+[17196.607520]  do_dentry_open+0x23d/0x540
+[17196.607522]  path_openat+0xcad/0x10c0
+[17196.607524]  ? syscall_exit_to_user_mode+0x27/0x50
+[17196.607526]  ? do_syscall_64+0x66/0x80
+[17196.607528]  do_filp_open+0xb3/0x160
+[17196.607530]  ? kmem_cache_free+0x24/0x380
+[17196.607533]  do_sys_openat2+0xab/0xe0
+[17196.607535]  __x64_sys_openat+0x62/0xa0
+[17196.607537]  do_syscall_64+0x5a/0x80
+[17196.607539]  ? mntput_no_expire+0x4c/0x270
+[17196.607540]  ? kmem_cache_free+0x24/0x380
+[17196.607542]  ? __call_rcu_common+0xfb/0x730
+[17196.607544]  ? syscall_exit_to_user_mode+0x27/0x50
+[17196.607546]  ? do_syscall_64+0x66/0x80
+[17196.607547]  ? kmem_cache_free+0x24/0x380
+[17196.607549]  ? do_sys_openat2+0x96/0xe0
+[17196.607551]  ? __x64_sys_openat+0x62/0xa0
+[17196.607552]  ? syscall_exit_to_user_mode+0x27/0x50
+[17196.607554]  ? do_syscall_64+0x66/0x80
+[17196.607556]  ? do_syscall_64+0x66/0x80
+[17196.607557]  ? syscall_exit_to_user_mode+0x27/0x50
+[17196.607559]  ? do_syscall_64+0x66/0x80
+[17196.607560]  ? do_syscall_64+0x66/0x80
+[17196.607562]  ? exit_to_user_mode_prepare+0x1ab/0x240
+[17196.607564]  entry_SYSCALL_64_after_hwframe+0x78/0xe2
+[17196.607567] RIP: 0033:0x7f3d2a975fc5
+[17196.607583] Code: 8b 55 d0 48 89 45 b0 75 9e 44 89 55 9c e8 03 53 f8 ff 44 8b 55 9c 89 da 4c 89 e6 41 89 c0 bf 9c ff ff ff b8 01 01 00 00 0f 05 <48> 3d 00 f0 ff ff 77 33 44 89 c7 89 45 9c e8 58 53 f8 ff 8b 45 9c
+[17196.607584] RSP: 002b:00000001005fd770 EFLAGS: 00000293 ORIG_RAX: 0000000000000101
+[17196.607586] RAX: ffffffffffffffda RBX: 0000000000080000 RCX: 00007f3d2a975fc5
+[17196.607587] RDX: 0000000000080000 RSI: 00000001005fd850 RDI: 00000000ffffff9c
+[17196.607588] RBP: 00000001005fd7e0 R08: 0000000000000000 R09: 0000000000000006
+[17196.607588] R10: 0000000000000000 R11: 0000000000000293 R12: 00000001005fd850
+[17196.607589] R13: 00000001005fd848 R14: 0000000000000130 R15: 00000001005fd84a
+[17196.607591]  </TASK>
+[17224.607852] watchdog: BUG: soft lockup - CPU#6 stuck for 9496s! [winedevice.exe:12921]
+[17224.607858] Modules linked in: hid_tmff_new(OE) usb_tminit_new(OE) hid_tminit_new(OE) rfcomm snd_seq_dummy snd_hrtimer snd_seq nft_masq nft_ct nft_reject_ipv4 nf_reject_ipv4 nft_reject act_csum cls_u32 sch_htb xt_conntrack xt_MASQUERADE bridge stp llc xt_set ip_set nft_chain_nat nf_nat nf_conntrack nf_defrag_ipv6 nf_defrag_ipv4 xt_addrtype nft_compat nf_tables vboxnetadp(OE) vboxnetflt(OE) overlay vboxdrv(OE) qrtr cmac algif_hash algif_skcipher af_alg bnep uinput nvidia_uvm(POE) squashfs snd_usb_audio snd_usbmidi_lib snd_ump snd_rawmidi mousedev snd_seq_device mc intel_rapl_msr btusb intel_rapl_common joydev btrtl btintel x86_pkg_temp_thermal intel_powerclamp btbcm btmtk raid0 coretemp ext4 eeepc_wmi bluetooth asus_wmi kvm_intel sparse_keymap snd_hda_codec_realtek platform_profile iTCO_wdt snd_hda_codec_ca0110 mbcache at24 i8042 intel_pmc_bxt nvidia_drm(POE) jbd2 iTCO_vendor_support nvidia_modeset(POE) ecdh_generic serio snd_hda_codec_generic kvm irqbypass snd_hda_codec_hdmi ledtrig_audio crct10dif_pclmul crc32_pclmul
+[17224.607895]  polyval_clmulni polyval_generic snd_hda_intel gf128mul snd_intel_dspcfg snd_intel_sdw_acpi ghash_clmulni_intel snd_hda_codec sha512_ssse3 sha1_ssse3 snd_hda_core aesni_intel snd_hwdep crypto_simd cryptd snd_pcm snd_timer rapl intel_cstate i2c_i801 snd mei_me intel_uncore rfkill crc16 pcspkr wmi_bmof i2c_smbus lpc_ich soundcore e1000e mei md_mod mac_hid nvidia(POE) i2c_dev sg dm_mod fuse crypto_user loop nfnetlink bpf_preload ip_tables x_tables usbhid btrfs blake2b_generic libcrc32c crc32c_generic xor mxm_wmi raid6_pq sha256_ssse3 xhci_pci xhci_pci_renesas video wmi crc32c_intel
+[17224.607918] Unloaded tainted modules: hid_tminit_new(OE):4 usb_tminit_new(OE):4 hid_tmff_new(OE):5 [last unloaded: hid_tminit_new(OE)]
+[17224.607922] CPU: 6 PID: 12921 Comm: winedevice.exe Tainted: P        W  OEL     6.6.107-1-MANJARO #1 817a58fad5dd0668fe9f292579813a9e8c38bd20
+[17224.607925] Hardware name: System manufacturer System Product Name/P8Z68-V PRO, BIOS 0902 09/19/2011
+[17224.607926] RIP: 0010:native_queued_spin_lock_slowpath+0x2be/0x2f0
+[17224.607930] Code: 03 83 ea 01 48 c1 e0 05 48 63 d2 48 05 00 50 03 00 48 03 04 d5 c0 8d 90 9c 4c 89 08 41 8b 41 08 85 c0 75 0a f3 90 41 8b 41 08 <85> c0 74 f6 49 8b 11 48 85 d2 0f 84 6a ff ff ff 0f 18 0a e9 62 ff
+[17224.607931] RSP: 0018:ffffccae1019f928 EFLAGS: 00000246
+[17224.607933] RAX: 0000000000000000 RBX: ffff899dc1846890 RCX: ffff899dc1846890
+[17224.607934] RDX: 0000000000000007 RSI: 0000000000205500 RDI: ffff899dc1846890
+[17224.607934] RBP: ffffccae1019f9b8 R08: 00000000001c0000 R09: ffff899eaf5b5000
+[17224.607935] R10: 00000000001c0000 R11: 0000000000000000 R12: 0000000000000002
+[17224.607936] R13: ffff899e61c59400 R14: ffff899ccebcd038 R15: ffff899dc1846888
+[17224.607937] FS:  00000001005ff6c0(0000) GS:ffff899eaf580000(0000) knlGS:000000007ff70000
+[17224.607938] CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+[17224.607939] CR2: 00003e4c00470000 CR3: 00000003fc756006 CR4: 00000000000606e0
+[17224.607940] Call Trace:
+[17224.607942]  <TASK>
+[17224.607944]  _raw_spin_lock+0x29/0x30
+[17224.607946]  __mutex_lock.constprop.0+0x130/0x760
+[17224.607949]  usbhid_open+0x25/0x100 [usbhid afeadd22dd1cae5d810a19d2e53fc1be6cf2d819]
+[17224.607956]  hid_hw_open+0x66/0x80
+[17224.607959]  input_open_device+0x6b/0xc0
+[17224.607961]  evdev_open+0x1db/0x210
+[17224.607963]  chrdev_open+0xc9/0x260
+[17224.607965]  ? __pfx_chrdev_open+0x10/0x10
+[17224.607966]  do_dentry_open+0x23d/0x540
+[17224.607968]  path_openat+0xcad/0x10c0
+[17224.607970]  ? syscall_exit_to_user_mode+0x27/0x50
+[17224.607973]  ? do_syscall_64+0x66/0x80
+[17224.607975]  do_filp_open+0xb3/0x160
+[17224.607977]  ? kmem_cache_free+0x24/0x380
+[17224.607980]  do_sys_openat2+0xab/0xe0
+[17224.607982]  __x64_sys_openat+0x62/0xa0
+[17224.607984]  do_syscall_64+0x5a/0x80
+[17224.607986]  ? mntput_no_expire+0x4c/0x270
+[17224.607987]  ? kmem_cache_free+0x24/0x380
+[17224.607989]  ? __call_rcu_common+0xfb/0x730
+[17224.607991]  ? syscall_exit_to_user_mode+0x27/0x50
+[17224.607993]  ? do_syscall_64+0x66/0x80
+[17224.607994]  ? kmem_cache_free+0x24/0x380
+[17224.607996]  ? do_sys_openat2+0x96/0xe0
+[17224.607998]  ? __x64_sys_openat+0x62/0xa0
+[17224.607999]  ? syscall_exit_to_user_mode+0x27/0x50
+[17224.608001]  ? do_syscall_64+0x66/0x80
+[17224.608002]  ? do_syscall_64+0x66/0x80
+[17224.608004]  ? syscall_exit_to_user_mode+0x27/0x50
+[17224.608005]  ? do_syscall_64+0x66/0x80
+[17224.608007]  ? do_syscall_64+0x66/0x80
+[17224.608008]  ? exit_to_user_mode_prepare+0x1ab/0x240
+[17224.608011]  entry_SYSCALL_64_after_hwframe+0x78/0xe2
+[17224.608014] RIP: 0033:0x7f3d2a975fc5
+[17224.608028] Code: 8b 55 d0 48 89 45 b0 75 9e 44 89 55 9c e8 03 53 f8 ff 44 8b 55 9c 89 da 4c 89 e6 41 89 c0 bf 9c ff ff ff b8 01 01 00 00 0f 05 <48> 3d 00 f0 ff ff 77 33 44 89 c7 89 45 9c e8 58 53 f8 ff 8b 45 9c
+[17224.608029] RSP: 002b:00000001005fd770 EFLAGS: 00000293 ORIG_RAX: 0000000000000101
+[17224.608030] RAX: ffffffffffffffda RBX: 0000000000080000 RCX: 00007f3d2a975fc5
+[17224.608031] RDX: 0000000000080000 RSI: 00000001005fd850 RDI: 00000000ffffff9c
+[17224.608032] RBP: 00000001005fd7e0 R08: 0000000000000000 R09: 0000000000000006
+[17224.608033] R10: 0000000000000000 R11: 0000000000000293 R12: 00000001005fd850
+[17224.608033] R13: 00000001005fd848 R14: 0000000000000130 R15: 00000001005fd84a
+[17224.608035]  </TASK>
+[17252.608297] watchdog: BUG: soft lockup - CPU#6 stuck for 9522s! [winedevice.exe:12921]
+[17252.608304] Modules linked in: hid_tmff_new(OE) usb_tminit_new(OE) hid_tminit_new(OE) rfcomm snd_seq_dummy snd_hrtimer snd_seq nft_masq nft_ct nft_reject_ipv4 nf_reject_ipv4 nft_reject act_csum cls_u32 sch_htb xt_conntrack xt_MASQUERADE bridge stp llc xt_set ip_set nft_chain_nat nf_nat nf_conntrack nf_defrag_ipv6 nf_defrag_ipv4 xt_addrtype nft_compat nf_tables vboxnetadp(OE) vboxnetflt(OE) overlay vboxdrv(OE) qrtr cmac algif_hash algif_skcipher af_alg bnep uinput nvidia_uvm(POE) squashfs snd_usb_audio snd_usbmidi_lib snd_ump snd_rawmidi mousedev snd_seq_device mc intel_rapl_msr btusb intel_rapl_common joydev btrtl btintel x86_pkg_temp_thermal intel_powerclamp btbcm btmtk raid0 coretemp ext4 eeepc_wmi bluetooth asus_wmi kvm_intel sparse_keymap snd_hda_codec_realtek platform_profile iTCO_wdt snd_hda_codec_ca0110 mbcache at24 i8042 intel_pmc_bxt nvidia_drm(POE) jbd2 iTCO_vendor_support nvidia_modeset(POE) ecdh_generic serio snd_hda_codec_generic kvm irqbypass snd_hda_codec_hdmi ledtrig_audio crct10dif_pclmul crc32_pclmul
+[17252.608341]  polyval_clmulni polyval_generic snd_hda_intel gf128mul snd_intel_dspcfg snd_intel_sdw_acpi ghash_clmulni_intel snd_hda_codec sha512_ssse3 sha1_ssse3 snd_hda_core aesni_intel snd_hwdep crypto_simd cryptd snd_pcm snd_timer rapl intel_cstate i2c_i801 snd mei_me intel_uncore rfkill crc16 pcspkr wmi_bmof i2c_smbus lpc_ich soundcore e1000e mei md_mod mac_hid nvidia(POE) i2c_dev sg dm_mod fuse crypto_user loop nfnetlink bpf_preload ip_tables x_tables usbhid btrfs blake2b_generic libcrc32c crc32c_generic xor mxm_wmi raid6_pq sha256_ssse3 xhci_pci xhci_pci_renesas video wmi crc32c_intel
+[17252.608364] Unloaded tainted modules: hid_tminit_new(OE):4 usb_tminit_new(OE):4 hid_tmff_new(OE):5 [last unloaded: hid_tminit_new(OE)]
+[17252.608368] CPU: 6 PID: 12921 Comm: winedevice.exe Tainted: P        W  OEL     6.6.107-1-MANJARO #1 817a58fad5dd0668fe9f292579813a9e8c38bd20
+[17252.608371] Hardware name: System manufacturer System Product Name/P8Z68-V PRO, BIOS 0902 09/19/2011
+[17252.608372] RIP: 0010:native_queued_spin_lock_slowpath+0x2be/0x2f0
+[17252.608376] Code: 03 83 ea 01 48 c1 e0 05 48 63 d2 48 05 00 50 03 00 48 03 04 d5 c0 8d 90 9c 4c 89 08 41 8b 41 08 85 c0 75 0a f3 90 41 8b 41 08 <85> c0 74 f6 49 8b 11 48 85 d2 0f 84 6a ff ff ff 0f 18 0a e9 62 ff
+[17252.608378] RSP: 0018:ffffccae1019f928 EFLAGS: 00000246
+[17252.608379] RAX: 0000000000000000 RBX: ffff899dc1846890 RCX: ffff899dc1846890
+[17252.608380] RDX: 0000000000000007 RSI: 0000000000205500 RDI: ffff899dc1846890
+[17252.608381] RBP: ffffccae1019f9b8 R08: 00000000001c0000 R09: ffff899eaf5b5000
+[17252.608382] R10: 00000000001c0000 R11: 0000000000000000 R12: 0000000000000002
+[17252.608382] R13: ffff899e61c59400 R14: ffff899ccebcd038 R15: ffff899dc1846888
+[17252.608383] FS:  00000001005ff6c0(0000) GS:ffff899eaf580000(0000) knlGS:000000007ff70000
+[17252.608385] CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+[17252.608385] CR2: 00003e4c00470000 CR3: 00000003fc756006 CR4: 00000000000606e0
+[17252.608387] Call Trace:
+[17252.608388]  <TASK>
+[17252.608390]  _raw_spin_lock+0x29/0x30
+[17252.608392]  __mutex_lock.constprop.0+0x130/0x760
+[17252.608395]  usbhid_open+0x25/0x100 [usbhid afeadd22dd1cae5d810a19d2e53fc1be6cf2d819]
+[17252.608402]  hid_hw_open+0x66/0x80
+[17252.608405]  input_open_device+0x6b/0xc0
+[17252.608407]  evdev_open+0x1db/0x210
+[17252.608409]  chrdev_open+0xc9/0x260
+[17252.608411]  ? __pfx_chrdev_open+0x10/0x10
+[17252.608413]  do_dentry_open+0x23d/0x540
+[17252.608414]  path_openat+0xcad/0x10c0
+[17252.608417]  ? syscall_exit_to_user_mode+0x27/0x50
+[17252.608419]  ? do_syscall_64+0x66/0x80
+[17252.608421]  do_filp_open+0xb3/0x160
+[17252.608423]  ? kmem_cache_free+0x24/0x380
+[17252.608426]  do_sys_openat2+0xab/0xe0
+[17252.608428]  __x64_sys_openat+0x62/0xa0
+[17252.608430]  do_syscall_64+0x5a/0x80
+[17252.608432]  ? mntput_no_expire+0x4c/0x270
+[17252.608433]  ? kmem_cache_free+0x24/0x380
+[17252.608434]  ? __call_rcu_common+0xfb/0x730
+[17252.608437]  ? syscall_exit_to_user_mode+0x27/0x50
+[17252.608438]  ? do_syscall_64+0x66/0x80
+[17252.608440]  ? kmem_cache_free+0x24/0x380
+[17252.608442]  ? do_sys_openat2+0x96/0xe0
+[17252.608443]  ? __x64_sys_openat+0x62/0xa0
+[17252.608445]  ? syscall_exit_to_user_mode+0x27/0x50
+[17252.608447]  ? do_syscall_64+0x66/0x80
+[17252.608448]  ? do_syscall_64+0x66/0x80
+[17252.608450]  ? syscall_exit_to_user_mode+0x27/0x50
+[17252.608451]  ? do_syscall_64+0x66/0x80
+[17252.608453]  ? do_syscall_64+0x66/0x80
+[17252.608454]  ? exit_to_user_mode_prepare+0x1ab/0x240
+[17252.608457]  entry_SYSCALL_64_after_hwframe+0x78/0xe2
+[17252.608459] RIP: 0033:0x7f3d2a975fc5
+[17252.608475] Code: 8b 55 d0 48 89 45 b0 75 9e 44 89 55 9c e8 03 53 f8 ff 44 8b 55 9c 89 da 4c 89 e6 41 89 c0 bf 9c ff ff ff b8 01 01 00 00 0f 05 <48> 3d 00 f0 ff ff 77 33 44 89 c7 89 45 9c e8 58 53 f8 ff 8b 45 9c
+[17252.608476] RSP: 002b:00000001005fd770 EFLAGS: 00000293 ORIG_RAX: 0000000000000101
+[17252.608477] RAX: ffffffffffffffda RBX: 0000000000080000 RCX: 00007f3d2a975fc5
+[17252.608478] RDX: 0000000000080000 RSI: 00000001005fd850 RDI: 00000000ffffff9c
+[17252.608479] RBP: 00000001005fd7e0 R08: 0000000000000000 R09: 0000000000000006
+[17252.608480] R10: 0000000000000000 R11: 0000000000000293 R12: 00000001005fd850
+[17252.608481] R13: 00000001005fd848 R14: 0000000000000130 R15: 00000001005fd84a
+[17252.608483]  </TASK>
+[17280.608743] watchdog: BUG: soft lockup - CPU#6 stuck for 9548s! [winedevice.exe:12921]
+[17280.608749] Modules linked in: hid_tmff_new(OE) usb_tminit_new(OE) hid_tminit_new(OE) rfcomm snd_seq_dummy snd_hrtimer snd_seq nft_masq nft_ct nft_reject_ipv4 nf_reject_ipv4 nft_reject act_csum cls_u32 sch_htb xt_conntrack xt_MASQUERADE bridge stp llc xt_set ip_set nft_chain_nat nf_nat nf_conntrack nf_defrag_ipv6 nf_defrag_ipv4 xt_addrtype nft_compat nf_tables vboxnetadp(OE) vboxnetflt(OE) overlay vboxdrv(OE) qrtr cmac algif_hash algif_skcipher af_alg bnep uinput nvidia_uvm(POE) squashfs snd_usb_audio snd_usbmidi_lib snd_ump snd_rawmidi mousedev snd_seq_device mc intel_rapl_msr btusb intel_rapl_common joydev btrtl btintel x86_pkg_temp_thermal intel_powerclamp btbcm btmtk raid0 coretemp ext4 eeepc_wmi bluetooth asus_wmi kvm_intel sparse_keymap snd_hda_codec_realtek platform_profile iTCO_wdt snd_hda_codec_ca0110 mbcache at24 i8042 intel_pmc_bxt nvidia_drm(POE) jbd2 iTCO_vendor_support nvidia_modeset(POE) ecdh_generic serio snd_hda_codec_generic kvm irqbypass snd_hda_codec_hdmi ledtrig_audio crct10dif_pclmul crc32_pclmul
+[17280.608787]  polyval_clmulni polyval_generic snd_hda_intel gf128mul snd_intel_dspcfg snd_intel_sdw_acpi ghash_clmulni_intel snd_hda_codec sha512_ssse3 sha1_ssse3 snd_hda_core aesni_intel snd_hwdep crypto_simd cryptd snd_pcm snd_timer rapl intel_cstate i2c_i801 snd mei_me intel_uncore rfkill crc16 pcspkr wmi_bmof i2c_smbus lpc_ich soundcore e1000e mei md_mod mac_hid nvidia(POE) i2c_dev sg dm_mod fuse crypto_user loop nfnetlink bpf_preload ip_tables x_tables usbhid btrfs blake2b_generic libcrc32c crc32c_generic xor mxm_wmi raid6_pq sha256_ssse3 xhci_pci xhci_pci_renesas video wmi crc32c_intel
+[17280.608821] Unloaded tainted modules: hid_tminit_new(OE):4 usb_tminit_new(OE):4 hid_tmff_new(OE):5 [last unloaded: hid_tminit_new(OE)]
+[17280.608827] CPU: 6 PID: 12921 Comm: winedevice.exe Tainted: P        W  OEL     6.6.107-1-MANJARO #1 817a58fad5dd0668fe9f292579813a9e8c38bd20
+[17280.608830] Hardware name: System manufacturer System Product Name/P8Z68-V PRO, BIOS 0902 09/19/2011
+[17280.608831] RIP: 0010:native_queued_spin_lock_slowpath+0x2be/0x2f0
+[17280.608836] Code: 03 83 ea 01 48 c1 e0 05 48 63 d2 48 05 00 50 03 00 48 03 04 d5 c0 8d 90 9c 4c 89 08 41 8b 41 08 85 c0 75 0a f3 90 41 8b 41 08 <85> c0 74 f6 49 8b 11 48 85 d2 0f 84 6a ff ff ff 0f 18 0a e9 62 ff
+[17280.608837] RSP: 0018:ffffccae1019f928 EFLAGS: 00000246
+[17280.608839] RAX: 0000000000000000 RBX: ffff899dc1846890 RCX: ffff899dc1846890
+[17280.608841] RDX: 0000000000000007 RSI: 0000000000205500 RDI: ffff899dc1846890
+[17280.608842] RBP: ffffccae1019f9b8 R08: 00000000001c0000 R09: ffff899eaf5b5000
+[17280.608843] R10: 00000000001c0000 R11: 0000000000000000 R12: 0000000000000002
+[17280.608844] R13: ffff899e61c59400 R14: ffff899ccebcd038 R15: ffff899dc1846888
+[17280.608846] FS:  00000001005ff6c0(0000) GS:ffff899eaf580000(0000) knlGS:000000007ff70000
+[17280.608847] CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+[17280.608848] CR2: 00003e4c00470000 CR3: 00000003fc756006 CR4: 00000000000606e0
+[17280.608850] Call Trace:
+[17280.608852]  <TASK>
+[17280.608854]  _raw_spin_lock+0x29/0x30
+[17280.608857]  __mutex_lock.constprop.0+0x130/0x760
+[17280.608862]  usbhid_open+0x25/0x100 [usbhid afeadd22dd1cae5d810a19d2e53fc1be6cf2d819]
+[17280.608872]  hid_hw_open+0x66/0x80
+[17280.608876]  input_open_device+0x6b/0xc0
+[17280.608879]  evdev_open+0x1db/0x210
+[17280.608882]  chrdev_open+0xc9/0x260
+[17280.608885]  ? __pfx_chrdev_open+0x10/0x10
+[17280.608886]  do_dentry_open+0x23d/0x540
+[17280.608888]  path_openat+0xcad/0x10c0
+[17280.608890]  ? syscall_exit_to_user_mode+0x27/0x50
+[17280.608893]  ? do_syscall_64+0x66/0x80
+[17280.608895]  do_filp_open+0xb3/0x160
+[17280.608897]  ? kmem_cache_free+0x24/0x380
+[17280.608900]  do_sys_openat2+0xab/0xe0
+[17280.608902]  __x64_sys_openat+0x62/0xa0
+[17280.608904]  do_syscall_64+0x5a/0x80
+[17280.608906]  ? mntput_no_expire+0x4c/0x270
+[17280.608907]  ? kmem_cache_free+0x24/0x380
+[17280.608909]  ? __call_rcu_common+0xfb/0x730
+[17280.608911]  ? syscall_exit_to_user_mode+0x27/0x50
+[17280.608913]  ? do_syscall_64+0x66/0x80
+[17280.608915]  ? kmem_cache_free+0x24/0x380
+[17280.608916]  ? do_sys_openat2+0x96/0xe0
+[17280.608918]  ? __x64_sys_openat+0x62/0xa0
+[17280.608919]  ? syscall_exit_to_user_mode+0x27/0x50
+[17280.608921]  ? do_syscall_64+0x66/0x80
+[17280.608923]  ? do_syscall_64+0x66/0x80
+[17280.608924]  ? syscall_exit_to_user_mode+0x27/0x50
+[17280.608926]  ? do_syscall_64+0x66/0x80
+[17280.608927]  ? do_syscall_64+0x66/0x80
+[17280.608929]  ? exit_to_user_mode_prepare+0x1ab/0x240
+[17280.608931]  entry_SYSCALL_64_after_hwframe+0x78/0xe2
+[17280.608934] RIP: 0033:0x7f3d2a975fc5
+[17280.608950] Code: 8b 55 d0 48 89 45 b0 75 9e 44 89 55 9c e8 03 53 f8 ff 44 8b 55 9c 89 da 4c 89 e6 41 89 c0 bf 9c ff ff ff b8 01 01 00 00 0f 05 <48> 3d 00 f0 ff ff 77 33 44 89 c7 89 45 9c e8 58 53 f8 ff 8b 45 9c
+[17280.608951] RSP: 002b:00000001005fd770 EFLAGS: 00000293 ORIG_RAX: 0000000000000101
+[17280.608952] RAX: ffffffffffffffda RBX: 0000000000080000 RCX: 00007f3d2a975fc5
+[17280.608953] RDX: 0000000000080000 RSI: 00000001005fd850 RDI: 00000000ffffff9c
+[17280.608954] RBP: 00000001005fd7e0 R08: 0000000000000000 R09: 0000000000000006
+[17280.608955] R10: 0000000000000000 R11: 0000000000000293 R12: 00000001005fd850
+[17280.608956] R13: 00000001005fd848 R14: 0000000000000130 R15: 00000001005fd84a
+[17280.608958]  </TASK>
+[17308.609190] watchdog: BUG: soft lockup - CPU#6 stuck for 9574s! [winedevice.exe:12921]
+[17308.609197] Modules linked in: hid_tmff_new(OE) usb_tminit_new(OE) hid_tminit_new(OE) rfcomm snd_seq_dummy snd_hrtimer snd_seq nft_masq nft_ct nft_reject_ipv4 nf_reject_ipv4 nft_reject act_csum cls_u32 sch_htb xt_conntrack xt_MASQUERADE bridge stp llc xt_set ip_set nft_chain_nat nf_nat nf_conntrack nf_defrag_ipv6 nf_defrag_ipv4 xt_addrtype nft_compat nf_tables vboxnetadp(OE) vboxnetflt(OE) overlay vboxdrv(OE) qrtr cmac algif_hash algif_skcipher af_alg bnep uinput nvidia_uvm(POE) squashfs snd_usb_audio snd_usbmidi_lib snd_ump snd_rawmidi mousedev snd_seq_device mc intel_rapl_msr btusb intel_rapl_common joydev btrtl btintel x86_pkg_temp_thermal intel_powerclamp btbcm btmtk raid0 coretemp ext4 eeepc_wmi bluetooth asus_wmi kvm_intel sparse_keymap snd_hda_codec_realtek platform_profile iTCO_wdt snd_hda_codec_ca0110 mbcache at24 i8042 intel_pmc_bxt nvidia_drm(POE) jbd2 iTCO_vendor_support nvidia_modeset(POE) ecdh_generic serio snd_hda_codec_generic kvm irqbypass snd_hda_codec_hdmi ledtrig_audio crct10dif_pclmul crc32_pclmul
+[17308.609259]  polyval_clmulni polyval_generic snd_hda_intel gf128mul snd_intel_dspcfg snd_intel_sdw_acpi ghash_clmulni_intel snd_hda_codec sha512_ssse3 sha1_ssse3 snd_hda_core aesni_intel snd_hwdep crypto_simd cryptd snd_pcm snd_timer rapl intel_cstate i2c_i801 snd mei_me intel_uncore rfkill crc16 pcspkr wmi_bmof i2c_smbus lpc_ich soundcore e1000e mei md_mod mac_hid nvidia(POE) i2c_dev sg dm_mod fuse crypto_user loop nfnetlink bpf_preload ip_tables x_tables usbhid btrfs blake2b_generic libcrc32c crc32c_generic xor mxm_wmi raid6_pq sha256_ssse3 xhci_pci xhci_pci_renesas video wmi crc32c_intel
+[17308.609298] Unloaded tainted modules: hid_tminit_new(OE):4 usb_tminit_new(OE):4 hid_tmff_new(OE):5 [last unloaded: hid_tminit_new(OE)]
+[17308.609304] CPU: 6 PID: 12921 Comm: winedevice.exe Tainted: P        W  OEL     6.6.107-1-MANJARO #1 817a58fad5dd0668fe9f292579813a9e8c38bd20
+[17308.609307] Hardware name: System manufacturer System Product Name/P8Z68-V PRO, BIOS 0902 09/19/2011
+[17308.609309] RIP: 0010:native_queued_spin_lock_slowpath+0x2be/0x2f0
+[17308.609314] Code: 03 83 ea 01 48 c1 e0 05 48 63 d2 48 05 00 50 03 00 48 03 04 d5 c0 8d 90 9c 4c 89 08 41 8b 41 08 85 c0 75 0a f3 90 41 8b 41 08 <85> c0 74 f6 49 8b 11 48 85 d2 0f 84 6a ff ff ff 0f 18 0a e9 62 ff
+[17308.609316] RSP: 0018:ffffccae1019f928 EFLAGS: 00000246
+[17308.609318] RAX: 0000000000000000 RBX: ffff899dc1846890 RCX: ffff899dc1846890
+[17308.609320] RDX: 0000000000000007 RSI: 0000000000205500 RDI: ffff899dc1846890
+[17308.609321] RBP: ffffccae1019f9b8 R08: 00000000001c0000 R09: ffff899eaf5b5000
+[17308.609323] R10: 00000000001c0000 R11: 0000000000000000 R12: 0000000000000002
+[17308.609324] R13: ffff899e61c59400 R14: ffff899ccebcd038 R15: ffff899dc1846888
+[17308.609325] FS:  00000001005ff6c0(0000) GS:ffff899eaf580000(0000) knlGS:000000007ff70000
+[17308.609327] CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+[17308.609329] CR2: 00003e4c00470000 CR3: 00000003fc756006 CR4: 00000000000606e0
+[17308.609331] Call Trace:
+[17308.609333]  <TASK>
+[17308.609335]  _raw_spin_lock+0x29/0x30
+[17308.609338]  __mutex_lock.constprop.0+0x130/0x760
+[17308.609343]  usbhid_open+0x25/0x100 [usbhid afeadd22dd1cae5d810a19d2e53fc1be6cf2d819]
+[17308.609352]  hid_hw_open+0x66/0x80
+[17308.609356]  input_open_device+0x6b/0xc0
+[17308.609359]  evdev_open+0x1db/0x210
+[17308.609362]  chrdev_open+0xc9/0x260
+[17308.609365]  ? __pfx_chrdev_open+0x10/0x10
+[17308.609367]  do_dentry_open+0x23d/0x540
+[17308.609370]  path_openat+0xcad/0x10c0
+[17308.609374]  ? syscall_exit_to_user_mode+0x27/0x50
+[17308.609377]  ? do_syscall_64+0x66/0x80
+[17308.609380]  do_filp_open+0xb3/0x160
+[17308.609383]  ? kmem_cache_free+0x24/0x380
+[17308.609388]  do_sys_openat2+0xab/0xe0
+[17308.609391]  __x64_sys_openat+0x62/0xa0
+[17308.609394]  do_syscall_64+0x5a/0x80
+[17308.609397]  ? mntput_no_expire+0x4c/0x270
+[17308.609399]  ? kmem_cache_free+0x24/0x380
+[17308.609401]  ? __call_rcu_common+0xfb/0x730
+[17308.609405]  ? syscall_exit_to_user_mode+0x27/0x50
+[17308.609407]  ? do_syscall_64+0x66/0x80
+[17308.609410]  ? kmem_cache_free+0x24/0x380
+[17308.609412]  ? do_sys_openat2+0x96/0xe0
+[17308.609415]  ? __x64_sys_openat+0x62/0xa0
+[17308.609418]  ? syscall_exit_to_user_mode+0x27/0x50
+[17308.609420]  ? do_syscall_64+0x66/0x80
+[17308.609422]  ? do_syscall_64+0x66/0x80
+[17308.609425]  ? syscall_exit_to_user_mode+0x27/0x50
+[17308.609427]  ? do_syscall_64+0x66/0x80
+[17308.609430]  ? do_syscall_64+0x66/0x80
+[17308.609432]  ? exit_to_user_mode_prepare+0x1ab/0x240
+[17308.609435]  entry_SYSCALL_64_after_hwframe+0x78/0xe2
+[17308.609438] RIP: 0033:0x7f3d2a975fc5
+[17308.609455] Code: 8b 55 d0 48 89 45 b0 75 9e 44 89 55 9c e8 03 53 f8 ff 44 8b 55 9c 89 da 4c 89 e6 41 89 c0 bf 9c ff ff ff b8 01 01 00 00 0f 05 <48> 3d 00 f0 ff ff 77 33 44 89 c7 89 45 9c e8 58 53 f8 ff 8b 45 9c
+[17308.609457] RSP: 002b:00000001005fd770 EFLAGS: 00000293 ORIG_RAX: 0000000000000101
+[17308.609460] RAX: ffffffffffffffda RBX: 0000000000080000 RCX: 00007f3d2a975fc5
+[17308.609461] RDX: 0000000000080000 RSI: 00000001005fd850 RDI: 00000000ffffff9c
+[17308.609463] RBP: 00000001005fd7e0 R08: 0000000000000000 R09: 0000000000000006
+[17308.609464] R10: 0000000000000000 R11: 0000000000000293 R12: 00000001005fd850
+[17308.609465] R13: 00000001005fd848 R14: 0000000000000130 R15: 00000001005fd84a
+[17308.609468]  </TASK>
+[17336.609634] watchdog: BUG: soft lockup - CPU#6 stuck for 9600s! [winedevice.exe:12921]
+[17336.609640] Modules linked in: hid_tmff_new(OE) usb_tminit_new(OE) hid_tminit_new(OE) rfcomm snd_seq_dummy snd_hrtimer snd_seq nft_masq nft_ct nft_reject_ipv4 nf_reject_ipv4 nft_reject act_csum cls_u32 sch_htb xt_conntrack xt_MASQUERADE bridge stp llc xt_set ip_set nft_chain_nat nf_nat nf_conntrack nf_defrag_ipv6 nf_defrag_ipv4 xt_addrtype nft_compat nf_tables vboxnetadp(OE) vboxnetflt(OE) overlay vboxdrv(OE) qrtr cmac algif_hash algif_skcipher af_alg bnep uinput nvidia_uvm(POE) squashfs snd_usb_audio snd_usbmidi_lib snd_ump snd_rawmidi mousedev snd_seq_device mc intel_rapl_msr btusb intel_rapl_common joydev btrtl btintel x86_pkg_temp_thermal intel_powerclamp btbcm btmtk raid0 coretemp ext4 eeepc_wmi bluetooth asus_wmi kvm_intel sparse_keymap snd_hda_codec_realtek platform_profile iTCO_wdt snd_hda_codec_ca0110 mbcache at24 i8042 intel_pmc_bxt nvidia_drm(POE) jbd2 iTCO_vendor_support nvidia_modeset(POE) ecdh_generic serio snd_hda_codec_generic kvm irqbypass snd_hda_codec_hdmi ledtrig_audio crct10dif_pclmul crc32_pclmul
+[17336.609678]  polyval_clmulni polyval_generic snd_hda_intel gf128mul snd_intel_dspcfg snd_intel_sdw_acpi ghash_clmulni_intel snd_hda_codec sha512_ssse3 sha1_ssse3 snd_hda_core aesni_intel snd_hwdep crypto_simd cryptd snd_pcm snd_timer rapl intel_cstate i2c_i801 snd mei_me intel_uncore rfkill crc16 pcspkr wmi_bmof i2c_smbus lpc_ich soundcore e1000e mei md_mod mac_hid nvidia(POE) i2c_dev sg dm_mod fuse crypto_user loop nfnetlink bpf_preload ip_tables x_tables usbhid btrfs blake2b_generic libcrc32c crc32c_generic xor mxm_wmi raid6_pq sha256_ssse3 xhci_pci xhci_pci_renesas video wmi crc32c_intel
+[17336.609701] Unloaded tainted modules: hid_tminit_new(OE):4 usb_tminit_new(OE):4 hid_tmff_new(OE):5 [last unloaded: hid_tminit_new(OE)]
+[17336.609705] CPU: 6 PID: 12921 Comm: winedevice.exe Tainted: P        W  OEL     6.6.107-1-MANJARO #1 817a58fad5dd0668fe9f292579813a9e8c38bd20
+[17336.609707] Hardware name: System manufacturer System Product Name/P8Z68-V PRO, BIOS 0902 09/19/2011
+[17336.609708] RIP: 0010:native_queued_spin_lock_slowpath+0x2be/0x2f0
+[17336.609713] Code: 03 83 ea 01 48 c1 e0 05 48 63 d2 48 05 00 50 03 00 48 03 04 d5 c0 8d 90 9c 4c 89 08 41 8b 41 08 85 c0 75 0a f3 90 41 8b 41 08 <85> c0 74 f6 49 8b 11 48 85 d2 0f 84 6a ff ff ff 0f 18 0a e9 62 ff
+[17336.609714] RSP: 0018:ffffccae1019f928 EFLAGS: 00000246
+[17336.609715] RAX: 0000000000000000 RBX: ffff899dc1846890 RCX: ffff899dc1846890
+[17336.609716] RDX: 0000000000000007 RSI: 0000000000205500 RDI: ffff899dc1846890
+[17336.609717] RBP: ffffccae1019f9b8 R08: 00000000001c0000 R09: ffff899eaf5b5000
+[17336.609718] R10: 00000000001c0000 R11: 0000000000000000 R12: 0000000000000002
+[17336.609719] R13: ffff899e61c59400 R14: ffff899ccebcd038 R15: ffff899dc1846888
+[17336.609720] FS:  00000001005ff6c0(0000) GS:ffff899eaf580000(0000) knlGS:000000007ff70000
+[17336.609721] CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+[17336.609722] CR2: 00003e4c00470000 CR3: 00000003fc756006 CR4: 00000000000606e0
+[17336.609723] Call Trace:
+[17336.609724]  <TASK>
+[17336.609726]  _raw_spin_lock+0x29/0x30
+[17336.609728]  __mutex_lock.constprop.0+0x130/0x760
+[17336.609732]  usbhid_open+0x25/0x100 [usbhid afeadd22dd1cae5d810a19d2e53fc1be6cf2d819]
+[17336.609738]  hid_hw_open+0x66/0x80
+[17336.609741]  input_open_device+0x6b/0xc0
+[17336.609743]  evdev_open+0x1db/0x210
+[17336.609745]  chrdev_open+0xc9/0x260
+[17336.609747]  ? __pfx_chrdev_open+0x10/0x10
+[17336.609749]  do_dentry_open+0x23d/0x540
+[17336.609751]  path_openat+0xcad/0x10c0
+[17336.609753]  ? syscall_exit_to_user_mode+0x27/0x50
+[17336.609755]  ? do_syscall_64+0x66/0x80
+[17336.609757]  do_filp_open+0xb3/0x160
+[17336.609759]  ? kmem_cache_free+0x24/0x380
+[17336.609762]  do_sys_openat2+0xab/0xe0
+[17336.609764]  __x64_sys_openat+0x62/0xa0
+[17336.609766]  do_syscall_64+0x5a/0x80
+[17336.609768]  ? mntput_no_expire+0x4c/0x270
+[17336.609769]  ? kmem_cache_free+0x24/0x380
+[17336.609771]  ? __call_rcu_common+0xfb/0x730
+[17336.609773]  ? syscall_exit_to_user_mode+0x27/0x50
+[17336.609775]  ? do_syscall_64+0x66/0x80
+[17336.609776]  ? kmem_cache_free+0x24/0x380
+[17336.609778]  ? do_sys_openat2+0x96/0xe0
+[17336.609780]  ? __x64_sys_openat+0x62/0xa0
+[17336.609781]  ? syscall_exit_to_user_mode+0x27/0x50
+[17336.609783]  ? do_syscall_64+0x66/0x80
+[17336.609784]  ? do_syscall_64+0x66/0x80
+[17336.609786]  ? syscall_exit_to_user_mode+0x27/0x50
+[17336.609788]  ? do_syscall_64+0x66/0x80
+[17336.609789]  ? do_syscall_64+0x66/0x80
+[17336.609791]  ? exit_to_user_mode_prepare+0x1ab/0x240
+[17336.609793]  entry_SYSCALL_64_after_hwframe+0x78/0xe2
+[17336.609796] RIP: 0033:0x7f3d2a975fc5
+[17336.609811] Code: 8b 55 d0 48 89 45 b0 75 9e 44 89 55 9c e8 03 53 f8 ff 44 8b 55 9c 89 da 4c 89 e6 41 89 c0 bf 9c ff ff ff b8 01 01 00 00 0f 05 <48> 3d 00 f0 ff ff 77 33 44 89 c7 89 45 9c e8 58 53 f8 ff 8b 45 9c
+[17336.609812] RSP: 002b:00000001005fd770 EFLAGS: 00000293 ORIG_RAX: 0000000000000101
+[17336.609814] RAX: ffffffffffffffda RBX: 0000000000080000 RCX: 00007f3d2a975fc5
+[17336.609815] RDX: 0000000000080000 RSI: 00000001005fd850 RDI: 00000000ffffff9c
+[17336.609816] RBP: 00000001005fd7e0 R08: 0000000000000000 R09: 0000000000000006
+[17336.609816] R10: 0000000000000000 R11: 0000000000000293 R12: 00000001005fd850
+[17336.609817] R13: 00000001005fd848 R14: 0000000000000130 R15: 00000001005fd84a
+[17336.609819]  </TASK>
+[17351.664330] rcu: INFO: rcu_preempt self-detected stall on CPU
+[17351.664335] rcu: 	6-....: (3096170 ticks this GP) idle=3c04/1/0x4000000000000000 softirq=155513/155513 fqs=1540439
+[17351.664340] rcu: 	(t=3096171 jiffies g=393641 q=1968091 ncpus=8)
+[17351.664343] CPU: 6 PID: 12921 Comm: winedevice.exe Tainted: P        W  OEL     6.6.107-1-MANJARO #1 817a58fad5dd0668fe9f292579813a9e8c38bd20
+[17351.664346] Hardware name: System manufacturer System Product Name/P8Z68-V PRO, BIOS 0902 09/19/2011
+[17351.664347] RIP: 0010:native_queued_spin_lock_slowpath+0x2be/0x2f0
+[17351.664351] Code: 03 83 ea 01 48 c1 e0 05 48 63 d2 48 05 00 50 03 00 48 03 04 d5 c0 8d 90 9c 4c 89 08 41 8b 41 08 85 c0 75 0a f3 90 41 8b 41 08 <85> c0 74 f6 49 8b 11 48 85 d2 0f 84 6a ff ff ff 0f 18 0a e9 62 ff
+[17351.664352] RSP: 0018:ffffccae1019f928 EFLAGS: 00000246
+[17351.664354] RAX: 0000000000000000 RBX: ffff899dc1846890 RCX: ffff899dc1846890
+[17351.664355] RDX: 0000000000000007 RSI: 0000000000205500 RDI: ffff899dc1846890
+[17351.664356] RBP: ffffccae1019f9b8 R08: 00000000001c0000 R09: ffff899eaf5b5000
+[17351.664357] R10: 00000000001c0000 R11: 0000000000000000 R12: 0000000000000002
+[17351.664358] R13: ffff899e61c59400 R14: ffff899ccebcd038 R15: ffff899dc1846888
+[17351.664358] FS:  00000001005ff6c0(0000) GS:ffff899eaf580000(0000) knlGS:000000007ff70000
+[17351.664360] CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+[17351.664360] CR2: 00003e4c00470000 CR3: 00000003fc756006 CR4: 00000000000606e0
+[17351.664362] Call Trace:
+[17351.664363]  <TASK>
+[17351.664365]  _raw_spin_lock+0x29/0x30
+[17351.664367]  __mutex_lock.constprop.0+0x130/0x760
+[17351.664371]  usbhid_open+0x25/0x100 [usbhid afeadd22dd1cae5d810a19d2e53fc1be6cf2d819]
+[17351.664377]  hid_hw_open+0x66/0x80
+[17351.664380]  input_open_device+0x6b/0xc0
+[17351.664382]  evdev_open+0x1db/0x210
+[17351.664384]  chrdev_open+0xc9/0x260
+[17351.664386]  ? __pfx_chrdev_open+0x10/0x10
+[17351.664388]  do_dentry_open+0x23d/0x540
+[17351.664389]  path_openat+0xcad/0x10c0
+[17351.664392]  ? syscall_exit_to_user_mode+0x27/0x50
+[17351.664394]  ? do_syscall_64+0x66/0x80
+[17351.664396]  do_filp_open+0xb3/0x160
+[17351.664398]  ? kmem_cache_free+0x24/0x380
+[17351.664401]  do_sys_openat2+0xab/0xe0
+[17351.664403]  __x64_sys_openat+0x62/0xa0
+[17351.664405]  do_syscall_64+0x5a/0x80
+[17351.664407]  ? mntput_no_expire+0x4c/0x270
+[17351.664408]  ? kmem_cache_free+0x24/0x380
+[17351.664409]  ? __call_rcu_common+0xfb/0x730
+[17351.664412]  ? syscall_exit_to_user_mode+0x27/0x50
+[17351.664413]  ? do_syscall_64+0x66/0x80
+[17351.664415]  ? kmem_cache_free+0x24/0x380
+[17351.664416]  ? do_sys_openat2+0x96/0xe0
+[17351.664418]  ? __x64_sys_openat+0x62/0xa0
+[17351.664420]  ? syscall_exit_to_user_mode+0x27/0x50
+[17351.664422]  ? do_syscall_64+0x66/0x80
+[17351.664423]  ? do_syscall_64+0x66/0x80
+[17351.664425]  ? syscall_exit_to_user_mode+0x27/0x50
+[17351.664426]  ? do_syscall_64+0x66/0x80
+[17351.664428]  ? do_syscall_64+0x66/0x80
+[17351.664429]  ? exit_to_user_mode_prepare+0x1ab/0x240
+[17351.664431]  entry_SYSCALL_64_after_hwframe+0x78/0xe2
+[17351.664434] RIP: 0033:0x7f3d2a975fc5
+[17351.664449] Code: 8b 55 d0 48 89 45 b0 75 9e 44 89 55 9c e8 03 53 f8 ff 44 8b 55 9c 89 da 4c 89 e6 41 89 c0 bf 9c ff ff ff b8 01 01 00 00 0f 05 <48> 3d 00 f0 ff ff 77 33 44 89 c7 89 45 9c e8 58 53 f8 ff 8b 45 9c
+[17351.664450] RSP: 002b:00000001005fd770 EFLAGS: 00000293 ORIG_RAX: 0000000000000101
+[17351.664452] RAX: ffffffffffffffda RBX: 0000000000080000 RCX: 00007f3d2a975fc5
+[17351.664452] RDX: 0000000000080000 RSI: 00000001005fd850 RDI: 00000000ffffff9c
+[17351.664453] RBP: 00000001005fd7e0 R08: 0000000000000000 R09: 0000000000000006
+[17351.664454] R10: 0000000000000000 R11: 0000000000000293 R12: 00000001005fd850
+[17351.664455] R13: 00000001005fd848 R14: 0000000000000130 R15: 00000001005fd84a
+[17351.664457]  </TASK>
+[17353.574367] rcu: INFO: rcu_preempt detected expedited stalls on CPUs/tasks: { 6-.... } 1452003 jiffies s: 1709 root: 0x40/.
+[17353.574375] rcu: blocking rcu_node structures (internal RCU debug):
+[17353.574377] Sending NMI from CPU 7 to CPUs 6:
+[17353.574382] NMI backtrace for cpu 6
+[17353.574384] CPU: 6 PID: 12921 Comm: winedevice.exe Tainted: P        W  OEL     6.6.107-1-MANJARO #1 817a58fad5dd0668fe9f292579813a9e8c38bd20
+[17353.574387] Hardware name: System manufacturer System Product Name/P8Z68-V PRO, BIOS 0902 09/19/2011
+[17353.574387] RIP: 0010:native_queued_spin_lock_slowpath+0x2ba/0x2f0
+[17353.574392] Code: ea 12 83 e0 03 83 ea 01 48 c1 e0 05 48 63 d2 48 05 00 50 03 00 48 03 04 d5 c0 8d 90 9c 4c 89 08 41 8b 41 08 85 c0 75 0a f3 90 <41> 8b 41 08 85 c0 74 f6 49 8b 11 48 85 d2 0f 84 6a ff ff ff 0f 18
+[17353.574393] RSP: 0018:ffffccae1019f928 EFLAGS: 00000246
+[17353.574394] RAX: 0000000000000000 RBX: ffff899dc1846890 RCX: ffff899dc1846890
+[17353.574395] RDX: 0000000000000007 RSI: 0000000000205500 RDI: ffff899dc1846890
+[17353.574396] RBP: ffffccae1019f9b8 R08: 00000000001c0000 R09: ffff899eaf5b5000
+[17353.574396] R10: 00000000001c0000 R11: 0000000000000000 R12: 0000000000000002
+[17353.574397] R13: ffff899e61c59400 R14: ffff899ccebcd038 R15: ffff899dc1846888
+[17353.574398] FS:  00000001005ff6c0(0000) GS:ffff899eaf580000(0000) knlGS:000000007ff70000
+[17353.574399] CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+[17353.574400] CR2: 00003e4c00470000 CR3: 00000003fc756006 CR4: 00000000000606e0
+[17353.574401] Call Trace:
+[17353.574402]  <TASK>
+[17353.574403]  _raw_spin_lock+0x29/0x30
+[17353.574405]  __mutex_lock.constprop.0+0x130/0x760
+[17353.574409]  usbhid_open+0x25/0x100 [usbhid afeadd22dd1cae5d810a19d2e53fc1be6cf2d819]
+[17353.574416]  hid_hw_open+0x66/0x80
+[17353.574418]  input_open_device+0x6b/0xc0
+[17353.574420]  evdev_open+0x1db/0x210
+[17353.574422]  chrdev_open+0xc9/0x260
+[17353.574425]  ? __pfx_chrdev_open+0x10/0x10
+[17353.574426]  do_dentry_open+0x23d/0x540
+[17353.574427]  path_openat+0xcad/0x10c0
+[17353.574429]  ? syscall_exit_to_user_mode+0x27/0x50
+[17353.574431]  ? do_syscall_64+0x66/0x80
+[17353.574433]  do_filp_open+0xb3/0x160
+[17353.574435]  ? kmem_cache_free+0x24/0x380
+[17353.574438]  do_sys_openat2+0xab/0xe0
+[17353.574440]  __x64_sys_openat+0x62/0xa0
+[17353.574442]  do_syscall_64+0x5a/0x80
+[17353.574443]  ? mntput_no_expire+0x4c/0x270
+[17353.574445]  ? kmem_cache_free+0x24/0x380
+[17353.574446]  ? __call_rcu_common+0xfb/0x730
+[17353.574448]  ? syscall_exit_to_user_mode+0x27/0x50
+[17353.574450]  ? do_syscall_64+0x66/0x80
+[17353.574451]  ? kmem_cache_free+0x24/0x380
+[17353.574453]  ? do_sys_openat2+0x96/0xe0
+[17353.574454]  ? __x64_sys_openat+0x62/0xa0
+[17353.574456]  ? syscall_exit_to_user_mode+0x27/0x50
+[17353.574457]  ? do_syscall_64+0x66/0x80
+[17353.574459]  ? do_syscall_64+0x66/0x80
+[17353.574460]  ? syscall_exit_to_user_mode+0x27/0x50
+[17353.574462]  ? do_syscall_64+0x66/0x80
+[17353.574463]  ? do_syscall_64+0x66/0x80
+[17353.574464]  ? exit_to_user_mode_prepare+0x1ab/0x240
+[17353.574466]  entry_SYSCALL_64_after_hwframe+0x78/0xe2
+[17353.574469] RIP: 0033:0x7f3d2a975fc5
+[17353.574484] Code: 8b 55 d0 48 89 45 b0 75 9e 44 89 55 9c e8 03 53 f8 ff 44 8b 55 9c 89 da 4c 89 e6 41 89 c0 bf 9c ff ff ff b8 01 01 00 00 0f 05 <48> 3d 00 f0 ff ff 77 33 44 89 c7 89 45 9c e8 58 53 f8 ff 8b 45 9c
+[17353.574485] RSP: 002b:00000001005fd770 EFLAGS: 00000293 ORIG_RAX: 0000000000000101
+[17353.574486] RAX: ffffffffffffffda RBX: 0000000000080000 RCX: 00007f3d2a975fc5
+[17353.574487] RDX: 0000000000080000 RSI: 00000001005fd850 RDI: 00000000ffffff9c
+[17353.574488] RBP: 00000001005fd7e0 R08: 0000000000000000 R09: 0000000000000006
+[17353.574488] R10: 0000000000000000 R11: 0000000000000293 R12: 00000001005fd850
+[17353.574489] R13: 00000001005fd848 R14: 0000000000000130 R15: 00000001005fd84a
+[17353.574491]  </TASK>
+[17380.610334] watchdog: BUG: soft lockup - CPU#6 stuck for 9641s! [winedevice.exe:12921]
+[17380.610340] Modules linked in: hid_tmff_new(OE) usb_tminit_new(OE) hid_tminit_new(OE) rfcomm snd_seq_dummy snd_hrtimer snd_seq nft_masq nft_ct nft_reject_ipv4 nf_reject_ipv4 nft_reject act_csum cls_u32 sch_htb xt_conntrack xt_MASQUERADE bridge stp llc xt_set ip_set nft_chain_nat nf_nat nf_conntrack nf_defrag_ipv6 nf_defrag_ipv4 xt_addrtype nft_compat nf_tables vboxnetadp(OE) vboxnetflt(OE) overlay vboxdrv(OE) qrtr cmac algif_hash algif_skcipher af_alg bnep uinput nvidia_uvm(POE) squashfs snd_usb_audio snd_usbmidi_lib snd_ump snd_rawmidi mousedev snd_seq_device mc intel_rapl_msr btusb intel_rapl_common joydev btrtl btintel x86_pkg_temp_thermal intel_powerclamp btbcm btmtk raid0 coretemp ext4 eeepc_wmi bluetooth asus_wmi kvm_intel sparse_keymap snd_hda_codec_realtek platform_profile iTCO_wdt snd_hda_codec_ca0110 mbcache at24 i8042 intel_pmc_bxt nvidia_drm(POE) jbd2 iTCO_vendor_support nvidia_modeset(POE) ecdh_generic serio snd_hda_codec_generic kvm irqbypass snd_hda_codec_hdmi ledtrig_audio crct10dif_pclmul crc32_pclmul
+[17380.610376]  polyval_clmulni polyval_generic snd_hda_intel gf128mul snd_intel_dspcfg snd_intel_sdw_acpi ghash_clmulni_intel snd_hda_codec sha512_ssse3 sha1_ssse3 snd_hda_core aesni_intel snd_hwdep crypto_simd cryptd snd_pcm snd_timer rapl intel_cstate i2c_i801 snd mei_me intel_uncore rfkill crc16 pcspkr wmi_bmof i2c_smbus lpc_ich soundcore e1000e mei md_mod mac_hid nvidia(POE) i2c_dev sg dm_mod fuse crypto_user loop nfnetlink bpf_preload ip_tables x_tables usbhid btrfs blake2b_generic libcrc32c crc32c_generic xor mxm_wmi raid6_pq sha256_ssse3 xhci_pci xhci_pci_renesas video wmi crc32c_intel
+[17380.610399] Unloaded tainted modules: hid_tminit_new(OE):4 usb_tminit_new(OE):4 hid_tmff_new(OE):5 [last unloaded: hid_tminit_new(OE)]
+[17380.610403] CPU: 6 PID: 12921 Comm: winedevice.exe Tainted: P        W  OEL     6.6.107-1-MANJARO #1 817a58fad5dd0668fe9f292579813a9e8c38bd20
+[17380.610405] Hardware name: System manufacturer System Product Name/P8Z68-V PRO, BIOS 0902 09/19/2011
+[17380.610406] RIP: 0010:native_queued_spin_lock_slowpath+0x2ba/0x2f0
+[17380.610410] Code: ea 12 83 e0 03 83 ea 01 48 c1 e0 05 48 63 d2 48 05 00 50 03 00 48 03 04 d5 c0 8d 90 9c 4c 89 08 41 8b 41 08 85 c0 75 0a f3 90 <41> 8b 41 08 85 c0 74 f6 49 8b 11 48 85 d2 0f 84 6a ff ff ff 0f 18
+[17380.610411] RSP: 0018:ffffccae1019f928 EFLAGS: 00000246
+[17380.610413] RAX: 0000000000000000 RBX: ffff899dc1846890 RCX: ffff899dc1846890
+[17380.610414] RDX: 0000000000000007 RSI: 0000000000205500 RDI: ffff899dc1846890
+[17380.610414] RBP: ffffccae1019f9b8 R08: 00000000001c0000 R09: ffff899eaf5b5000
+[17380.610415] R10: 00000000001c0000 R11: 0000000000000000 R12: 0000000000000002
+[17380.610416] R13: ffff899e61c59400 R14: ffff899ccebcd038 R15: ffff899dc1846888
+[17380.610417] FS:  00000001005ff6c0(0000) GS:ffff899eaf580000(0000) knlGS:000000007ff70000
+[17380.610418] CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+[17380.610419] CR2: 00003e4c00470000 CR3: 00000003fc756006 CR4: 00000000000606e0
+[17380.610420] Call Trace:
+[17380.610421]  <TASK>
+[17380.610423]  _raw_spin_lock+0x29/0x30
+[17380.610425]  __mutex_lock.constprop.0+0x130/0x760
+[17380.610428]  usbhid_open+0x25/0x100 [usbhid afeadd22dd1cae5d810a19d2e53fc1be6cf2d819]
+[17380.610435]  hid_hw_open+0x66/0x80
+[17380.610437]  input_open_device+0x6b/0xc0
+[17380.610440]  evdev_open+0x1db/0x210
+[17380.610442]  chrdev_open+0xc9/0x260
+[17380.610444]  ? __pfx_chrdev_open+0x10/0x10
+[17380.610445]  do_dentry_open+0x23d/0x540
+[17380.610447]  path_openat+0xcad/0x10c0
+[17380.610449]  ? syscall_exit_to_user_mode+0x27/0x50
+[17380.610452]  ? do_syscall_64+0x66/0x80
+[17380.610454]  do_filp_open+0xb3/0x160
+[17380.610456]  ? kmem_cache_free+0x24/0x380
+[17380.610459]  do_sys_openat2+0xab/0xe0
+[17380.610461]  __x64_sys_openat+0x62/0xa0
+[17380.610463]  do_syscall_64+0x5a/0x80
+[17380.610465]  ? mntput_no_expire+0x4c/0x270
+[17380.610466]  ? kmem_cache_free+0x24/0x380
+[17380.610468]  ? __call_rcu_common+0xfb/0x730
+[17380.610470]  ? syscall_exit_to_user_mode+0x27/0x50
+[17380.610472]  ? do_syscall_64+0x66/0x80
+[17380.610473]  ? kmem_cache_free+0x24/0x380
+[17380.610475]  ? do_sys_openat2+0x96/0xe0
+[17380.610477]  ? __x64_sys_openat+0x62/0xa0
+[17380.610478]  ? syscall_exit_to_user_mode+0x27/0x50
+[17380.610480]  ? do_syscall_64+0x66/0x80
+[17380.610481]  ? do_syscall_64+0x66/0x80
+[17380.610483]  ? syscall_exit_to_user_mode+0x27/0x50
+[17380.610485]  ? do_syscall_64+0x66/0x80
+[17380.610486]  ? do_syscall_64+0x66/0x80
+[17380.610488]  ? exit_to_user_mode_prepare+0x1ab/0x240
+[17380.610490]  entry_SYSCALL_64_after_hwframe+0x78/0xe2
+[17380.610493] RIP: 0033:0x7f3d2a975fc5
+[17380.610509] Code: 8b 55 d0 48 89 45 b0 75 9e 44 89 55 9c e8 03 53 f8 ff 44 8b 55 9c 89 da 4c 89 e6 41 89 c0 bf 9c ff ff ff b8 01 01 00 00 0f 05 <48> 3d 00 f0 ff ff 77 33 44 89 c7 89 45 9c e8 58 53 f8 ff 8b 45 9c
+[17380.610510] RSP: 002b:00000001005fd770 EFLAGS: 00000293 ORIG_RAX: 0000000000000101
+[17380.610511] RAX: ffffffffffffffda RBX: 0000000000080000 RCX: 00007f3d2a975fc5
+[17380.610512] RDX: 0000000000080000 RSI: 00000001005fd850 RDI: 00000000ffffff9c
+[17380.610513] RBP: 00000001005fd7e0 R08: 0000000000000000 R09: 0000000000000006
+[17380.610513] R10: 0000000000000000 R11: 0000000000000293 R12: 00000001005fd850
+[17380.610514] R13: 00000001005fd848 R14: 0000000000000130 R15: 00000001005fd84a
+[17380.610516]  </TASK>
+[17408.610779] watchdog: BUG: soft lockup - CPU#6 stuck for 9668s! [winedevice.exe:12921]
+[17408.610785] Modules linked in: hid_tmff_new(OE) usb_tminit_new(OE) hid_tminit_new(OE) rfcomm snd_seq_dummy snd_hrtimer snd_seq nft_masq nft_ct nft_reject_ipv4 nf_reject_ipv4 nft_reject act_csum cls_u32 sch_htb xt_conntrack xt_MASQUERADE bridge stp llc xt_set ip_set nft_chain_nat nf_nat nf_conntrack nf_defrag_ipv6 nf_defrag_ipv4 xt_addrtype nft_compat nf_tables vboxnetadp(OE) vboxnetflt(OE) overlay vboxdrv(OE) qrtr cmac algif_hash algif_skcipher af_alg bnep uinput nvidia_uvm(POE) squashfs snd_usb_audio snd_usbmidi_lib snd_ump snd_rawmidi mousedev snd_seq_device mc intel_rapl_msr btusb intel_rapl_common joydev btrtl btintel x86_pkg_temp_thermal intel_powerclamp btbcm btmtk raid0 coretemp ext4 eeepc_wmi bluetooth asus_wmi kvm_intel sparse_keymap snd_hda_codec_realtek platform_profile iTCO_wdt snd_hda_codec_ca0110 mbcache at24 i8042 intel_pmc_bxt nvidia_drm(POE) jbd2 iTCO_vendor_support nvidia_modeset(POE) ecdh_generic serio snd_hda_codec_generic kvm irqbypass snd_hda_codec_hdmi ledtrig_audio crct10dif_pclmul crc32_pclmul
+[17408.610822]  polyval_clmulni polyval_generic snd_hda_intel gf128mul snd_intel_dspcfg snd_intel_sdw_acpi ghash_clmulni_intel snd_hda_codec sha512_ssse3 sha1_ssse3 snd_hda_core aesni_intel snd_hwdep crypto_simd cryptd snd_pcm snd_timer rapl intel_cstate i2c_i801 snd mei_me intel_uncore rfkill crc16 pcspkr wmi_bmof i2c_smbus lpc_ich soundcore e1000e mei md_mod mac_hid nvidia(POE) i2c_dev sg dm_mod fuse crypto_user loop nfnetlink bpf_preload ip_tables x_tables usbhid btrfs blake2b_generic libcrc32c crc32c_generic xor mxm_wmi raid6_pq sha256_ssse3 xhci_pci xhci_pci_renesas video wmi crc32c_intel
+[17408.610845] Unloaded tainted modules: hid_tminit_new(OE):4 usb_tminit_new(OE):4 hid_tmff_new(OE):5 [last unloaded: hid_tminit_new(OE)]
+[17408.610849] CPU: 6 PID: 12921 Comm: winedevice.exe Tainted: P        W  OEL     6.6.107-1-MANJARO #1 817a58fad5dd0668fe9f292579813a9e8c38bd20
+[17408.610852] Hardware name: System manufacturer System Product Name/P8Z68-V PRO, BIOS 0902 09/19/2011
+[17408.610852] RIP: 0010:native_queued_spin_lock_slowpath+0x2be/0x2f0
+[17408.610857] Code: 03 83 ea 01 48 c1 e0 05 48 63 d2 48 05 00 50 03 00 48 03 04 d5 c0 8d 90 9c 4c 89 08 41 8b 41 08 85 c0 75 0a f3 90 41 8b 41 08 <85> c0 74 f6 49 8b 11 48 85 d2 0f 84 6a ff ff ff 0f 18 0a e9 62 ff
+[17408.610858] RSP: 0018:ffffccae1019f928 EFLAGS: 00000246
+[17408.610859] RAX: 0000000000000000 RBX: ffff899dc1846890 RCX: ffff899dc1846890
+[17408.610860] RDX: 0000000000000007 RSI: 0000000000205500 RDI: ffff899dc1846890
+[17408.610861] RBP: ffffccae1019f9b8 R08: 00000000001c0000 R09: ffff899eaf5b5000
+[17408.610862] R10: 00000000001c0000 R11: 0000000000000000 R12: 0000000000000002
+[17408.610863] R13: ffff899e61c59400 R14: ffff899ccebcd038 R15: ffff899dc1846888
+[17408.610864] FS:  00000001005ff6c0(0000) GS:ffff899eaf580000(0000) knlGS:000000007ff70000
+[17408.610865] CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+[17408.610866] CR2: 00003e4c00470000 CR3: 00000003fc756006 CR4: 00000000000606e0
+[17408.610867] Call Trace:
+[17408.610868]  <TASK>
+[17408.610870]  _raw_spin_lock+0x29/0x30
+[17408.610872]  __mutex_lock.constprop.0+0x130/0x760
+[17408.610876]  usbhid_open+0x25/0x100 [usbhid afeadd22dd1cae5d810a19d2e53fc1be6cf2d819]
+[17408.610882]  hid_hw_open+0x66/0x80
+[17408.610884]  input_open_device+0x6b/0xc0
+[17408.610887]  evdev_open+0x1db/0x210
+[17408.610889]  chrdev_open+0xc9/0x260
+[17408.610891]  ? __pfx_chrdev_open+0x10/0x10
+[17408.610892]  do_dentry_open+0x23d/0x540
+[17408.610894]  path_openat+0xcad/0x10c0
+[17408.610896]  ? syscall_exit_to_user_mode+0x27/0x50
+[17408.610899]  ? do_syscall_64+0x66/0x80
+[17408.610901]  do_filp_open+0xb3/0x160
+[17408.610903]  ? kmem_cache_free+0x24/0x380
+[17408.610906]  do_sys_openat2+0xab/0xe0
+[17408.610908]  __x64_sys_openat+0x62/0xa0
+[17408.610910]  do_syscall_64+0x5a/0x80
+[17408.610911]  ? mntput_no_expire+0x4c/0x270
+[17408.610913]  ? kmem_cache_free+0x24/0x380
+[17408.610914]  ? __call_rcu_common+0xfb/0x730
+[17408.610916]  ? syscall_exit_to_user_mode+0x27/0x50
+[17408.610918]  ? do_syscall_64+0x66/0x80
+[17408.610920]  ? kmem_cache_free+0x24/0x380
+[17408.610921]  ? do_sys_openat2+0x96/0xe0
+[17408.610923]  ? __x64_sys_openat+0x62/0xa0
+[17408.610925]  ? syscall_exit_to_user_mode+0x27/0x50
+[17408.610926]  ? do_syscall_64+0x66/0x80
+[17408.610928]  ? do_syscall_64+0x66/0x80
+[17408.610929]  ? syscall_exit_to_user_mode+0x27/0x50
+[17408.610931]  ? do_syscall_64+0x66/0x80
+[17408.610932]  ? do_syscall_64+0x66/0x80
+[17408.610934]  ? exit_to_user_mode_prepare+0x1ab/0x240
+[17408.610936]  entry_SYSCALL_64_after_hwframe+0x78/0xe2
+[17408.610939] RIP: 0033:0x7f3d2a975fc5
+[17408.610955] Code: 8b 55 d0 48 89 45 b0 75 9e 44 89 55 9c e8 03 53 f8 ff 44 8b 55 9c 89 da 4c 89 e6 41 89 c0 bf 9c ff ff ff b8 01 01 00 00 0f 05 <48> 3d 00 f0 ff ff 77 33 44 89 c7 89 45 9c e8 58 53 f8 ff 8b 45 9c
+[17408.610956] RSP: 002b:00000001005fd770 EFLAGS: 00000293 ORIG_RAX: 0000000000000101
+[17408.610957] RAX: ffffffffffffffda RBX: 0000000000080000 RCX: 00007f3d2a975fc5
+[17408.610958] RDX: 0000000000080000 RSI: 00000001005fd850 RDI: 00000000ffffff9c
+[17408.610959] RBP: 00000001005fd7e0 R08: 0000000000000000 R09: 0000000000000006
+[17408.610959] R10: 0000000000000000 R11: 0000000000000293 R12: 00000001005fd850
+[17408.610960] R13: 00000001005fd848 R14: 0000000000000130 R15: 00000001005fd84a
+[17408.610962]  </TASK>

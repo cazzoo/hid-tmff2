@@ -445,6 +445,8 @@ static int tmff2_play(struct input_dev *dev, int effect_id, int value)
 	if (!tmff2)
 		return -ENODEV;
 
+	hid_info(tmff2->hdev, "tmff2_play: effect_id=%d, value=%d\n", effect_id, value);
+
 	state = &tmff2->states[effect_id];
 	if (!state)
 		return 0;
@@ -455,15 +457,21 @@ static int tmff2_play(struct input_dev *dev, int effect_id, int value)
 		state->start_time = JIFFIES2MS(jiffies);
 		__set_bit(FF_EFFECT_QUEUE_START, &state->flags);
 		__clear_bit(FF_EFFECT_QUEUE_STOP, &state->flags);
+		hid_info(tmff2->hdev, "tmff2_play: Set FF_EFFECT_QUEUE_START for effect %d\n", effect_id);
 	} else {
 		__set_bit(FF_EFFECT_QUEUE_STOP, &state->flags);
 		__clear_bit(FF_EFFECT_QUEUE_START, &state->flags);
+		hid_info(tmff2->hdev, "tmff2_play: Set FF_EFFECT_QUEUE_STOP for effect %d\n", effect_id);
 	}
 
 	spin_unlock_irqrestore(&tmff2->lock, lock_flags);
 
-	if (!delayed_work_pending(&tmff2->work) && tmff2->allow_scheduling)
+	if (!delayed_work_pending(&tmff2->work) && tmff2->allow_scheduling) {
+		hid_info(tmff2->hdev, "tmff2_play: Scheduling work\n");
 		schedule_delayed_work(&tmff2->work, 0);
+	} else {
+		hid_info(tmff2->hdev, "tmff2_play: Work already pending or scheduling disabled\n");
+	}
 
 	return 0;
 }
@@ -687,7 +695,7 @@ static int tmff2_probe(struct hid_device *hdev, const struct hid_device_id *id)
 			if ((ret = tsxw_populate_api(tmff2)))
 				goto wheel_err;
 			break;
-		case TMT500RS_INIT_ID:
+		/* T500RS: Only handle normal mode, boot mode handled by hid-tminit */
 		case TMT500RS_PC_ID:
 			if ((ret = t500rs_populate_api(tmff2)))
 				goto wheel_err;
@@ -748,6 +756,7 @@ static const __u8 *tmff2_report_fixup(struct hid_device *hdev, __u8 *rdesc,
 static void tmff2_remove(struct hid_device *hdev)
 {
 	struct tmff2_device_entry *tmff2 = hid_get_drvdata(hdev);
+	struct device *dev = &hdev->dev;
 
 	if (!tmff2)
 		return;
@@ -756,6 +765,20 @@ static void tmff2_remove(struct hid_device *hdev)
 	cancel_delayed_work_sync(&tmff2->work);
 
 	hid_err(hdev, "removing device\n");
+
+	/* CRITICAL FIX: Remove sysfs files to prevent "duplicate filename" errors on reprobe */
+	if (tmff2->params & PARAM_GAIN)
+		device_remove_file(dev, &dev_attr_gain);
+	if (tmff2->params & PARAM_RANGE)
+		device_remove_file(dev, &dev_attr_range);
+	if (tmff2->params & PARAM_SPRING_LEVEL)
+		device_remove_file(dev, &dev_attr_spring_level);
+	if (tmff2->params & PARAM_DAMPER_LEVEL)
+		device_remove_file(dev, &dev_attr_damper_level);
+	if (tmff2->params & PARAM_FRICTION_LEVEL)
+		device_remove_file(dev, &dev_attr_friction_level);
+	if (tmff2->params & PARAM_ALT_MODE)
+		device_remove_file(dev, &dev_attr_alternate_modes);
 
 	kfree(tmff2);
 }
@@ -773,8 +796,8 @@ static const struct hid_device_id tmff2_devices[] = {
 		.driver_data = (kernel_ulong_t)tx_populate_api },
 	{ HID_USB_DEVICE(USB_VENDOR_ID_THRUSTMASTER, TSXW_ACTIVE),
 		.driver_data = (kernel_ulong_t)tsxw_populate_api },
-	{ HID_USB_DEVICE(USB_VENDOR_ID_THRUSTMASTER, TMT500RS_INIT_ID),
-		.driver_data = (kernel_ulong_t)t500rs_populate_api },
+	/* T500RS: Only bind to normal mode (0xb65e), not boot mode (0xb65d)
+	 * Boot mode is handled by hid-tminit which switches to normal mode */
 	{ HID_USB_DEVICE(USB_VENDOR_ID_THRUSTMASTER, TMT500RS_PC_ID),
 		.driver_data = (kernel_ulong_t)t500rs_populate_api },
 	{ }

@@ -1,0 +1,25 @@
+{
+  "program": "tmPID64.DLL",
+  "port": 8195,
+  "priority": 1,
+  "description": "Core PID/Force Feedback Library - Most important for FF protocols",
+  "analysis_status": "pending",
+  "force_feedback_focus": {
+    "api_functions": [],
+    "effect_types": [],
+    "device_commands": [],
+    "configuration_interfaces": []
+  },
+  "linux_compatibility": {
+    "ff_api_mappings": [],
+    "hidraw_interfaces": [],
+    "uinput_requirements": [],
+    "wine_integration": []
+  },
+  "reverse_engineering": {
+    "key_functions": [],
+    "data_structures": [],
+    "communication_protocols": [],
+    "device_interfaces": []
+  }
+}

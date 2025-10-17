@@ -1,0 +1,891 @@
+{
+  "project": "T500RS Linux FF Driver - Real MCP Analysis",
+  "timestamp": "2025-10-14 11:21:00",
+  "programs": {
+    "tmPID64.DLL": {
+      "program": "tmPID64.DLL",
+      "port": 8195,
+      "priority": 1,
+      "critical": true,
+      "description": "Core PID/Force Feedback Library",
+      "mcp_calls": [
+        {
+          "step": 1,
+          "tool": "instances_use",
+          "params": {
+            "port": 8195
+          },
+          "purpose": "Switch to tmPID64.DLL"
+        },
+        {
+          "step": 2,
+          "tool": "data_list_strings",
+          "params": {
+            "limit": 500
+          },
+          "purpose": "Extract all strings for protocol analysis"
+        },
+        {
+          "step": 3,
+          "tool": "functions_list",
+          "params": {
+            "limit": 200
+          },
+          "purpose": "Get complete function list"
+        },
+        {
+          "step": 4,
+          "tool": "data_list_strings",
+          "params": {
+            "filter": "force",
+            "limit": 100
+          },
+          "purpose": "Find force_feedback strings containing 'force'"
+        },
+        {
+          "step": 5,
+          "tool": "data_list_strings",
+          "params": {
+            "filter": "feedback",
+            "limit": 100
+          },
+          "purpose": "Find force_feedback strings containing 'feedback'"
+        },
+        {
+          "step": 6,
+          "tool": "data_list_strings",
+          "params": {
+            "filter": "ffb",
+            "limit": 100
+          },
+          "purpose": "Find force_feedback strings containing 'ffb'"
+        },
+        {
+          "step": 7,
+          "tool": "data_list_strings",
+          "params": {
+            "filter": "hid",
+            "limit": 100
+          },
+          "purpose": "Find hid_communication strings containing 'hid'"
+        },
+        {
+          "step": 8,
+          "tool": "data_list_strings",
+          "params": {
+            "filter": "feature",
+            "limit": 100
+          },
+          "purpose": "Find hid_communication strings containing 'feature'"
+        },
+        {
+          "step": 9,
+          "tool": "data_list_strings",
+          "params": {
+            "filter": "report",
+            "limit": 100
+          },
+          "purpose": "Find hid_communication strings containing 'report'"
+        },
+        {
+          "step": 10,
+          "tool": "data_list_strings",
+          "params": {
+            "filter": "device",
+            "limit": 100
+          },
+          "purpose": "Find device_management strings containing 'device'"
+        },
+        {
+          "step": 11,
+          "tool": "data_list_strings",
+          "params": {
+            "filter": "enum",
+            "limit": 100
+          },
+          "purpose": "Find device_management strings containing 'enum'"
+        },
+        {
+          "step": 12,
+          "tool": "data_list_strings",
+          "params": {
+            "filter": "open",
+            "limit": 100
+          },
+          "purpose": "Find device_management strings containing 'open'"
+        },
+        {
+          "step": 13,
+          "tool": "data_list_strings",
+          "params": {
+            "filter": "tm_api",
+            "limit": 100
+          },
+          "purpose": "Find api_functions strings containing 'tm_api'"
+        },
+        {
+          "step": 14,
+          "tool": "data_list_strings",
+          "params": {
+            "filter": "api",
+            "limit": 100
+          },
+          "purpose": "Find api_functions strings containing 'api'"
+        },
+        {
+          "step": 15,
+          "tool": "data_list_strings",
+          "params": {
+            "filter": "export",
+            "limit": 100
+          },
+          "purpose": "Find api_functions strings containing 'export'"
+        },
+        {
+          "step": 16,
+          "tool": "data_list_strings",
+          "params": {
+            "filter": "struct",
+            "limit": 100
+          },
+          "purpose": "Find data_structures strings containing 'struct'"
+        },
+        {
+          "step": 17,
+          "tool": "data_list_strings",
+          "params": {
+            "filter": "typedef",
+            "limit": 100
+          },
+          "purpose": "Find data_structures strings containing 'typedef'"
+        },
+        {
+          "step": 18,
+          "tool": "data_list_strings",
+          "params": {
+            "filter": "size",
+            "limit": 100
+          },
+          "purpose": "Find data_structures strings containing 'size'"
+        },
+        {
+          "step": 19,
+          "tool": "functions_decompile",
+          "params": {
+            "address": "TBD_FROM_ANALYSIS"
+          },
+          "purpose": "Decompile main force feedback function"
+        },
+        {
+          "step": 20,
+          "tool": "functions_decompile",
+          "params": {
+            "address": "TBD_FROM_ANALYSIS"
+          },
+          "purpose": "Decompile HID communication function"
+        },
+        {
+          "step": 21,
+          "tool": "functions_decompile",
+          "params": {
+            "address": "TBD_FROM_ANALYSIS"
+          },
+          "purpose": "Decompile device initialization function"
+        },
+        {
+          "step": 22,
+          "tool": "xrefs_list",
+          "params": {
+            "to_addr": "TBD_HID_STRING_ADDR",
+            "limit": 50
+          },
+          "purpose": "Find all functions using HID APIs"
+        }
+      ],
+      "analysis_depth": "deep",
+      "expected_findings": {
+        "protocols": [
+          "HID feature reports",
+          "Force feedback commands",
+          "Effect parameters"
+        ],
+        "structures": [
+          "Effect data",
+          "Device state",
+          "HID report formats"
+        ],
+        "functions": [
+          "HidD_SetFeature",
+          "HidD_GetFeature",
+          "Effect creation",
+          "Parameter encoding"
+        ]
+      },
+      "linux_relevance": {
+        "kernel_driver": "Core HID protocol implementation",
+        "userspace": "Effect parameter translation",
+        "wine": "Low-level FF API bridge"
+      }
+    },
+    "tmeffcpl64.dll": {
+      "program": "tmeffcpl64.dll",
+      "port": 8193,
+      "priority": 2,
+      "critical": true,
+      "description": "Force Feedback Control Panel",
+      "mcp_calls": [
+        {
+          "step": 1,
+          "tool": "instances_use",
+          "params": {
+            "port": 8193
+          },
+          "purpose": "Switch to tmeffcpl64.dll"
+        },
+        {
+          "step": 2,
+          "tool": "data_list_strings",
+          "params": {
+            "limit": 500
+          },
+          "purpose": "Extract all strings for protocol analysis"
+        },
+        {
+          "step": 3,
+          "tool": "functions_list",
+          "params": {
+            "limit": 200
+          },
+          "purpose": "Get complete function list"
+        },
+        {
+          "step": 4,
+          "tool": "data_list_strings",
+          "params": {
+            "filter": "force",
+            "limit": 100
+          },
+          "purpose": "Find force_feedback strings containing 'force'"
+        },
+        {
+          "step": 5,
+          "tool": "data_list_strings",
+          "params": {
+            "filter": "feedback",
+            "limit": 100
+          },
+          "purpose": "Find force_feedback strings containing 'feedback'"
+        },
+        {
+          "step": 6,
+          "tool": "data_list_strings",
+          "params": {
+            "filter": "ffb",
+            "limit": 100
+          },
+          "purpose": "Find force_feedback strings containing 'ffb'"
+        },
+        {
+          "step": 7,
+          "tool": "data_list_strings",
+          "params": {
+            "filter": "hid",
+            "limit": 100
+          },
+          "purpose": "Find hid_communication strings containing 'hid'"
+        },
+        {
+          "step": 8,
+          "tool": "data_list_strings",
+          "params": {
+            "filter": "feature",
+            "limit": 100
+          },
+          "purpose": "Find hid_communication strings containing 'feature'"
+        },
+        {
+          "step": 9,
+          "tool": "data_list_strings",
+          "params": {
+            "filter": "report",
+            "limit": 100
+          },
+          "purpose": "Find hid_communication strings containing 'report'"
+        },
+        {
+          "step": 10,
+          "tool": "data_list_strings",
+          "params": {
+            "filter": "device",
+            "limit": 100
+          },
+          "purpose": "Find device_management strings containing 'device'"
+        },
+        {
+          "step": 11,
+          "tool": "data_list_strings",
+          "params": {
+            "filter": "enum",
+            "limit": 100
+          },
+          "purpose": "Find device_management strings containing 'enum'"
+        },
+        {
+          "step": 12,
+          "tool": "data_list_strings",
+          "params": {
+            "filter": "open",
+            "limit": 100
+          },
+          "purpose": "Find device_management strings containing 'open'"
+        },
+        {
+          "step": 13,
+          "tool": "data_list_strings",
+          "params": {
+            "filter": "tm_api",
+            "limit": 100
+          },
+          "purpose": "Find api_functions strings containing 'tm_api'"
+        },
+        {
+          "step": 14,
+          "tool": "data_list_strings",
+          "params": {
+            "filter": "api",
+            "limit": 100
+          },
+          "purpose": "Find api_functions strings containing 'api'"
+        },
+        {
+          "step": 15,
+          "tool": "data_list_strings",
+          "params": {
+            "filter": "export",
+            "limit": 100
+          },
+          "purpose": "Find api_functions strings containing 'export'"
+        },
+        {
+          "step": 16,
+          "tool": "data_list_strings",
+          "params": {
+            "filter": "struct",
+            "limit": 100
+          },
+          "purpose": "Find data_structures strings containing 'struct'"
+        },
+        {
+          "step": 17,
+          "tool": "data_list_strings",
+          "params": {
+            "filter": "typedef",
+            "limit": 100
+          },
+          "purpose": "Find data_structures strings containing 'typedef'"
+        },
+        {
+          "step": 18,
+          "tool": "data_list_strings",
+          "params": {
+            "filter": "size",
+            "limit": 100
+          },
+          "purpose": "Find data_structures strings containing 'size'"
+        },
+        {
+          "step": 19,
+          "tool": "functions_decompile",
+          "params": {
+            "address": "TBD_FROM_ANALYSIS"
+          },
+          "purpose": "Decompile main force feedback function"
+        },
+        {
+          "step": 20,
+          "tool": "functions_decompile",
+          "params": {
+            "address": "TBD_FROM_ANALYSIS"
+          },
+          "purpose": "Decompile HID communication function"
+        },
+        {
+          "step": 21,
+          "tool": "functions_decompile",
+          "params": {
+            "address": "TBD_FROM_ANALYSIS"
+          },
+          "purpose": "Decompile device initialization function"
+        },
+        {
+          "step": 22,
+          "tool": "xrefs_list",
+          "params": {
+            "to_addr": "TBD_HID_STRING_ADDR",
+            "limit": 50
+          },
+          "purpose": "Find all functions using HID APIs"
+        }
+      ],
+      "analysis_depth": "deep",
+      "expected_findings": {
+        "protocols": [
+          "tm_api functions",
+          "Configuration storage",
+          "Device enumeration"
+        ],
+        "structures": [
+          "Device info",
+          "Effect configs",
+          "Registry data"
+        ],
+        "functions": [
+          "tm_api_*",
+          "Registry access",
+          "UI callbacks",
+          "Device control"
+        ]
+      },
+      "linux_relevance": {
+        "kernel_driver": "Device capability reporting",
+        "userspace": "Configuration management",
+        "wine": "Registry setting translation"
+      }
+    },
+    "tm_api_lib_x64.dll": {
+      "program": "tm_api_lib_x64.dll",
+      "port": 8200,
+      "priority": 2,
+      "critical": true,
+      "description": "Public API Library",
+      "mcp_calls": [
+        {
+          "step": 1,
+          "tool": "instances_use",
+          "params": {
+            "port": 8200
+          },
+          "purpose": "Switch to tm_api_lib_x64.dll"
+        },
+        {
+          "step": 2,
+          "tool": "data_list_strings",
+          "params": {
+            "limit": 500
+          },
+          "purpose": "Extract all strings for protocol analysis"
+        },
+        {
+          "step": 3,
+          "tool": "functions_list",
+          "params": {
+            "limit": 200
+          },
+          "purpose": "Get complete function list"
+        },
+        {
+          "step": 4,
+          "tool": "data_list_strings",
+          "params": {
+            "filter": "force",
+            "limit": 100
+          },
+          "purpose": "Find force_feedback strings containing 'force'"
+        },
+        {
+          "step": 5,
+          "tool": "data_list_strings",
+          "params": {
+            "filter": "feedback",
+            "limit": 100
+          },
+          "purpose": "Find force_feedback strings containing 'feedback'"
+        },
+        {
+          "step": 6,
+          "tool": "data_list_strings",
+          "params": {
+            "filter": "ffb",
+            "limit": 100
+          },
+          "purpose": "Find force_feedback strings containing 'ffb'"
+        },
+        {
+          "step": 7,
+          "tool": "data_list_strings",
+          "params": {
+            "filter": "hid",
+            "limit": 100
+          },
+          "purpose": "Find hid_communication strings containing 'hid'"
+        },
+        {
+          "step": 8,
+          "tool": "data_list_strings",
+          "params": {
+            "filter": "feature",
+            "limit": 100
+          },
+          "purpose": "Find hid_communication strings containing 'feature'"
+        },
+        {
+          "step": 9,
+          "tool": "data_list_strings",
+          "params": {
+            "filter": "report",
+            "limit": 100
+          },
+          "purpose": "Find hid_communication strings containing 'report'"
+        },
+        {
+          "step": 10,
+          "tool": "data_list_strings",
+          "params": {
+            "filter": "device",
+            "limit": 100
+          },
+          "purpose": "Find device_management strings containing 'device'"
+        },
+        {
+          "step": 11,
+          "tool": "data_list_strings",
+          "params": {
+            "filter": "enum",
+            "limit": 100
+          },
+          "purpose": "Find device_management strings containing 'enum'"
+        },
+        {
+          "step": 12,
+          "tool": "data_list_strings",
+          "params": {
+            "filter": "open",
+            "limit": 100
+          },
+          "purpose": "Find device_management strings containing 'open'"
+        },
+        {
+          "step": 13,
+          "tool": "data_list_strings",
+          "params": {
+            "filter": "tm_api",
+            "limit": 100
+          },
+          "purpose": "Find api_functions strings containing 'tm_api'"
+        },
+        {
+          "step": 14,
+          "tool": "data_list_strings",
+          "params": {
+            "filter": "api",
+            "limit": 100
+          },
+          "purpose": "Find api_functions strings containing 'api'"
+        },
+        {
+          "step": 15,
+          "tool": "data_list_strings",
+          "params": {
+            "filter": "export",
+            "limit": 100
+          },
+          "purpose": "Find api_functions strings containing 'export'"
+        },
+        {
+          "step": 16,
+          "tool": "data_list_strings",
+          "params": {
+            "filter": "struct",
+            "limit": 100
+          },
+          "purpose": "Find data_structures strings containing 'struct'"
+        },
+        {
+          "step": 17,
+          "tool": "data_list_strings",
+          "params": {
+            "filter": "typedef",
+            "limit": 100
+          },
+          "purpose": "Find data_structures strings containing 'typedef'"
+        },
+        {
+          "step": 18,
+          "tool": "data_list_strings",
+          "params": {
+            "filter": "size",
+            "limit": 100
+          },
+          "purpose": "Find data_structures strings containing 'size'"
+        },
+        {
+          "step": 19,
+          "tool": "functions_decompile",
+          "params": {
+            "address": "TBD_FROM_ANALYSIS"
+          },
+          "purpose": "Decompile main force feedback function"
+        },
+        {
+          "step": 20,
+          "tool": "functions_decompile",
+          "params": {
+            "address": "TBD_FROM_ANALYSIS"
+          },
+          "purpose": "Decompile HID communication function"
+        },
+        {
+          "step": 21,
+          "tool": "functions_decompile",
+          "params": {
+            "address": "TBD_FROM_ANALYSIS"
+          },
+          "purpose": "Decompile device initialization function"
+        },
+        {
+          "step": 22,
+          "tool": "xrefs_list",
+          "params": {
+            "to_addr": "TBD_HID_STRING_ADDR",
+            "limit": 50
+          },
+          "purpose": "Find all functions using HID APIs"
+        }
+      ],
+      "analysis_depth": "deep",
+      "expected_findings": {
+        "protocols": [
+          "Public API",
+          "DirectInput bridge",
+          "Application interface"
+        ],
+        "structures": [
+          "API parameters",
+          "Device handles",
+          "Effect descriptors"
+        ],
+        "functions": [
+          "Export functions",
+          "SetupAPI calls",
+          "Device enumeration",
+          "DirectInput"
+        ]
+      },
+      "linux_relevance": {
+        "kernel_driver": "Device detection support",
+        "userspace": "Public API interface",
+        "wine": "Primary DLL wrapper target"
+      }
+    },
+    "tmJoycpl.exe": {
+      "program": "tmJoycpl.exe",
+      "port": 8199,
+      "priority": 3,
+      "critical": false,
+      "description": "Joystick Control Panel",
+      "mcp_calls": [
+        {
+          "step": 1,
+          "tool": "instances_use",
+          "params": {
+            "port": 8199
+          },
+          "purpose": "Switch to tmJoycpl.exe"
+        },
+        {
+          "step": 2,
+          "tool": "data_list_strings",
+          "params": {
+            "limit": 500
+          },
+          "purpose": "Extract all strings for protocol analysis"
+        },
+        {
+          "step": 3,
+          "tool": "functions_list",
+          "params": {
+            "limit": 200
+          },
+          "purpose": "Get complete function list"
+        }
+      ],
+      "analysis_depth": "medium",
+      "expected_findings": {
+        "general": "Device support functions"
+      },
+      "linux_relevance": {
+        "general": "Supporting functionality"
+      }
+    },
+    "GuiHidUsbDevLowerFFB.sys": {
+      "program": "GuiHidUsbDevLowerFFB.sys",
+      "port": 8196,
+      "priority": 4,
+      "critical": false,
+      "description": "Low-level USB HID FFB Driver",
+      "mcp_calls": [
+        {
+          "step": 1,
+          "tool": "instances_use",
+          "params": {
+            "port": 8196
+          },
+          "purpose": "Switch to GuiHidUsbDevLowerFFB.sys"
+        },
+        {
+          "step": 2,
+          "tool": "data_list_strings",
+          "params": {
+            "limit": 500
+          },
+          "purpose": "Extract all strings for protocol analysis"
+        },
+        {
+          "step": 3,
+          "tool": "functions_list",
+          "params": {
+            "limit": 200
+          },
+          "purpose": "Get complete function list"
+        }
+      ],
+      "analysis_depth": "medium",
+      "expected_findings": {
+        "general": "Device support functions"
+      },
+      "linux_relevance": {
+        "general": "Supporting functionality"
+      }
+    },
+    "tmHidUsb.sys": {
+      "program": "tmHidUsb.sys",
+      "port": 8194,
+      "priority": 4,
+      "critical": false,
+      "description": "Main USB HID Driver",
+      "mcp_calls": [
+        {
+          "step": 1,
+          "tool": "instances_use",
+          "params": {
+            "port": 8194
+          },
+          "purpose": "Switch to tmHidUsb.sys"
+        },
+        {
+          "step": 2,
+          "tool": "data_list_strings",
+          "params": {
+            "limit": 500
+          },
+          "purpose": "Extract all strings for protocol analysis"
+        },
+        {
+          "step": 3,
+          "tool": "functions_list",
+          "params": {
+            "limit": 200
+          },
+          "purpose": "Get complete function list"
+        }
+      ],
+      "analysis_depth": "medium",
+      "expected_findings": {
+        "general": "Device support functions"
+      },
+      "linux_relevance": {
+        "general": "Supporting functionality"
+      }
+    },
+    "tmResetMin.sys": {
+      "program": "tmResetMin.sys",
+      "port": 8197,
+      "priority": 5,
+      "critical": false,
+      "description": "Device Reset Driver",
+      "mcp_calls": [
+        {
+          "step": 1,
+          "tool": "instances_use",
+          "params": {
+            "port": 8197
+          },
+          "purpose": "Switch to tmResetMin.sys"
+        },
+        {
+          "step": 2,
+          "tool": "data_list_strings",
+          "params": {
+            "limit": 500
+          },
+          "purpose": "Extract all strings for protocol analysis"
+        },
+        {
+          "step": 3,
+          "tool": "functions_list",
+          "params": {
+            "limit": 200
+          },
+          "purpose": "Get complete function list"
+        }
+      ],
+      "analysis_depth": "medium",
+      "expected_findings": {
+        "general": "Device support functions"
+      },
+      "linux_relevance": {
+        "general": "Supporting functionality"
+      }
+    },
+    "tmInstall.exe": {
+      "program": "tmInstall.exe",
+      "port": 8198,
+      "priority": 5,
+      "critical": false,
+      "description": "Installation Program",
+      "mcp_calls": [
+        {
+          "step": 1,
+          "tool": "instances_use",
+          "params": {
+            "port": 8198
+          },
+          "purpose": "Switch to tmInstall.exe"
+        },
+        {
+          "step": 2,
+          "tool": "data_list_strings",
+          "params": {
+            "limit": 500
+          },
+          "purpose": "Extract all strings for protocol analysis"
+        },
+        {
+          "step": 3,
+          "tool": "functions_list",
+          "params": {
+            "limit": 200
+          },
+          "purpose": "Get complete function list"
+        }
+      ],
+      "analysis_depth": "medium",
+      "expected_findings": {
+        "general": "Device support functions"
+      },
+      "linux_relevance": {
+        "general": "Supporting functionality"
+      }
+    }
+  },
+  "analysis_sequence": [
+    "tmPID64.DLL",
+    "tmeffcpl64.dll",
+    "tm_api_lib_x64.dll",
+    "tmJoycpl.exe",
+    "GuiHidUsbDevLowerFFB.sys",
+    "tmHidUsb.sys",
+    "tmResetMin.sys",
+    "tmInstall.exe"
+  ]
+}

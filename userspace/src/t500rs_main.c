@@ -21,6 +21,7 @@
 #include "../include/t500rs_input.h"
 #include "../include/t500rs_effects.h"
 #include "../include/t500rs_force.h"
+#include "../include/t500rs_bridge.h"
 
 /* ============================================================================
  * Global State
@@ -105,6 +106,9 @@ static void cleanup(void)
 
     /* Close USB device */
     usb_device_close();
+    
+    /* Cleanup Wine bridge */
+    bridge_cleanup();
 
     LOG_INFO("Cleanup complete");
 }
@@ -217,6 +221,9 @@ static void process_uinput_events(void)
     ssize_t n;
 
     while (running) {
+        /* Poll bridge for incoming messages */
+        bridge_process_messages();
+        
         n = read(uinput_fd, &ev, sizeof(ev));
         if (n < 0) {
             if (errno == EAGAIN || errno == EINTR) {
@@ -419,6 +426,9 @@ int main(int argc, char **argv)
         cleanup();
         return 1;
     }
+    
+    /* Initialize Wine bridge (optional, non-fatal if it fails) */
+    bridge_init();
 
     /* Main event loop */
     process_uinput_events();

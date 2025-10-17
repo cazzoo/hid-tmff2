@@ -20,6 +20,7 @@
 #include <linux/uinput.h>
 #include "../include/t500rs_input.h"
 #include "../include/t500rs_common.h"
+#include "../include/t500rs_bridge.h"
 
 /* USB endpoints */
 #define EP_IN   0x82
@@ -354,6 +355,11 @@ static void *input_reading_thread_func(void *arg)
 
         /* Process input report */
         input_process_report(buf, transferred);
+        
+        /* Forward to Wine bridge if connected */
+        if (bridge_is_connected()) {
+            bridge_send_input(buf, transferred);
+        }
     }
 
     LOG_INFO("Input reading thread stopped");

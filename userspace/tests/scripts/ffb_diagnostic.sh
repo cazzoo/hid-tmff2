@@ -3,19 +3,28 @@
 echo "=== T500RS FFB Diagnostic ==="
 echo ""
 
-# 1. Find T500RS device (works even without by-id symlinks)
-echo "1. Finding T500RS Device:"
-T500_DEVICE=""
-T500_NAME=""
+# 1. Find ALL T500RS-related devices
+echo "1. Finding T500RS Devices:"
+echo ""
+HARDWARE_DEVICE=""
+UINPUT_DEVICE=""
+
 for dev in /dev/input/event*; do 
     name=$(cat "/sys/class/input/$(basename $dev)/device/name" 2>/dev/null)
     if echo "$name" | grep -qi "t500\|thrust"; then
-        echo "   ✅ Found: $dev"
-        echo "      Name: $name"
-        T500_DEVICE="$dev"
-        T500_NAME="$name"
+        # Check if it's hardware or uinput
+        if echo "$name" | grep -qi "force feedback wheel"; then
+            echo "   📱 UINPUT Device (created by driver):"
+            UINPUT_DEVICE="$dev"
+        else
+            echo "   🔌 HARDWARE Device (real T500RS):"
+            HARDWARE_DEVICE="$dev"
+        fi
         
-        # Check if it has FF capabilities
+        echo "      Path: $dev"
+        echo "      Name: $name"
+        
+        # Check FF capabilities
         FF_CAP=$(cat "/sys/class/input/$(basename $dev)/device/capabilities/ff" 2>/dev/null)
         if [ -n "$FF_CAP" ] && [ "$FF_CAP" \!= "0" ]; then
             echo "      ✅ Has FF capabilities: 0x$FF_CAP"
@@ -27,26 +36,24 @@ for dev in /dev/input/event*; do
         BY_ID=$(ls -la /dev/input/by-id/ 2>/dev/null | grep "$(basename $dev)" | awk '{print $9}')
         if [ -n "$BY_ID" ]; then
             echo "      by-id: $BY_ID"
-        else
-            echo "      ⚠️  No by-id symlink (this is OK)"
         fi
+        echo ""
     fi
 done
 
-if [ -z "$T500_DEVICE" ]; then
-    echo "   ❌ T500RS device NOT found\!"
+if [ -z "$HARDWARE_DEVICE" ] && [ -z "$UINPUT_DEVICE" ]; then
+    echo "   ❌ No T500RS devices found\!"
     echo ""
     echo "   Checking USB connection:"
     if lsusb | grep -qi "044f.*thrustmaster\|044f.*b65e"; then
         echo "   ✅ T500RS detected on USB"
-        echo "   ❌ But no input device found - driver may not be running"
+        echo "   ❌ But no input devices found - driver may not be running"
     else
         echo "   ❌ T500RS NOT detected on USB"
         echo "      Check USB cable and power"
     fi
     exit 1
 fi
-echo ""
 
 # 2. Check driver is running
 echo "2. Driver Status:"
@@ -54,12 +61,12 @@ if pgrep -f t500rs-ffb > /dev/null; then
     DRIVER_PID=$(pgrep -f t500rs-ffb)
     echo "   ✅ Driver is running (PID: $DRIVER_PID)"
     
-    # Check which device driver is using
+    # Check which devices driver is using
     if [ -n "$DRIVER_PID" ]; then
-        DRIVER_FDS=$(ls -la /proc/$DRIVER_PID/fd 2>/dev/null | grep "/dev/input/event" | awk '{print $NF}')
-        if [ -n "$DRIVER_FDS" ]; then
-            echo "      Driver using: $DRIVER_FDS"
-        fi
+        echo "   Driver file descriptors:"
+        ls -la /proc/$DRIVER_PID/fd 2>/dev/null | grep "/dev/input/event" | while read line; do
+            echo "      $line"
+        done
     fi
 else
     echo "   ❌ Driver is NOT running"
@@ -67,107 +74,108 @@ else
 fi
 echo ""
 
-# 3. Check device permissions
-echo "3. Device Permissions:"
-ls -la "$T500_DEVICE"
-OWNER=$(stat -c '%U' "$T500_DEVICE" 2>/dev/null)
-GROUP=$(stat -c '%G' "$T500_DEVICE" 2>/dev/null)
-echo "   Owner: $OWNER, Group: $GROUP"
-if [ "$GROUP" = "input" ]; then
-    echo "   ✅ Device in 'input' group (good for udev rules)"
-fi
+# 3. Explain the two devices
+echo "3. Device Explanation:"
 echo ""
+if [ -n "$HARDWARE_DEVICE" ]; then
+    echo "   🔌 HARDWARE Device: $HARDWARE_DEVICE"
+    echo "      This is the REAL T500RS hardware"
+    echo "      Used by: Driver (reads input, sends FF to wheel)"
+    echo "      Games should NOT use this directly"
+    echo ""
+fi
+
+if [ -n "$UINPUT_DEVICE" ]; then
+    echo "   📱 UINPUT Device: $UINPUT_DEVICE"
+    echo "      This is the VIRTUAL device created by driver"
+    echo "      Used by: Games (send FF commands here)"
+    echo "      Driver forwards FF to hardware device"
+    echo ""
+else
+    echo "   ❌ UINPUT device NOT found\!"
+    echo "      Driver may not be running or failed to create device"
+    echo ""
+fi
 
 # 4. Check FFB capabilities in detail
-echo "4. FFB Capabilities:"
-if command -v evtest >/dev/null 2>&1; then
-    echo "   Testing with evtest..."
-    
-    # Test specific FF types
-    for ff_type in FF_CONSTANT FF_PERIODIC FF_SPRING FF_DAMPER; do
-        if timeout 1 sudo evtest "$T500_DEVICE" --query EV_FF $ff_type 2>/dev/null | grep -q "supported"; then
-            echo "   ✅ $ff_type supported"
-        else
-            echo "   ❌ $ff_type NOT supported"
-        fi
-    done
-else
-    echo "   ⚠️  evtest not installed (optional)"
-    echo "      Install with: sudo apt-get install evtest"
-fi
+echo "4. FFB Capabilities Check:"
 echo ""
 
-# 5. Check for active effects
-echo "5. Active Effects:"
-EFFECTS_DIR="/sys/class/input/$(basename $T500_DEVICE)/device"
-if [ -d "$EFFECTS_DIR" ]; then
-    # Count effect slots
-    EFFECT_COUNT=$(ls -1 "$EFFECTS_DIR" 2>/dev/null | grep -c "^effect" || echo "0")
-    echo "   Effect slots available: $EFFECT_COUNT"
-fi
-echo ""
-
-# 6. Check Wine/Proton (if applicable)
-if [ -n "$WINEPREFIX" ]; then
-    echo "6. Wine/Proton Status:"
-    echo "   WINEPREFIX: $WINEPREFIX"
-    if [ -d "$WINEPREFIX/drive_c/windows/system32" ]; then
-        echo "   ✅ Wine prefix exists"
-        
-        # Check for Thrustmaster drivers
-        if [ -d "$WINEPREFIX/drive_c/Program Files/Thrustmaster" ] || \
-           [ -d "$WINEPREFIX/drive_c/Program Files (x86)/Thrustmaster" ]; then
-            echo "   ✅ Thrustmaster drivers installed in prefix"
-        else
-            echo "   ⚠️  Thrustmaster drivers NOT found in prefix"
-            echo "      Install with: ./tools/install_windows_drivers.sh"
-        fi
+if [ -n "$UINPUT_DEVICE" ]; then
+    echo "   Testing UINPUT device (what games use):"
+    if command -v evtest >/dev/null 2>&1; then
+        for ff_type in FF_CONSTANT FF_PERIODIC FF_SPRING FF_DAMPER; do
+            if timeout 1 sudo evtest "$UINPUT_DEVICE" --query EV_FF $ff_type 2>/dev/null | grep -q "supported"; then
+                echo "      ✅ $ff_type supported"
+            else
+                echo "      ❌ $ff_type NOT supported"
+            fi
+        done
     else
-        echo "   ❌ Wine prefix NOT found"
+        echo "      ⚠️  evtest not installed"
     fi
     echo ""
 fi
 
-# 7. Summary and recommendations
+if [ -n "$HARDWARE_DEVICE" ]; then
+    echo "   Testing HARDWARE device (for reference):"
+    if command -v evtest >/dev/null 2>&1; then
+        for ff_type in FF_CONSTANT FF_PERIODIC FF_SPRING FF_DAMPER; do
+            if timeout 1 sudo evtest "$HARDWARE_DEVICE" --query EV_FF $ff_type 2>/dev/null | grep -q "supported"; then
+                echo "      ✅ $ff_type supported"
+            else
+                echo "      ❌ $ff_type NOT supported"
+            fi
+        done
+    fi
+    echo ""
+fi
+
+# 5. Summary and recommendations
 echo "=== Summary ==="
 echo ""
 
-if [ -z "$T500_DEVICE" ]; then
-    echo "❌ CRITICAL: T500RS device not found"
-    echo "   1. Check USB connection"
-    echo "   2. Check device is powered on"
-    echo "   3. Run: lsusb | grep -i thrust"
-elif \! pgrep -f t500rs-ffb > /dev/null; then
-    echo "❌ CRITICAL: Driver not running"
+if [ -z "$HARDWARE_DEVICE" ]; then
+    echo "❌ CRITICAL: Hardware device not found"
+    echo "   Check USB connection and power"
+elif [ -z "$UINPUT_DEVICE" ]; then
+    echo "❌ CRITICAL: Uinput device not found"
+    echo "   Driver not running or failed to create virtual device"
     echo "   Start driver: sudo ~/Documents/hid-tmff2/userspace/t500rs-ffb-modular"
 else
-    echo "✅ Device found: $T500_DEVICE"
-    echo "✅ Driver running"
+    echo "✅ Hardware device: $HARDWARE_DEVICE"
+    echo "✅ Uinput device: $UINPUT_DEVICE"
     echo ""
-    echo "Ready to test\!"
+    echo "🎮 IMPORTANT: Games should use the UINPUT device\!"
+    echo "   Wine/Proton games should see: $UINPUT_DEVICE"
+    echo "   NOT the hardware device: $HARDWARE_DEVICE"
 fi
 
 echo ""
 echo "=== Testing Commands ==="
 echo ""
-echo "1. Test FFB manually:"
+echo "1. Test driver works (using uinput device):"
 echo "   cd ~/Documents/hid-tmff2/userspace/tests"
 echo "   make"
-echo "   sudo ./c/test_all_effects"
+if [ -n "$UINPUT_DEVICE" ]; then
+    echo "   sudo fftest $UINPUT_DEVICE"
+fi
 echo ""
-echo "2. Monitor FFB events from game:"
-echo "   sudo evtest $T500_DEVICE | grep -E 'EV_FF|UPLOAD|GAIN'"
+echo "2. Monitor game FFB events:"
+if [ -n "$UINPUT_DEVICE" ]; then
+    echo "   sudo evtest $UINPUT_DEVICE | grep -E 'EV_FF|UPLOAD|GAIN'"
+fi
 echo ""
-echo "3. Interactive event monitor:"
-echo "   sudo evtest $T500_DEVICE"
-echo ""
-echo "4. Use fftest (if installed):"
-echo "   sudo fftest $T500_DEVICE"
+echo "3. Test hardware directly (bypass driver):"
+if [ -n "$HARDWARE_DEVICE" ]; then
+    echo "   sudo fftest $HARDWARE_DEVICE"
+fi
 echo ""
 
-# Export device for other scripts
-if [ -n "$T500_DEVICE" ]; then
+# Export devices for other scripts
+if [ -n "$UINPUT_DEVICE" ]; then
     echo "=== Environment ==="
-    echo "export T500_DEVICE=$T500_DEVICE"
+    echo "export T500_UINPUT=$UINPUT_DEVICE"
+    [ -n "$HARDWARE_DEVICE" ] && echo "export T500_HARDWARE=$HARDWARE_DEVICE"
     echo ""
 fi

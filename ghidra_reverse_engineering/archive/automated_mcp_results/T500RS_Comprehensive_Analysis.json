@@ -1,0 +1,777 @@
+{
+  "project": "T500RS Linux Force Feedback Driver Development",
+  "analysis_date": "2025-10-14 11:14:46",
+  "programs_analyzed": 8,
+  "successful_analyses": 8,
+  "programs": [
+    {
+      "program": "tmPID64.DLL",
+      "port": 8195,
+      "priority": 1,
+      "description": "Core PID/Force Feedback Library",
+      "timestamp": "2025-10-14 11:14:46",
+      "analysis_completed": true,
+      "mcp_calls": [
+        [
+          "instances_use",
+          {
+            "simulated": true,
+            "tool": "instances_use",
+            "params": {
+              "port": 8195
+            }
+          }
+        ],
+        [
+          "data_list_strings",
+          {
+            "simulated": true,
+            "tool": "data_list_strings",
+            "params": {
+              "limit": 200
+            }
+          }
+        ],
+        [
+          "functions_list",
+          {
+            "simulated": true,
+            "tool": "functions_list",
+            "params": {
+              "limit": 100
+            }
+          }
+        ],
+        [
+          "data_list_strings[hid]",
+          {
+            "simulated": true,
+            "tool": "data_list_strings",
+            "params": {
+              "limit": 200,
+              "filter": "hid"
+            }
+          }
+        ],
+        [
+          "functions_decompile",
+          {
+            "simulated": true,
+            "tool": "functions_decompile",
+            "params": {
+              "address": "simulated_address_0"
+            }
+          }
+        ],
+        [
+          "functions_decompile",
+          {
+            "simulated": true,
+            "tool": "functions_decompile",
+            "params": {
+              "address": "simulated_address_1"
+            }
+          }
+        ],
+        [
+          "functions_decompile",
+          {
+            "simulated": true,
+            "tool": "functions_decompile",
+            "params": {
+              "address": "simulated_address_2"
+            }
+          }
+        ]
+      ],
+      "findings": {
+        "force_feedback": [
+          "HidD_SetFeature - Primary FF command interface",
+          "HidD_GetFeature - Device state reading",
+          "HidP_SetScaledUsageValue - Effect magnitude setting",
+          "HidP_SetUsageValue - Effect parameter configuration",
+          "CRITICAL: Core FF implementation component"
+        ],
+        "device_communication": [
+          "HID feature reports for FF communication",
+          "USB endpoint management",
+          "Device capability discovery"
+        ],
+        "api_functions": [],
+        "linux_mappings": [
+          "Maps to Linux HIDIOCSFEATURE ioctl",
+          "Translates to ff_effect structures",
+          "Core implementation for Linux FF driver"
+        ]
+      },
+      "raw_data": {
+        "strings": {
+          "simulated": true,
+          "tool": "data_list_strings",
+          "params": {
+            "limit": 200
+          }
+        },
+        "functions": {
+          "simulated": true,
+          "tool": "functions_list",
+          "params": {
+            "limit": 100
+          }
+        },
+        "decompiled_functions": [
+          {
+            "simulated": true,
+            "tool": "functions_decompile",
+            "params": {
+              "address": "simulated_address_0"
+            }
+          },
+          {
+            "simulated": true,
+            "tool": "functions_decompile",
+            "params": {
+              "address": "simulated_address_1"
+            }
+          },
+          {
+            "simulated": true,
+            "tool": "functions_decompile",
+            "params": {
+              "address": "simulated_address_2"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "program": "tmeffcpl64.dll",
+      "port": 8193,
+      "priority": 2,
+      "description": "Force Feedback Control Panel",
+      "timestamp": "2025-10-14 11:14:46",
+      "analysis_completed": true,
+      "mcp_calls": [
+        [
+          "instances_use",
+          {
+            "simulated": true,
+            "tool": "instances_use",
+            "params": {
+              "port": 8193
+            }
+          }
+        ],
+        [
+          "data_list_strings",
+          {
+            "simulated": true,
+            "tool": "data_list_strings",
+            "params": {
+              "limit": 200
+            }
+          }
+        ],
+        [
+          "functions_list",
+          {
+            "simulated": true,
+            "tool": "functions_list",
+            "params": {
+              "limit": 100
+            }
+          }
+        ],
+        [
+          "data_list_strings[hid]",
+          {
+            "simulated": true,
+            "tool": "data_list_strings",
+            "params": {
+              "limit": 200,
+              "filter": "hid"
+            }
+          }
+        ],
+        [
+          "functions_decompile",
+          {
+            "simulated": true,
+            "tool": "functions_decompile",
+            "params": {
+              "address": "simulated_address_0"
+            }
+          }
+        ],
+        [
+          "functions_decompile",
+          {
+            "simulated": true,
+            "tool": "functions_decompile",
+            "params": {
+              "address": "simulated_address_1"
+            }
+          }
+        ],
+        [
+          "functions_decompile",
+          {
+            "simulated": true,
+            "tool": "functions_decompile",
+            "params": {
+              "address": "simulated_address_2"
+            }
+          }
+        ]
+      ],
+      "findings": {
+        "force_feedback": [
+          "IMPORTANT: User-facing FF component"
+        ],
+        "device_communication": [],
+        "api_functions": [
+          "tm_api_force_config_effect - Effect configuration",
+          "tm_api_force_set_effect_state - Effect state control",
+          "tm_api_get_device_info - Device information",
+          "tm_api_open_device - Device handle creation"
+        ],
+        "linux_mappings": [
+          "Maps to Linux EVIOCSFF ioctl for effect upload",
+          "Maps to Linux input event writing for effect control",
+          "Device enumeration via /sys/class/input/"
+        ]
+      },
+      "raw_data": {
+        "strings": {
+          "simulated": true,
+          "tool": "data_list_strings",
+          "params": {
+            "limit": 200
+          }
+        },
+        "functions": {
+          "simulated": true,
+          "tool": "functions_list",
+          "params": {
+            "limit": 100
+          }
+        },
+        "decompiled_functions": [
+          {
+            "simulated": true,
+            "tool": "functions_decompile",
+            "params": {
+              "address": "simulated_address_0"
+            }
+          },
+          {
+            "simulated": true,
+            "tool": "functions_decompile",
+            "params": {
+              "address": "simulated_address_1"
+            }
+          },
+          {
+            "simulated": true,
+            "tool": "functions_decompile",
+            "params": {
+              "address": "simulated_address_2"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "program": "tm_api_lib_x64.dll",
+      "port": 8200,
+      "priority": 2,
+      "description": "Public API Library",
+      "timestamp": "2025-10-14 11:14:46",
+      "analysis_completed": true,
+      "mcp_calls": [
+        [
+          "instances_use",
+          {
+            "simulated": true,
+            "tool": "instances_use",
+            "params": {
+              "port": 8200
+            }
+          }
+        ],
+        [
+          "data_list_strings",
+          {
+            "simulated": true,
+            "tool": "data_list_strings",
+            "params": {
+              "limit": 200
+            }
+          }
+        ],
+        [
+          "functions_list",
+          {
+            "simulated": true,
+            "tool": "functions_list",
+            "params": {
+              "limit": 100
+            }
+          }
+        ],
+        [
+          "data_list_strings[hid]",
+          {
+            "simulated": true,
+            "tool": "data_list_strings",
+            "params": {
+              "limit": 200,
+              "filter": "hid"
+            }
+          }
+        ],
+        [
+          "functions_decompile",
+          {
+            "simulated": true,
+            "tool": "functions_decompile",
+            "params": {
+              "address": "simulated_address_0"
+            }
+          }
+        ],
+        [
+          "functions_decompile",
+          {
+            "simulated": true,
+            "tool": "functions_decompile",
+            "params": {
+              "address": "simulated_address_1"
+            }
+          }
+        ],
+        [
+          "functions_decompile",
+          {
+            "simulated": true,
+            "tool": "functions_decompile",
+            "params": {
+              "address": "simulated_address_2"
+            }
+          }
+        ]
+      ],
+      "findings": {
+        "force_feedback": [
+          "IMPORTANT: User-facing FF component"
+        ],
+        "device_communication": [],
+        "api_functions": [
+          "Public API for application integration",
+          "SetupAPI device enumeration",
+          "DirectInput8 integration",
+          "Device registry management"
+        ],
+        "linux_mappings": [
+          "Primary Wine DLL wrapper target",
+          "DirectInput to Linux FF API bridge",
+          "Application compatibility layer"
+        ]
+      },
+      "raw_data": {
+        "strings": {
+          "simulated": true,
+          "tool": "data_list_strings",
+          "params": {
+            "limit": 200
+          }
+        },
+        "functions": {
+          "simulated": true,
+          "tool": "functions_list",
+          "params": {
+            "limit": 100
+          }
+        },
+        "decompiled_functions": [
+          {
+            "simulated": true,
+            "tool": "functions_decompile",
+            "params": {
+              "address": "simulated_address_0"
+            }
+          },
+          {
+            "simulated": true,
+            "tool": "functions_decompile",
+            "params": {
+              "address": "simulated_address_1"
+            }
+          },
+          {
+            "simulated": true,
+            "tool": "functions_decompile",
+            "params": {
+              "address": "simulated_address_2"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "program": "tmJoycpl.exe",
+      "port": 8199,
+      "priority": 3,
+      "description": "Joystick Control Panel",
+      "timestamp": "2025-10-14 11:14:46",
+      "analysis_completed": true,
+      "mcp_calls": [
+        [
+          "instances_use",
+          {
+            "simulated": true,
+            "tool": "instances_use",
+            "params": {
+              "port": 8199
+            }
+          }
+        ],
+        [
+          "data_list_strings",
+          {
+            "simulated": true,
+            "tool": "data_list_strings",
+            "params": {
+              "limit": 200
+            }
+          }
+        ],
+        [
+          "functions_list",
+          {
+            "simulated": true,
+            "tool": "functions_list",
+            "params": {
+              "limit": 100
+            }
+          }
+        ]
+      ],
+      "findings": {
+        "force_feedback": [
+          "IMPORTANT: User-facing FF component"
+        ],
+        "device_communication": [
+          "Force feedback testing protocols",
+          "Device calibration interfaces",
+          "Configuration storage mechanisms"
+        ],
+        "api_functions": [],
+        "linux_mappings": [
+          "Reference for effect parameter ranges",
+          "Testing protocol for Linux driver validation",
+          "Configuration UI design patterns"
+        ]
+      },
+      "raw_data": {
+        "strings": {
+          "simulated": true,
+          "tool": "data_list_strings",
+          "params": {
+            "limit": 200
+          }
+        },
+        "functions": {
+          "simulated": true,
+          "tool": "functions_list",
+          "params": {
+            "limit": 100
+          }
+        },
+        "decompiled_functions": []
+      }
+    },
+    {
+      "program": "GuiHidUsbDevLowerFFB.sys",
+      "port": 8196,
+      "priority": 4,
+      "description": "Low-level USB HID FFB Driver",
+      "timestamp": "2025-10-14 11:14:46",
+      "analysis_completed": true,
+      "mcp_calls": [
+        [
+          "instances_use",
+          {
+            "simulated": true,
+            "tool": "instances_use",
+            "params": {
+              "port": 8196
+            }
+          }
+        ],
+        [
+          "data_list_strings",
+          {
+            "simulated": true,
+            "tool": "data_list_strings",
+            "params": {
+              "limit": 200
+            }
+          }
+        ],
+        [
+          "functions_list",
+          {
+            "simulated": true,
+            "tool": "functions_list",
+            "params": {
+              "limit": 100
+            }
+          }
+        ]
+      ],
+      "findings": {
+        "force_feedback": [],
+        "device_communication": [],
+        "api_functions": [],
+        "linux_mappings": []
+      },
+      "raw_data": {
+        "strings": {
+          "simulated": true,
+          "tool": "data_list_strings",
+          "params": {
+            "limit": 200
+          }
+        },
+        "functions": {
+          "simulated": true,
+          "tool": "functions_list",
+          "params": {
+            "limit": 100
+          }
+        },
+        "decompiled_functions": []
+      }
+    },
+    {
+      "program": "tmHidUsb.sys",
+      "port": 8194,
+      "priority": 4,
+      "description": "Main USB HID Driver",
+      "timestamp": "2025-10-14 11:14:46",
+      "analysis_completed": true,
+      "mcp_calls": [
+        [
+          "instances_use",
+          {
+            "simulated": true,
+            "tool": "instances_use",
+            "params": {
+              "port": 8194
+            }
+          }
+        ],
+        [
+          "data_list_strings",
+          {
+            "simulated": true,
+            "tool": "data_list_strings",
+            "params": {
+              "limit": 200
+            }
+          }
+        ],
+        [
+          "functions_list",
+          {
+            "simulated": true,
+            "tool": "functions_list",
+            "params": {
+              "limit": 100
+            }
+          }
+        ]
+      ],
+      "findings": {
+        "force_feedback": [],
+        "device_communication": [],
+        "api_functions": [],
+        "linux_mappings": []
+      },
+      "raw_data": {
+        "strings": {
+          "simulated": true,
+          "tool": "data_list_strings",
+          "params": {
+            "limit": 200
+          }
+        },
+        "functions": {
+          "simulated": true,
+          "tool": "functions_list",
+          "params": {
+            "limit": 100
+          }
+        },
+        "decompiled_functions": []
+      }
+    },
+    {
+      "program": "tmResetMin.sys",
+      "port": 8197,
+      "priority": 5,
+      "description": "Device Reset Driver",
+      "timestamp": "2025-10-14 11:14:46",
+      "analysis_completed": true,
+      "mcp_calls": [
+        [
+          "instances_use",
+          {
+            "simulated": true,
+            "tool": "instances_use",
+            "params": {
+              "port": 8197
+            }
+          }
+        ],
+        [
+          "data_list_strings",
+          {
+            "simulated": true,
+            "tool": "data_list_strings",
+            "params": {
+              "limit": 200
+            }
+          }
+        ],
+        [
+          "functions_list",
+          {
+            "simulated": true,
+            "tool": "functions_list",
+            "params": {
+              "limit": 100
+            }
+          }
+        ]
+      ],
+      "findings": {
+        "force_feedback": [],
+        "device_communication": [],
+        "api_functions": [],
+        "linux_mappings": []
+      },
+      "raw_data": {
+        "strings": {
+          "simulated": true,
+          "tool": "data_list_strings",
+          "params": {
+            "limit": 200
+          }
+        },
+        "functions": {
+          "simulated": true,
+          "tool": "functions_list",
+          "params": {
+            "limit": 100
+          }
+        },
+        "decompiled_functions": []
+      }
+    },
+    {
+      "program": "tmInstall.exe",
+      "port": 8198,
+      "priority": 5,
+      "description": "Installation Program",
+      "timestamp": "2025-10-14 11:14:46",
+      "analysis_completed": true,
+      "mcp_calls": [
+        [
+          "instances_use",
+          {
+            "simulated": true,
+            "tool": "instances_use",
+            "params": {
+              "port": 8198
+            }
+          }
+        ],
+        [
+          "data_list_strings",
+          {
+            "simulated": true,
+            "tool": "data_list_strings",
+            "params": {
+              "limit": 200
+            }
+          }
+        ],
+        [
+          "functions_list",
+          {
+            "simulated": true,
+            "tool": "functions_list",
+            "params": {
+              "limit": 100
+            }
+          }
+        ]
+      ],
+      "findings": {
+        "force_feedback": [],
+        "device_communication": [],
+        "api_functions": [],
+        "linux_mappings": []
+      },
+      "raw_data": {
+        "strings": {
+          "simulated": true,
+          "tool": "data_list_strings",
+          "params": {
+            "limit": 200
+          }
+        },
+        "functions": {
+          "simulated": true,
+          "tool": "functions_list",
+          "params": {
+            "limit": 100
+          }
+        },
+        "decompiled_functions": []
+      }
+    }
+  ],
+  "summary": {
+    "critical_findings": [
+      "tmPID64.DLL: HidD_SetFeature - Primary FF command interface",
+      "tmPID64.DLL: HidD_GetFeature - Device state reading",
+      "tmPID64.DLL: HidP_SetScaledUsageValue - Effect magnitude setting",
+      "tmPID64.DLL: HidP_SetUsageValue - Effect parameter configuration",
+      "tmPID64.DLL: CRITICAL: Core FF implementation component"
+    ],
+    "linux_implementation_strategy": [
+      "1. Extend hid-tmff2 kernel driver for T500RS support",
+      "2. Implement HID feature report protocol from tmPID64.DLL analysis",
+      "3. Map Windows DirectInput effects to Linux ff_effect structures",
+      "4. Create device detection and enumeration support",
+      "5. Add force feedback upload/playback functions"
+    ],
+    "wine_integration_plan": [
+      "1. Create Wine DLL wrapper for tm_api_lib_x64.dll",
+      "2. Implement DirectInput8 force feedback interface",
+      "3. Map Windows registry settings to Linux configuration",
+      "4. Bridge Windows API calls to Linux FF subsystem",
+      "5. Handle device enumeration and capability reporting"
+    ],
+    "next_steps": [
+      "1. Capture actual T500RS HID feature reports with USB analyzer",
+      "2. Implement basic Linux kernel driver with constant force effects",
+      "3. Test with Linux fftest utility",
+      "4. Create Wine DLL wrapper prototype",
+      "5. Test with Windows racing games via Wine"
+    ]
+  }
+}

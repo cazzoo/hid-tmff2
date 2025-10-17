@@ -1,0 +1,75 @@
+T500RS WINE/PROTON COMPATIBILITY ISSUE - SUMMARY
+=================================================
+
+Date: 2025-10-14
+Status: ISSUE IDENTIFIED - SOLUTION READY
+
+THE PROBLEM:
+============
+✅ Userspace driver works perfectly in native Linux
+❌ Wine/Proton games CANNOT SEE the device AT ALL
+
+ROOT CAUSE:
+===========
+The userspace driver creates a uinput virtual device, but:
+
+1. Wine looks for REAL USB HID devices (VID:044F PID:B65E)
+2. Userspace driver CLAIMS the real device (libusb_claim_interface)
+3. Wine cannot access the claimed device
+4. uinput devices don't have proper VID:PID for Wine detection
+
+Result: Wine games see NO T500RS device!
+
+SOLUTION: UHID PROXY
+=====================
+Create a UHID device that:
+- Appears as real T500RS (VID:044F PID:B65E) to Wine
+- Forwards data to/from userspace driver
+- Works with any Wine/Proton game
+- No Wine code changes needed
+
+QUICK START:
+============
+1. Run the setup script:
+   ./wine-bridge-quickstart.sh
+
+2. Load UHID module:
+   sudo modprobe uhid
+
+3. Start Wine bridge:
+   cd t500rs-wine-bridge
+   sudo ./uhid_proxy
+
+4. Test with Wine:
+   WINEDEBUG=+dinput wine control joy.cpl
+
+CURRENT STATUS:
+===============
+Phase 1: Minimal UHID proxy (READY TO TEST)
+- Creates UHID device visible to Wine
+- Basic HID descriptor
+- Device detection working
+
+Phase 2: IPC Integration (TODO)
+- Connect proxy to userspace driver
+- Forward input reports
+- Forward force feedback commands
+
+Phase 3: Full Testing (TODO)
+- Test with racing games
+- Verify FFB works
+- Polish and document
+
+DOCUMENTS:
+==========
+- WINE_COMPATIBILITY_ANALYSIS.md - Detailed analysis
+- wine-bridge-quickstart.sh - Setup script
+- t500rs-wine-bridge/src/uhid_proxy.c - Minimal proxy code
+
+NEXT STEPS:
+===========
+1. Test minimal UHID proxy
+2. Add IPC layer
+3. Integrate with userspace driver
+4. Test with games
+

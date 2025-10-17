@@ -1,0 +1,92 @@
+T500 RS HID Report Descriptor
+==============================
+Source: /home/caz/VM_Shared/captures/plug_t500_in.pcapng (frame 22)
+Device: ThrustMaster T500 RS (VID: 0x044f, PID: 0xb65e)
+Length: 130 bytes (0x82)
+
+Raw bytes:
+05 01 09 04 a1 01 09 01 a1 00 85 07 09 30 15 00
+27 ff ff 00 00 35 00 47 ff ff 00 00 75 10 95 01
+81 02 09 31 26 ff 03 46 ff 03 81 02 09 35 81 02
+09 36 81 02 81 03 05 09 19 01 29 0d 25 01 45 01
+75 01 95 0d 81 02 75 0b 95 01 81 03 05 01 09 39
+25 07 46 3b 01 55 00 65 14 75 04 81 42 65 00 81
+03 85 0a 06 00 ff 09 0a 75 08 95 0e 26 ff 00 46
+ff 00 91 02 85 02 09 02 81 02 09 14 85 14 81 02
+c0 c0
+
+Decoded structure (from tshark):
+
+Usage Page (Generic Desktop Controls) [0x01]
+Usage (Joystick) [0x04]
+Collection (Application)
+    Usage (Pointer) [0x01]
+    Collection (Physical)
+        Report ID (0x07)
+        Usage (X) [0x30]
+            Logical Minimum: 0
+            Logical Maximum: 65535
+            Physical Minimum: 0
+            Physical Maximum: 65535
+            Report Size: 16 bits
+            Report Count: 1
+            Input (Data,Var,Abs)
+        Usage (Y) [0x31]
+            Logical Maximum: 1023
+            Physical Maximum: 1023
+            Report Size: 16 bits
+            Report Count: 1
+            Input (Data,Var,Abs)
+        Usage (Rz) [0x35]
+            Input (Data,Var,Abs)
+        Usage (Slider) [0x36]
+            Input (Data,Var,Abs)
+        Input (Const,Var,Abs) - padding
+        
+        Usage Page (Button) [0x09]
+            Usage Minimum: 0x01
+            Usage Maximum: 0x0d (13 buttons)
+            Logical Maximum: 1
+            Physical Maximum: 1
+            Report Size: 1 bit
+            Report Count: 13
+            Input (Data,Var,Abs)
+        Report Size: 11 bits
+        Report Count: 1
+        Input (Const,Var,Abs) - padding
+        
+        Usage Page (Generic Desktop Controls) [0x01]
+        Usage (Hat switch) [0x39]
+            Logical Maximum: 7
+            Physical Maximum: 315
+            Unit: 0x14 (degrees)
+            Report Size: 4 bits
+            Input (Data,Var,Abs,NullState)
+        Input (Const,Var,Abs) - padding
+        
+        Report ID (0x0a)
+        Usage Page (Vendor-Defined) [0xff00]
+        Usage (0x0a)
+            Report Size: 8 bits
+            Report Count: 14
+            Logical Maximum: 255
+            Physical Maximum: 255
+            Output (Data,Var,Abs)
+        
+        Report ID (0x02)
+        Usage (0x02)
+            Input (Data,Var,Abs)
+        
+        Usage (0x14)
+        Report ID (0x14)
+            Input (Data,Var,Abs)
+    End Collection
+End Collection
+
+Key features:
+- Main steering input: X axis (16-bit, 0-65535)
+- Pedals: Y, Rz, Slider (16-bit, 0-1023)
+- 13 buttons
+- Hat switch (8-way directional, 4-bit)
+- Vendor-specific output report (ID 0x0a, 14 bytes) - likely for force feedback
+- Additional vendor reports (ID 0x02, ID 0x14)

@@ -1,0 +1,368 @@
+{
+  "project": "T500RS Linux FF Driver Development",
+  "timestamp": "2025-10-14 11:12:51",
+  "objective": "Comprehensive reverse engineering for Linux compatibility",
+  "analysis_order": [
+    "tmPID64.DLL",
+    "tmeffcpl64.dll",
+    "tm_api_lib_x64.dll",
+    "tmJoycpl.exe",
+    "GuiHidUsbDevLowerFFB.sys",
+    "tmHidUsb.sys",
+    "tmResetMin.sys",
+    "tmInstall.exe"
+  ],
+  "programs": {
+    "tmPID64.DLL": {
+      "program": "tmPID64.DLL",
+      "port": 8195,
+      "priority": 1,
+      "description": "Core PID/Force Feedback Library",
+      "mcp_analysis_steps": [
+        "instances_use(port=8195)",
+        "data_list_strings(limit=200)",
+        "functions_list(limit=100)",
+        "functions_decompile() for key functions",
+        "xrefs_list() for critical strings"
+      ],
+      "analysis_focus": {
+        "force_feedback": [
+          "HID feature reports",
+          "Effect creation",
+          "Force magnitude setting",
+          "Device communication protocols",
+          "DirectInput integration"
+        ],
+        "linux_mapping": [
+          "FF_CONSTANT effects",
+          "FF_PERIODIC effects",
+          "FF_CONDITION effects",
+          "HIDRAW interfaces",
+          "Linux input subsystem integration"
+        ],
+        "wine_compatibility": [
+          "DLL exports",
+          "DirectInput interfaces",
+          "Registry settings",
+          "Device enumeration",
+          "API function mapping"
+        ]
+      },
+      "expected_findings": {
+        "critical_functions": [
+          "HidD_SetFeature",
+          "HidD_GetFeature",
+          "HidP_SetScaledUsageValue"
+        ],
+        "ff_protocols": [
+          "Feature reports",
+          "Effect parameters",
+          "Force magnitude"
+        ],
+        "linux_mapping": "Core FF implementation - maps to Linux ff_effect structures"
+      }
+    },
+    "tmeffcpl64.dll": {
+      "program": "tmeffcpl64.dll",
+      "port": 8193,
+      "priority": 2,
+      "description": "Force Feedback Control Panel",
+      "mcp_analysis_steps": [
+        "instances_use(port=8193)",
+        "data_list_strings(limit=200)",
+        "functions_list(limit=100)",
+        "functions_decompile() for key functions",
+        "xrefs_list() for critical strings"
+      ],
+      "analysis_focus": {
+        "force_feedback": [
+          "HID feature reports",
+          "Effect creation",
+          "Force magnitude setting",
+          "Device communication protocols",
+          "DirectInput integration"
+        ],
+        "linux_mapping": [
+          "FF_CONSTANT effects",
+          "FF_PERIODIC effects",
+          "FF_CONDITION effects",
+          "HIDRAW interfaces",
+          "Linux input subsystem integration"
+        ],
+        "wine_compatibility": [
+          "DLL exports",
+          "DirectInput interfaces",
+          "Registry settings",
+          "Device enumeration",
+          "API function mapping"
+        ]
+      },
+      "expected_findings": {
+        "critical_functions": [
+          "tm_api_force_config_effect",
+          "tm_api_force_set_effect_state"
+        ],
+        "ff_protocols": [
+          "Effect configuration",
+          "State management",
+          "Device control"
+        ],
+        "linux_mapping": "Control interface - maps to Linux FF ioctls"
+      }
+    },
+    "tm_api_lib_x64.dll": {
+      "program": "tm_api_lib_x64.dll",
+      "port": 8200,
+      "priority": 2,
+      "description": "Public API Library",
+      "mcp_analysis_steps": [
+        "instances_use(port=8200)",
+        "data_list_strings(limit=200)",
+        "functions_list(limit=100)",
+        "functions_decompile() for key functions",
+        "xrefs_list() for critical strings"
+      ],
+      "analysis_focus": {
+        "force_feedback": [
+          "HID feature reports",
+          "Effect creation",
+          "Force magnitude setting",
+          "Device communication protocols",
+          "DirectInput integration"
+        ],
+        "linux_mapping": [
+          "FF_CONSTANT effects",
+          "FF_PERIODIC effects",
+          "FF_CONDITION effects",
+          "HIDRAW interfaces",
+          "Linux input subsystem integration"
+        ],
+        "wine_compatibility": [
+          "DLL exports",
+          "DirectInput interfaces",
+          "Registry settings",
+          "Device enumeration",
+          "API function mapping"
+        ]
+      },
+      "expected_findings": {
+        "critical_functions": [
+          "Device enumeration",
+          "Effect creation",
+          "Public API"
+        ],
+        "ff_protocols": [
+          "High-level API",
+          "Application interface",
+          "Device management"
+        ],
+        "linux_mapping": "Wine DLL target - wraps Linux FF API for Windows apps"
+      }
+    },
+    "tmJoycpl.exe": {
+      "program": "tmJoycpl.exe",
+      "port": 8199,
+      "priority": 3,
+      "description": "Joystick Control Panel",
+      "mcp_analysis_steps": [
+        "instances_use(port=8199)",
+        "data_list_strings(limit=200)",
+        "functions_list(limit=100)",
+        null,
+        "xrefs_list() for critical strings"
+      ],
+      "analysis_focus": {
+        "force_feedback": [
+          "HID feature reports",
+          "Effect creation",
+          "Force magnitude setting",
+          "Device communication protocols",
+          "DirectInput integration"
+        ],
+        "linux_mapping": [
+          "FF_CONSTANT effects",
+          "FF_PERIODIC effects",
+          "FF_CONDITION effects",
+          "HIDRAW interfaces",
+          "Linux input subsystem integration"
+        ],
+        "wine_compatibility": [
+          "DLL exports",
+          "DirectInput interfaces",
+          "Registry settings",
+          "Device enumeration",
+          "API function mapping"
+        ]
+      },
+      "expected_findings": {
+        "critical_functions": [
+          "Test protocols",
+          "Configuration UI",
+          "Device calibration"
+        ],
+        "ff_protocols": [
+          "Testing interface",
+          "Configuration storage",
+          "User controls"
+        ],
+        "linux_mapping": "Reference for testing - shows effect parameters and ranges"
+      }
+    },
+    "GuiHidUsbDevLowerFFB.sys": {
+      "program": "GuiHidUsbDevLowerFFB.sys",
+      "port": 8196,
+      "priority": 4,
+      "description": "Low-level USB HID FFB Driver",
+      "mcp_analysis_steps": [
+        "instances_use(port=8196)",
+        "data_list_strings(limit=200)",
+        "functions_list(limit=100)",
+        null,
+        null
+      ],
+      "analysis_focus": {
+        "force_feedback": [
+          "HID feature reports",
+          "Effect creation",
+          "Force magnitude setting",
+          "Device communication protocols",
+          "DirectInput integration"
+        ],
+        "linux_mapping": [
+          "FF_CONSTANT effects",
+          "FF_PERIODIC effects",
+          "FF_CONDITION effects",
+          "HIDRAW interfaces",
+          "Linux input subsystem integration"
+        ],
+        "wine_compatibility": [
+          "DLL exports",
+          "DirectInput interfaces",
+          "Registry settings",
+          "Device enumeration",
+          "API function mapping"
+        ]
+      },
+      "expected_findings": {
+        "general": "Device support component"
+      }
+    },
+    "tmHidUsb.sys": {
+      "program": "tmHidUsb.sys",
+      "port": 8194,
+      "priority": 4,
+      "description": "Main USB HID Driver",
+      "mcp_analysis_steps": [
+        "instances_use(port=8194)",
+        "data_list_strings(limit=200)",
+        "functions_list(limit=100)",
+        null,
+        null
+      ],
+      "analysis_focus": {
+        "force_feedback": [
+          "HID feature reports",
+          "Effect creation",
+          "Force magnitude setting",
+          "Device communication protocols",
+          "DirectInput integration"
+        ],
+        "linux_mapping": [
+          "FF_CONSTANT effects",
+          "FF_PERIODIC effects",
+          "FF_CONDITION effects",
+          "HIDRAW interfaces",
+          "Linux input subsystem integration"
+        ],
+        "wine_compatibility": [
+          "DLL exports",
+          "DirectInput interfaces",
+          "Registry settings",
+          "Device enumeration",
+          "API function mapping"
+        ]
+      },
+      "expected_findings": {
+        "general": "Device support component"
+      }
+    },
+    "tmResetMin.sys": {
+      "program": "tmResetMin.sys",
+      "port": 8197,
+      "priority": 5,
+      "description": "Device Reset Driver",
+      "mcp_analysis_steps": [
+        "instances_use(port=8197)",
+        "data_list_strings(limit=200)",
+        "functions_list(limit=100)",
+        null,
+        null
+      ],
+      "analysis_focus": {
+        "force_feedback": [
+          "HID feature reports",
+          "Effect creation",
+          "Force magnitude setting",
+          "Device communication protocols",
+          "DirectInput integration"
+        ],
+        "linux_mapping": [
+          "FF_CONSTANT effects",
+          "FF_PERIODIC effects",
+          "FF_CONDITION effects",
+          "HIDRAW interfaces",
+          "Linux input subsystem integration"
+        ],
+        "wine_compatibility": [
+          "DLL exports",
+          "DirectInput interfaces",
+          "Registry settings",
+          "Device enumeration",
+          "API function mapping"
+        ]
+      },
+      "expected_findings": {
+        "general": "Device support component"
+      }
+    },
+    "tmInstall.exe": {
+      "program": "tmInstall.exe",
+      "port": 8198,
+      "priority": 5,
+      "description": "Installation Program",
+      "mcp_analysis_steps": [
+        "instances_use(port=8198)",
+        "data_list_strings(limit=200)",
+        "functions_list(limit=100)",
+        null,
+        null
+      ],
+      "analysis_focus": {
+        "force_feedback": [
+          "HID feature reports",
+          "Effect creation",
+          "Force magnitude setting",
+          "Device communication protocols",
+          "DirectInput integration"
+        ],
+        "linux_mapping": [
+          "FF_CONSTANT effects",
+          "FF_PERIODIC effects",
+          "FF_CONDITION effects",
+          "HIDRAW interfaces",
+          "Linux input subsystem integration"
+        ],
+        "wine_compatibility": [
+          "DLL exports",
+          "DirectInput interfaces",
+          "Registry settings",
+          "Device enumeration",
+          "API function mapping"
+        ]
+      },
+      "expected_findings": {
+        "general": "Device support component"
+      }
+    }
+  }
+}

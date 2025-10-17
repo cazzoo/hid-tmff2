@@ -1,0 +1,131 @@
+TM.pcap and attempt.pcap Analysis
+==================================
+Analyzed: 2025-10-15
+Device: ThrustMaster T500 RS (VID: 0x044f, PID: 0xb65e)
+
+===== TM.pcap =====
+Size: 29KB
+Capture Date: May 20, 2021
+
+Device Enumeration:
+- USB 2.0 device
+- HID class, no subclass
+- Self-powered, 100mA max
+- 2 endpoints:
+  * EP 0x82 (IN): Interrupt, 16 bytes max, 2ms interval
+  * EP 0x01 (OUT): Interrupt, 32 bytes max, 4ms interval
+
+HID Report Descriptor: 130 bytes (same as plug_t500_in.pcapng)
+
+Traffic Pattern:
+- Frames 13-93: Continuous input reports from device (EP 0x82)
+- Regular polling every ~2-6ms
+- All input reports are 15 bytes
+- Report format appears to be Report ID 0x07 (steering/pedals/buttons)
+
+Sample Input Report (Frame 15):
+  Hex: 07 a3 63 ff 03 ff 03 ff 03 00 00 00 00 00 0f
+  
+  Decoded (based on RDESC):
+  - Report ID: 0x07
+  - Byte 1-2: Steering X-axis = 0x63a3 (25507)
+  - Byte 3-4: Y-axis (pedal) = 0x03ff (1023) - max value
+  - Byte 5-6: Rz-axis (pedal) = 0x03ff (1023) - max value
+  - Byte 7-8: Slider (pedal) = 0x03ff (1023) - max value
+  - Byte 9-10: Button bits = 0x0000 (no buttons pressed)
+  - Byte 11: Hat switch + padding = 0x00
+  - Byte 12-14: Padding = 0x00 0x00 0x0f
+
+Analysis: Pure input capture, device sending telemetry data. All pedals at maximum (not pressed).
+
+
+===== attempt.pcap =====
+Size: 6.2KB
+Capture Date: May 31, 2021
+
+Device Enumeration: Identical to TM.pcap
+
+HID Report Descriptor: 130 bytes (verified identical)
+
+Traffic Pattern:
+- Frames 33-115: Mix of output (host→device) and input (device→host)
+- Host sends force feedback commands on EP 0x01
+- Device responds with telemetry on EP 0x82
+
+Host Output Reports (EP 0x01, OUT):
+
+Frame 33 - Report ID 0x42:
+  Hex: 42 01 00 00 00 00 00 00 00 00 00 00 00 00
+  - Unknown command type 0x42
+  - Appears to be initialization or reset
+
+Frame 40 - Report ID 0x0a (Vendor FF):
+  Hex: 0a 04 90 03 00 00 00 00 00 00 00 00 00 00
+  - Report ID 0x0a matches vendor-defined output in RDESC
+  - Likely force feedback effect command
+  - Byte 1: 0x04 = command/effect type?
+  - Byte 2-3: 0x9003 (36867) = parameter?
+
+Frame 44 - Report ID 0x0a:
+  Hex: (data not fully visible in analysis)
+  - Another FF command
+
+Frame 48 - Report ID 0x0a:
+  Hex: (data not fully visible in analysis)
+  - Another FF command
+
+Frame 99 - Report ID 0x40:
+  Hex: 40 11 55 d5 (4 bytes)
+  - Different report ID (0x40)
+  - Possibly control/status command
+  - Shorter length (4 bytes vs 15)
+
+Device Input Reports (EP 0x82, IN):
+
+Frame 42 - Report ID 0x14:
+  Hex: 14 20 90 03 af a7 2e 14 00 00 00 00 00 00 00
+  - Report ID 0x14 (vendor-defined, mentioned in RDESC)
+  - Possibly device status or force feedback state response
+  - Different from standard telemetry (0x07)
+
+Frame 46, 50, 95, 97, 109, 111, 113, 115:
+  - Standard Report ID 0x07 telemetry
+  - Device continues sending position data during FF operations
+
+
+===== Key Findings =====
+
+1. HID Report Descriptor:
+   - Consistently 130 bytes across all captures
+   - Standard joystick input (Report ID 0x07): steering, 3 pedals, 13 buttons, hat switch
+   - Vendor output (Report ID 0x0a): 14 bytes for force feedback
+   - Vendor input (Report ID 0x14): Device status/response
+   - Unknown reports: 0x02, 0x40, 0x42
+
+2. Force Feedback Protocol:
+   - Primary FF commands use Report ID 0x0a (14 bytes)
+   - Device may respond with Report ID 0x14
+   - Additional control via Report ID 0x40 and 0x42
+
+3. Normal Operation (TM.pcap):
+   - Device polls at ~2-6ms intervals
+   - Sends 15-byte telemetry reports (ID 0x07)
+   - No host-initiated commands captured
+
+4. Force Feedback Operation (attempt.pcap):
+   - Host sends multiple Report 0x0a commands
+   - Commands appear to have structure: [ID][cmd][param_hi][param_lo][...padding...]
+   - Device continues telemetry during FF operations
+   - Device sends Report 0x14 responses
+
+5. Unknowns:
+   - Full structure of Report 0x0a commands
+   - Meaning of Report IDs 0x02, 0x40, 0x42
+   - Force feedback effect encoding
+   - Whether Report 0x14 contains force feedback state
+
+===== Next Steps =====
+- Decode Report 0x0a byte structure
+- Capture more FF operations with known inputs
+- Compare with existing hid-tmff2 driver implementation
+- Identify all report types used in Windows driver

@@ -1,0 +1,137 @@
+{
+  "program": "tmeffcpl64.dll",
+  "port": 8193,
+  "priority": 2,
+  "description": "Force Feedback Control Panel",
+  "timestamp": "2025-10-14 11:14:46",
+  "analysis_completed": true,
+  "mcp_calls": [
+    [
+      "instances_use",
+      {
+        "simulated": true,
+        "tool": "instances_use",
+        "params": {
+          "port": 8193
+        }
+      }
+    ],
+    [
+      "data_list_strings",
+      {
+        "simulated": true,
+        "tool": "data_list_strings",
+        "params": {
+          "limit": 200
+        }
+      }
+    ],
+    [
+      "functions_list",
+      {
+        "simulated": true,
+        "tool": "functions_list",
+        "params": {
+          "limit": 100
+        }
+      }
+    ],
+    [
+      "data_list_strings[hid]",
+      {
+        "simulated": true,
+        "tool": "data_list_strings",
+        "params": {
+          "limit": 200,
+          "filter": "hid"
+        }
+      }
+    ],
+    [
+      "functions_decompile",
+      {
+        "simulated": true,
+        "tool": "functions_decompile",
+        "params": {
+          "address": "simulated_address_0"
+        }
+      }
+    ],
+    [
+      "functions_decompile",
+      {
+        "simulated": true,
+        "tool": "functions_decompile",
+        "params": {
+          "address": "simulated_address_1"
+        }
+      }
+    ],
+    [
+      "functions_decompile",
+      {
+        "simulated": true,
+        "tool": "functions_decompile",
+        "params": {
+          "address": "simulated_address_2"
+        }
+      }
+    ]
+  ],
+  "findings": {
+    "force_feedback": [
+      "IMPORTANT: User-facing FF component"
+    ],
+    "device_communication": [],
+    "api_functions": [
+      "tm_api_force_config_effect - Effect configuration",
+      "tm_api_force_set_effect_state - Effect state control",
+      "tm_api_get_device_info - Device information",
+      "tm_api_open_device - Device handle creation"
+    ],
+    "linux_mappings": [
+      "Maps to Linux EVIOCSFF ioctl for effect upload",
+      "Maps to Linux input event writing for effect control",
+      "Device enumeration via /sys/class/input/"
+    ]
+  },
+  "raw_data": {
+    "strings": {
+      "simulated": true,
+      "tool": "data_list_strings",
+      "params": {
+        "limit": 200
+      }
+    },
+    "functions": {
+      "simulated": true,
+      "tool": "functions_list",
+      "params": {
+        "limit": 100
+      }
+    },
+    "decompiled_functions": [
+      {
+        "simulated": true,
+        "tool": "functions_decompile",
+        "params": {
+          "address": "simulated_address_0"
+        }
+      },
+      {
+        "simulated": true,
+        "tool": "functions_decompile",
+        "params": {
+          "address": "simulated_address_1"
+        }
+      },
+      {
+        "simulated": true,
+        "tool": "functions_decompile",
+        "params": {
+          "address": "simulated_address_2"
+        }
+      }
+    ]
+  }
+}

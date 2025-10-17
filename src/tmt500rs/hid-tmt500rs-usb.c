@@ -838,6 +838,52 @@ int t500rs_set_autocenter(void *data, u16 autocenter)
 	return 0;
 }
 
+/* Device open callback - called when a game/application opens the device */
+int t500rs_open(void *data, int open_mode)
+{
+	struct t500rs_device_entry *t500rs = data;
+
+	if (!t500rs)
+		return -ENODEV;
+
+	hid_info(t500rs->hdev, "T500RS: Device opened by application (mode=%d)\n", open_mode);
+
+	/* CRITICAL: Flush work queue to prevent deadlock with usbhid_open() */
+	/* The work queue may be trying to send USB data while usbhid is opening */
+	if (t500rs->wq)
+		flush_workqueue(t500rs->wq);
+
+	/* Call stored open callback if it exists */
+	if (t500rs->open)
+		return t500rs->open(t500rs->input_dev);
+
+	return 0;
+}
+
+/* Device close callback - called when a game/application closes the device */
+int t500rs_close(void *data, int open_mode)
+{
+	struct t500rs_device_entry *t500rs = data;
+
+	if (!t500rs)
+		return -ENODEV;
+
+	hid_info(t500rs->hdev, "T500RS: Device closed by application (mode=%d)\n", open_mode);
+
+	/* Stop any ongoing force effects */
+	t500rs_stop_force_timer(t500rs);
+
+	/* Flush work queue */
+	if (t500rs->wq)
+		flush_workqueue(t500rs->wq);
+
+	/* Call stored close callback if it exists */
+	if (t500rs->close)
+		t500rs->close(t500rs->input_dev);
+
+	return 0;
+}
+
 /* Initialize T500RS device */
 int t500rs_wheel_init(struct tmff2_device_entry *tmff2, int open_mode)
 {
@@ -920,6 +966,10 @@ int t500rs_wheel_init(struct tmff2_device_entry *tmff2, int open_mode)
 	t500rs->device_active = true;  /* Device is now active */
 	timer_setup(&t500rs->force_timer, t500rs_force_timer_callback, 0);
 	INIT_WORK(&t500rs->force_work, t500rs_force_update_work);
+
+	/* Store original input_dev open/close callbacks */
+	t500rs->open = tmff2->input_dev->open;
+	t500rs->close = tmff2->input_dev->close;
 
 	/* Store device data in tmff2 */
 	tmff2->data = t500rs;
@@ -1161,6 +1211,11 @@ int t500rs_populate_api(struct tmff2_device_entry *tmff2)
 
 	tmff2->wheel_init = t500rs_wheel_init;
 	tmff2->wheel_destroy = t500rs_wheel_destroy;
+
+	/* CRITICAL FIX: Implement open/close to prevent deadlock when games open device */
+	/* These callbacks flush the work queue to avoid USB lock contention */
+	tmff2->open = t500rs_open;
+	tmff2->close = t500rs_close;
 
 	tmff2->params = t500rs_params;
 	tmff2->max_effects = T500RS_MAX_EFFECTS;
