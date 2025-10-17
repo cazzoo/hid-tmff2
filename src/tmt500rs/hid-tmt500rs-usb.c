@@ -906,6 +906,57 @@ int t500rs_set_autocenter(void *data, u16 autocenter)
 	return 0;
 }
 
+/* Set wheel rotation range (270-1080 degrees) */
+int t500rs_set_range(void *data, u16 range)
+{
+	struct t500rs_device_entry *t500rs = data;
+	u8 *buf;
+	int ret;
+
+	if (!t500rs)
+		return -ENODEV;
+
+	/* Clamp range to valid values */
+	if (range < 270) {
+		hid_info(t500rs->hdev, "Range %u too small, clamping to 270\n", range);
+		range = 270;
+	}
+	if (range > 1080) {
+		hid_info(t500rs->hdev, "Range %u too large, clamping to 1080\n", range);
+		range = 1080;
+	}
+
+	/* Allocate separate buffer to avoid conflicts with FFB operations */
+	buf = kzalloc(t500rs->buffer_length, GFP_KERNEL);
+	if (!buf) {
+		hid_err(t500rs->hdev, "Failed to allocate buffer for range setting\n");
+		return -ENOMEM;
+	}
+
+	hid_info(t500rs->hdev, "Setting wheel range to %u degrees\n", range);
+
+	/* Based on USB captures and Windows driver analysis:
+	 * Report 0x42 0x05 appears after range changes
+	 * This might be a "refresh/apply settings" command
+	 *
+	 * For now, send Report 0x42 0x05 to trigger range update
+	 * TODO: Investigate actual range setting protocol
+	 */
+	buf[0] = 0x42;
+	buf[1] = 0x05;
+	ret = t500rs_send_usb(t500rs, buf, 2);
+	if (ret) {
+		hid_err(t500rs->hdev, "Failed to set range: %d\n", ret);
+		kfree(buf);
+		return ret;
+	}
+
+	kfree(buf);
+
+	hid_info(t500rs->hdev, "Range set to %u degrees\n", range);
+	return 0;
+}
+
 /* Sysfs attributes for per-effect gains */
 
 static ssize_t constant_gain_show(struct device *dev,
@@ -1477,6 +1528,7 @@ int t500rs_populate_api(struct tmff2_device_entry *tmff2)
 
 	tmff2->set_gain = t500rs_set_gain;
 	tmff2->set_autocenter = t500rs_set_autocenter;
+	tmff2->set_range = t500rs_set_range;
 
 	tmff2->wheel_init = t500rs_wheel_init;
 	tmff2->wheel_destroy = t500rs_wheel_destroy;
