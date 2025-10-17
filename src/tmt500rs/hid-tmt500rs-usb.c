@@ -55,6 +55,10 @@ struct t500rs_device_entry {
 	bool force_timer_active;
 	bool device_active;  /* Set to false during destruction to prevent new work */
 
+	/* Gain settings (0-65535 range, where 65535 = 100%) */
+	u16 device_gain;  /* Device-level master gain (set via sysfs) */
+	u16 game_gain;    /* In-game gain (set dynamically by game via set_gain callback) */
+
 	int (*open)(struct input_dev *dev);
 	void (*close)(struct input_dev *dev);
 };
@@ -696,11 +700,10 @@ int t500rs_play_effect(void *data, struct tmff2_effect_state *state)
 		int level = effect->u.constant.level;
 		s8 signed_level;
 
-		/* Apply global gain (from hid-tmff2.c) */
-		extern int gain;
-		level = (level * gain) / 65535;
+		/* NOTE: Gain is now sent to device via Report 0x43 in set_gain() */
+		/* No need to apply gain here - the device handles it */
 
-		hid_info(t500rs->hdev, "Constant force: level=%d (with gain=%d/%d)\n", level, gain, 65535);
+		hid_info(t500rs->hdev, "Constant force: level=%d\n", level);
 
 		/* Scale to -127..127 (signed 8-bit range) */
 		/* Note: level is signed 16-bit (-32767 to 32767) */
@@ -798,18 +801,44 @@ int t500rs_update_effect(void *data, struct tmff2_effect_state *state)
 	return t500rs_upload_effect(data, state);
 }
 
-/* Set gain */
+/* Set gain - called dynamically by games during gameplay */
 int t500rs_set_gain(void *data, u16 gain)
 {
 	struct t500rs_device_entry *t500rs = data;
+	u8 buf[4];
+	u8 device_gain_byte;
+	u32 combined_gain;
+	int ret;
 
 	if (!t500rs)
 		return -ENODEV;
 
-	hid_info(t500rs->hdev, "Set gain: %u (%u%%)\n",
-		 gain, (gain * 100) / 65535);
+	/* Store the game's gain setting */
+	t500rs->game_gain = gain;
 
-	/* Gain is applied per-effect in upload/play functions */
+	/* Calculate combined gain: (device_gain * game_gain) / 65535 */
+	/* Both are 0-65535, result is also 0-65535 */
+	combined_gain = ((u32)t500rs->device_gain * (u32)gain) / 65535;
+
+	/* Convert to device range (0-127, where 127 = 100%) */
+	device_gain_byte = (u8)((combined_gain * 127) / 65535);
+
+	hid_info(t500rs->hdev, "Set gain: game=%u (%u%%), device=%u (%u%%), combined=%u (%u%%), sending=0x%02x\n",
+		 gain, (gain * 100) / 65535,
+		 t500rs->device_gain, (t500rs->device_gain * 100) / 65535,
+		 combined_gain, (combined_gain * 100) / 65535,
+		 device_gain_byte);
+
+	/* Send Report 0x43 - Set global gain */
+	buf[0] = 0x43;
+	buf[1] = device_gain_byte;
+
+	ret = t500rs_send_usb(t500rs, buf, 2);
+	if (ret) {
+		hid_err(t500rs->hdev, "Failed to set gain: %d\n", ret);
+		return ret;
+	}
+
 	return 0;
 }
 
@@ -966,6 +995,10 @@ int t500rs_wheel_init(struct tmff2_device_entry *tmff2, int open_mode)
 	t500rs->device_active = true;  /* Device is now active */
 	timer_setup(&t500rs->force_timer, t500rs_force_timer_callback, 0);
 	INIT_WORK(&t500rs->force_work, t500rs_force_update_work);
+
+	/* Initialize gain settings to 100% (65535 = 100%) */
+	t500rs->device_gain = 65535;  /* Device-level master gain */
+	t500rs->game_gain = 65535;    /* In-game gain */
 
 	/* Store original input_dev open/close callbacks */
 	t500rs->open = tmff2->input_dev->open;
