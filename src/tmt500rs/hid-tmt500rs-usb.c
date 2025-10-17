@@ -59,6 +59,15 @@ struct t500rs_device_entry {
 	u16 device_gain;  /* Device-level master gain (set via sysfs) */
 	u16 game_gain;    /* In-game gain (set dynamically by game via set_gain callback) */
 
+	/* Per-effect gain multipliers (0-100 range, where 100 = 100%) */
+	/* These are applied in software when uploading/playing effects */
+	u8 constant_gain;  /* Constant force effects gain */
+	u8 periodic_gain;  /* Periodic effects (sine, square, triangle) gain */
+	u8 spring_gain;    /* Spring effects gain */
+	u8 damper_gain;    /* Damper effects gain */
+	u8 friction_gain;  /* Friction effects gain */
+	u8 inertia_gain;   /* Inertia effects gain */
+
 	int (*open)(struct input_dev *dev);
 	void (*close)(struct input_dev *dev);
 };
@@ -323,6 +332,14 @@ static int t500rs_send_usb_blocking(struct t500rs_device_entry *t500rs, const u8
 	return 0;
 }
 
+/* Helper function to apply per-effect gain */
+static inline int apply_effect_gain(int value, u8 effect_gain)
+{
+	/* effect_gain is 0-100, value is effect-specific range */
+	/* Return value scaled by effect_gain percentage */
+	return (value * effect_gain) / 100;
+}
+
 /* Upload constant force effect */
 static int t500rs_upload_constant(struct t500rs_device_entry *t500rs,
 				   struct tmff2_effect_state *state)
@@ -386,31 +403,54 @@ static int t500rs_upload_condition(struct t500rs_device_entry *t500rs,
 	u8 *buf = t500rs->send_buffer;  /* Use DMA-safe buffer */
 	u8 effect_type;
 	int ret;
+	u8 effect_gain;
+	int right_strength, left_strength;
 
-	/* Determine effect type */
+	/* Determine effect type and select appropriate gain */
 	switch (effect->type) {
 	case FF_SPRING:
 		effect_type = 0x40;
+		effect_gain = t500rs->spring_gain;
 		break;
 	case FF_DAMPER:
+		effect_type = 0x41;
+		effect_gain = t500rs->damper_gain;
+		break;
 	case FF_FRICTION:
+		effect_type = 0x41;
+		effect_gain = t500rs->friction_gain;
+		break;
 	case FF_INERTIA:
 		effect_type = 0x41;
+		effect_gain = t500rs->inertia_gain;
 		break;
 	default:
 		return -EINVAL;
 	}
 
-	hid_info(t500rs->hdev, "Upload condition: id=%d, type=0x%02x\n",
-		 effect->id, effect_type);
+	/* Get effect parameters and apply per-effect gain */
+	/* Condition effects use right_saturation and left_saturation (0-65535) */
+	right_strength = effect->u.condition[0].right_saturation;
+	left_strength = effect->u.condition[0].left_saturation;
+
+	/* Apply per-effect gain */
+	right_strength = apply_effect_gain(right_strength, effect_gain);
+	left_strength = apply_effect_gain(left_strength, effect_gain);
+
+	/* Scale to device range (0-127) */
+	right_strength = (right_strength * 127) / 65535;
+	left_strength = (left_strength * 127) / 65535;
+
+	hid_info(t500rs->hdev, "Upload condition: id=%d, type=0x%02x, gain=%u%%, R=%d, L=%d\n",
+		 effect->id, effect_type, effect_gain, right_strength, left_strength);
 
 	/* Report 0x05 - Condition parameters (coefficients) */
 	memset(buf, 0, 15);
 	buf[0] = 0x05;
 	buf[1] = 0x0e;
 	buf[2] = 0x00;
-	buf[3] = 50;  /* Right strength - using default */
-	buf[4] = 50;  /* Left strength - using default */
+	buf[3] = (u8)right_strength;
+	buf[4] = (u8)left_strength;
 	buf[5] = 0x00;
 	buf[6] = 0x00;
 	buf[7] = 0x00;
@@ -472,9 +512,8 @@ static int t500rs_upload_periodic(struct t500rs_device_entry *t500rs,
 	u16 period = effect->u.periodic.period;
 	u8 mag;
 
-	/* Apply global gain */
-	extern int gain;
-	magnitude = (magnitude * gain) / 65535;
+	/* Apply per-effect gain (periodic_gain is 0-100) */
+	magnitude = apply_effect_gain(magnitude, t500rs->periodic_gain);
 
 	/* Determine waveform type */
 	switch (effect->u.periodic.waveform) {
@@ -867,6 +906,172 @@ int t500rs_set_autocenter(void *data, u16 autocenter)
 	return 0;
 }
 
+/* Sysfs attributes for per-effect gains */
+
+static ssize_t constant_gain_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	struct hid_device *hdev = to_hid_device(dev);
+	struct t500rs_device_entry *t500rs = hid_get_drvdata(hdev);
+
+	if (!t500rs)
+		return -ENODEV;
+
+	return scnprintf(buf, PAGE_SIZE, "%u\n", t500rs->constant_gain);
+}
+
+static ssize_t constant_gain_store(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t count)
+{
+	struct hid_device *hdev = to_hid_device(dev);
+	struct t500rs_device_entry *t500rs = hid_get_drvdata(hdev);
+	unsigned int value;
+	int ret;
+
+	if (!t500rs)
+		return -ENODEV;
+
+	ret = kstrtouint(buf, 0, &value);
+	if (ret) {
+		hid_err(hdev, "kstrtouint failed at constant_gain_store: %d\n", ret);
+		return ret;
+	}
+
+	if (value > 100) {
+		hid_err(hdev, "constant_gain must be 0-100, got %u\n", value);
+		return -EINVAL;
+	}
+
+	t500rs->constant_gain = (u8)value;
+	hid_info(hdev, "Constant gain set to %u%%\n", value);
+
+	return count;
+}
+static DEVICE_ATTR_RW(constant_gain);
+
+static ssize_t periodic_gain_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	struct hid_device *hdev = to_hid_device(dev);
+	struct t500rs_device_entry *t500rs = hid_get_drvdata(hdev);
+
+	if (!t500rs)
+		return -ENODEV;
+
+	return scnprintf(buf, PAGE_SIZE, "%u\n", t500rs->periodic_gain);
+}
+
+static ssize_t periodic_gain_store(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t count)
+{
+	struct hid_device *hdev = to_hid_device(dev);
+	struct t500rs_device_entry *t500rs = hid_get_drvdata(hdev);
+	unsigned int value;
+	int ret;
+
+	if (!t500rs)
+		return -ENODEV;
+
+	ret = kstrtouint(buf, 0, &value);
+	if (ret) {
+		hid_err(hdev, "kstrtouint failed at periodic_gain_store: %d\n", ret);
+		return ret;
+	}
+
+	if (value > 100) {
+		hid_err(hdev, "periodic_gain must be 0-100, got %u\n", value);
+		return -EINVAL;
+	}
+
+	t500rs->periodic_gain = (u8)value;
+	hid_info(hdev, "Periodic gain set to %u%%\n", value);
+
+	return count;
+}
+static DEVICE_ATTR_RW(periodic_gain);
+
+static ssize_t t500rs_spring_gain_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	struct hid_device *hdev = to_hid_device(dev);
+	struct t500rs_device_entry *t500rs = hid_get_drvdata(hdev);
+
+	if (!t500rs)
+		return -ENODEV;
+
+	return scnprintf(buf, PAGE_SIZE, "%u\n", t500rs->spring_gain);
+}
+
+static ssize_t t500rs_spring_gain_store(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t count)
+{
+	struct hid_device *hdev = to_hid_device(dev);
+	struct t500rs_device_entry *t500rs = hid_get_drvdata(hdev);
+	unsigned int value;
+	int ret;
+
+	if (!t500rs)
+		return -ENODEV;
+
+	ret = kstrtouint(buf, 0, &value);
+	if (ret) {
+		hid_err(hdev, "kstrtouint failed at t500rs_spring_gain_store: %d\n", ret);
+		return ret;
+	}
+
+	if (value > 100) {
+		hid_err(hdev, "spring_gain must be 0-100, got %u\n", value);
+		return -EINVAL;
+	}
+
+	t500rs->spring_gain = (u8)value;
+	hid_info(hdev, "Spring gain set to %u%%\n", value);
+
+	return count;
+}
+static DEVICE_ATTR(t500rs_spring_gain, 0660, t500rs_spring_gain_show, t500rs_spring_gain_store);
+
+static ssize_t t500rs_damper_gain_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	struct hid_device *hdev = to_hid_device(dev);
+	struct t500rs_device_entry *t500rs = hid_get_drvdata(hdev);
+
+	if (!t500rs)
+		return -ENODEV;
+
+	return scnprintf(buf, PAGE_SIZE, "%u\n", t500rs->damper_gain);
+}
+
+static ssize_t t500rs_damper_gain_store(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t count)
+{
+	struct hid_device *hdev = to_hid_device(dev);
+	struct t500rs_device_entry *t500rs = hid_get_drvdata(hdev);
+	unsigned int value;
+	int ret;
+
+	if (!t500rs)
+		return -ENODEV;
+
+	ret = kstrtouint(buf, 0, &value);
+	if (ret) {
+		hid_err(hdev, "kstrtouint failed at t500rs_damper_gain_store: %d\n", ret);
+		return ret;
+	}
+
+	if (value > 100) {
+		hid_err(hdev, "damper_gain must be 0-100, got %u\n", value);
+		return -EINVAL;
+	}
+
+	t500rs->damper_gain = (u8)value;
+	hid_info(hdev, "Damper gain set to %u%%\n", value);
+
+	return count;
+}
+static DEVICE_ATTR(t500rs_damper_gain, 0660, t500rs_damper_gain_show, t500rs_damper_gain_store);
+
 /* Device open callback - called when a game/application opens the device */
 int t500rs_open(void *data, int open_mode)
 {
@@ -999,6 +1204,14 @@ int t500rs_wheel_init(struct tmff2_device_entry *tmff2, int open_mode)
 	/* Initialize gain settings to 100% (65535 = 100%) */
 	t500rs->device_gain = 65535;  /* Device-level master gain */
 	t500rs->game_gain = 65535;    /* In-game gain */
+
+	/* Initialize per-effect gains to 100% (0-100 range) */
+	t500rs->constant_gain = 100;
+	t500rs->periodic_gain = 100;
+	t500rs->spring_gain = 100;
+	t500rs->damper_gain = 100;
+	t500rs->friction_gain = 100;
+	t500rs->inertia_gain = 100;
 
 	/* Store original input_dev open/close callbacks */
 	t500rs->open = tmff2->input_dev->open;
@@ -1185,6 +1398,23 @@ int t500rs_wheel_init(struct tmff2_device_entry *tmff2, int open_mode)
 		hid_info(t500rs->hdev, "Autocenter fully disabled\n");
 	}
 
+	/* Create sysfs attributes for per-effect gains */
+	ret = device_create_file(&t500rs->hdev->dev, &dev_attr_constant_gain);
+	if (ret)
+		hid_warn(t500rs->hdev, "Failed to create constant_gain sysfs: %d\n", ret);
+
+	ret = device_create_file(&t500rs->hdev->dev, &dev_attr_periodic_gain);
+	if (ret)
+		hid_warn(t500rs->hdev, "Failed to create periodic_gain sysfs: %d\n", ret);
+
+	ret = device_create_file(&t500rs->hdev->dev, &dev_attr_t500rs_spring_gain);
+	if (ret)
+		hid_warn(t500rs->hdev, "Failed to create t500rs_spring_gain sysfs: %d\n", ret);
+
+	ret = device_create_file(&t500rs->hdev->dev, &dev_attr_t500rs_damper_gain);
+	if (ret)
+		hid_warn(t500rs->hdev, "Failed to create t500rs_damper_gain sysfs: %d\n", ret);
+
 	hid_info(t500rs->hdev, "T500RS initialized successfully (USB INTERRUPT mode)\n");
 	hid_info(t500rs->hdev, "Endpoint: 0x%02x, Buffer: %zu bytes\n",
 		 t500rs->ep_out, t500rs->buffer_length);
@@ -1221,6 +1451,12 @@ int t500rs_wheel_destroy(void *data)
 		flush_workqueue(t500rs->wq);
 		destroy_workqueue(t500rs->wq);
 	}
+
+	/* Remove sysfs attributes */
+	device_remove_file(&t500rs->hdev->dev, &dev_attr_constant_gain);
+	device_remove_file(&t500rs->hdev->dev, &dev_attr_periodic_gain);
+	device_remove_file(&t500rs->hdev->dev, &dev_attr_t500rs_spring_gain);
+	device_remove_file(&t500rs->hdev->dev, &dev_attr_t500rs_damper_gain);
 
 	/* Free resources */
 	kfree(t500rs->send_buffer);
