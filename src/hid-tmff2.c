@@ -780,6 +780,15 @@ static void tmff2_remove(struct hid_device *hdev)
 	if (tmff2->params & PARAM_ALT_MODE)
 		device_remove_file(dev, &dev_attr_alternate_modes);
 
+	/* Call wheel-specific cleanup if defined */
+	if (tmff2->wheel_destroy) {
+		hid_info(hdev, "Calling wheel_destroy callback...\n");
+		tmff2->wheel_destroy(tmff2->data);
+		hid_info(hdev, "wheel_destroy callback completed\n");
+	} else {
+		hid_warn(hdev, "No wheel_destroy callback defined!\n");
+	}
+
 	kfree(tmff2);
 }
 
