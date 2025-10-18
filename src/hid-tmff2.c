@@ -476,6 +476,27 @@ static int tmff2_play(struct input_dev *dev, int effect_id, int value)
 	return 0;
 }
 
+/* Dummy callbacks for when module is being removed - prevent NULL pointer crashes */
+static int tmff2_dummy_upload(struct input_dev *dev, struct ff_effect *effect, struct ff_effect *old)
+{
+	return -ENODEV;
+}
+
+static int tmff2_dummy_playback(struct input_dev *dev, int effect_id, int value)
+{
+	return -ENODEV;
+}
+
+static void tmff2_dummy_set_gain(struct input_dev *dev, u16 gain)
+{
+	/* Do nothing */
+}
+
+static void tmff2_dummy_set_autocenter(struct input_dev *dev, u16 magnitude)
+{
+	/* Do nothing */
+}
+
 static int tmff2_open(struct input_dev *dev)
 {
 	struct tmff2_device_entry *tmff2 = tmff2_from_input(dev);
@@ -766,19 +787,20 @@ static void tmff2_remove(struct hid_device *hdev)
 
 	hid_err(hdev, "removing device\n");
 
-	/* CRITICAL FIX: Clear input device callbacks and private data to prevent stale pointers */
+	/* CRITICAL FIX: Replace callbacks with dummy functions to prevent stale pointers
+	 * We can't set them to NULL because the kernel doesn't check for NULL before calling */
 	if (tmff2->input_dev) {
 		tmff2->input_dev->open = NULL;
 		tmff2->input_dev->close = NULL;
 		input_set_drvdata(tmff2->input_dev, NULL);
 
-		/* CRITICAL FIX: Clear force feedback callbacks to prevent stale pointers */
+		/* CRITICAL FIX: Replace FF callbacks with dummy functions (not NULL!) */
 		if (tmff2->input_dev->ff) {
-			tmff2->input_dev->ff->upload = NULL;
-			tmff2->input_dev->ff->playback = NULL;
-			tmff2->input_dev->ff->set_gain = NULL;
-			tmff2->input_dev->ff->set_autocenter = NULL;
-			hid_info(hdev, "Cleared FF callbacks\n");
+			tmff2->input_dev->ff->upload = tmff2_dummy_upload;
+			tmff2->input_dev->ff->playback = tmff2_dummy_playback;
+			tmff2->input_dev->ff->set_gain = tmff2_dummy_set_gain;
+			tmff2->input_dev->ff->set_autocenter = tmff2_dummy_set_autocenter;
+			hid_info(hdev, "Replaced FF callbacks with dummy functions\n");
 		}
 
 		hid_info(hdev, "Cleared input device callbacks and private data\n");
