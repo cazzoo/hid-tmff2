@@ -771,6 +771,16 @@ static void tmff2_remove(struct hid_device *hdev)
 		tmff2->input_dev->open = NULL;
 		tmff2->input_dev->close = NULL;
 		input_set_drvdata(tmff2->input_dev, NULL);
+
+		/* CRITICAL FIX: Clear force feedback callbacks to prevent stale pointers */
+		if (tmff2->input_dev->ff) {
+			tmff2->input_dev->ff->upload = NULL;
+			tmff2->input_dev->ff->playback = NULL;
+			tmff2->input_dev->ff->set_gain = NULL;
+			tmff2->input_dev->ff->set_autocenter = NULL;
+			hid_info(hdev, "Cleared FF callbacks\n");
+		}
+
 		hid_info(hdev, "Cleared input device callbacks and private data\n");
 	}
 

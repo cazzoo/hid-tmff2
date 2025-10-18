@@ -1,0 +1,60 @@
+[   55.399233] input: Thrustmaster TRS Racing wheel as /devices/pci0000:00/0000:00:1a.0/usb1/1-1/1-1.4/1-1.4:1.0/0003:044F:B65E.000B/input/input43
+[   55.399358] sysfs: cannot create duplicate filename '/devices/pci0000:00/0000:00:1a.0/usb1/1-1/1-1.4/1-1.4:1.0/0003:044F:B65E.000B/country'
+[   55.399361] CPU: 4 PID: 5148 Comm: modprobe Tainted: P           OE      6.6.107-1-MANJARO #1 817a58fad5dd0668fe9f292579813a9e8c38bd20
+[   55.399364] Hardware name: System manufacturer System Product Name/P8Z68-V PRO, BIOS 0902 09/19/2011
+[   55.399366] Call Trace:
+[   55.399368]  <TASK>
+[   55.399371]  dump_stack_lvl+0x47/0x60
+[   55.399377]  sysfs_warn_dup+0x5a/0x70
+[   55.399381]  sysfs_add_file_mode_ns+0x118/0x130
+[   55.399384]  sysfs_create_file_ns+0x72/0xa0
+[   55.399387]  hid_connect+0x3a7/0x6a0
+[   55.399392]  hid_hw_start+0x40/0x70
+[   55.399395]  hid_device_probe+0x11e/0x1c0
+[   55.399398]  really_probe+0x19e/0x3e0
+[   55.399402]  ? __pfx___device_attach_driver+0x10/0x10
+[   55.399405]  __driver_probe_device+0x78/0x160
+[   55.399408]  driver_probe_device+0x1f/0xa0
+[   55.399411]  __device_attach_driver+0x89/0x110
+[   55.399415]  bus_for_each_drv+0x93/0xe0
+[   55.399418]  ? __pfx___bus_removed_driver+0x10/0x10
+[   55.399420]  __device_attach+0xb1/0x1c0
+[   55.399425]  bus_rescan_devices_helper+0x3c/0x90
+[   55.399427]  bus_rescan_devices+0x6f/0xc0
+[   55.399431]  bus_for_each_drv+0x93/0xe0
+[   55.399434]  __do_sys_delete_module+0x1b6/0x330
+[   55.399438]  do_syscall_64+0x5a/0x80
+[   55.399442]  ? ksys_read+0x75/0xf0
+[   55.399445]  ? syscall_exit_to_user_mode+0x27/0x50
+[   55.399448]  ? do_syscall_64+0x66/0x80
+[   55.399451]  ? __x64_sys_openat+0x62/0xa0
+[   55.399454]  ? syscall_exit_to_user_mode+0x27/0x50
+[   55.399457]  ? do_syscall_64+0x66/0x80
+[   55.399459]  ? ksys_read+0x75/0xf0
+[   55.399461]  ? __mod_memcg_lruvec_state+0x52/0xa0
+[   55.399464]  ? mod_memcg_lruvec_state+0x15/0x30
+[   55.399467]  ? mod_objcg_state+0x18a/0x2c0
+[   55.399469]  ? seq_release+0x28/0x30
+[   55.399472]  ? kmem_cache_free+0x175/0x380
+[   55.399475]  ? seq_release+0x19/0x30
+[   55.399478]  ? mntput_no_expire+0x4c/0x270
+[   55.399480]  ? kmem_cache_free+0x24/0x380
+[   55.399482]  ? __call_rcu_common+0xfb/0x730
+[   55.399485]  ? syscall_exit_to_user_mode+0x27/0x50
+[   55.399487]  ? do_syscall_64+0x66/0x80
+[   55.399490]  ? syscall_exit_to_user_mode+0x27/0x50
+[   55.399492]  ? do_syscall_64+0x66/0x80
+[   55.399495]  ? exc_page_fault+0x7f/0x180
+[   55.399498]  entry_SYSCALL_64_after_hwframe+0x78/0xe2
+[   55.399502] RIP: 0033:0x7f556e51b73b
+[   55.399520] Code: 73 01 c3 48 8b 0d d5 d5 0e 00 f7 d8 64 89 01 48 83 c8 ff c3 66 2e 0f 1f 84 00 00 00 00 00 90 f3 0f 1e fa b8 b0 00 00 00 0f 05 <48> 3d 01 f0 ff ff 73 01 c3 48 8b 0d a5 d5 0e 00 f7 d8 64 89 01 48
+[   55.399522] RSP: 002b:00007ffcce5186d8 EFLAGS: 00000206 ORIG_RAX: 00000000000000b0
+[   55.399525] RAX: ffffffffffffffda RBX: 0000555d24d91b40 RCX: 00007f556e51b73b
+[   55.399527] RDX: 0000000000000000 RSI: 0000000000000800 RDI: 0000555d24d91ba0
+[   55.399528] RBP: 00007ffcce518700 R08: 0000000000000000 R09: 0000000000000000
+[   55.399529] R10: 0000000000000000 R11: 0000000000000206 R12: 0000000000000000
+[   55.399530] R13: 00007ffcce518730 R14: 0000000000000000 R15: 0000000000000000
+[   55.399533]  </TASK>
+[   55.399556] hid-generic 0003:044F:B65E.000B: can't create sysfs country code attribute err: -17
+[   55.399559] hid-generic 0003:044F:B65E.000B: input,hidraw10: USB HID v1.11 Joystick [Thrustmaster TRS Racing wheel] on usb-0000:00:1a.0-1.4/input0
+[   57.563422] usbcore: registered new interface driver usb-thrustmaster

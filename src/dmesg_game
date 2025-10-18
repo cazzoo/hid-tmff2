@@ -1,0 +1,61 @@
+[   90.607007] hid-tmff2 0003:044F:B65E.000B: T500RS: Device opened by application (mode=1)
+[  119.349568] BUG: unable to handle page fault for address: ffffffffc802b290
+[  119.349574] #PF: supervisor instruction fetch in kernel mode
+[  119.349575] #PF: error_code(0x0010) - not-present page
+[  119.349576] PGD 212c25067 P4D 212c25067 PUD 212c27067 PMD 118ee3067 PTE 0
+[  119.349580] Oops: 0010 [#1] PREEMPT SMP PTI
+[  119.349582] CPU: 7 PID: 6549 Comm: wine_sechost_se Tainted: P           OE      6.6.107-1-MANJARO #1 817a58fad5dd0668fe9f292579813a9e8c38bd20
+[  119.349584] Hardware name: System manufacturer System Product Name/P8Z68-V PRO, BIOS 0902 09/19/2011
+[  119.349585] RIP: 0010:0xffffffffc802b290
+[  119.349602] Code: Unable to access opcode bytes at 0xffffffffc802b266.
+[  119.349603] RSP: 0018:ffffd37702383cb0 EFLAGS: 00010046
+[  119.349605] RAX: ffffffffc802b290 RBX: ffff8cdf18096808 RCX: 000000000000ffff
+[  119.349606] RDX: 0000000100ff0000 RSI: 000000000000ffff RDI: ffff8cdf29616000
+[  119.349607] RBP: 0000000000000015 R08: 000000000000ffff R09: 0000000000000003
+[  119.349608] R10: 0000000000000060 R11: 000000000000003e R12: 0000000000000060
+[  119.349608] R13: 000000000000ffff R14: ffff8cdf296161f0 R15: 0000000000000282
+[  119.349610] FS:  00000001002ff6c0(0000) GS:ffff8ce22f5c0000(0000) knlGS:000000007ffa0000
+[  119.349611] CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+[  119.349612] CR2: ffffffffc802b266 CR3: 00000000012e8004 CR4: 00000000000606e0
+[  119.349613] Call Trace:
+[  119.349615]  <TASK>
+[  119.349616]  ? input_ff_event+0x8b/0x90
+[  119.349619]  ? input_event_dispose+0x45/0x170
+[  119.349622]  ? input_inject_event+0x9b/0xa0
+[  119.349624]  ? evdev_write+0xfe/0x180
+[  119.349626]  ? vfs_write+0xec/0x440
+[  119.349628]  ? __seccomp_filter+0xdf/0x4f0
+[  119.349630]  ? __fget_light+0x98/0x110
+[  119.349632]  ? ksys_write+0xb3/0xf0
+[  119.349634]  ? do_syscall_64+0x5a/0x80
+[  119.349636]  ? _copy_from_user+0x2f/0x70
+[  119.349639]  ? __x64_sys_rt_sigprocmask+0x10a/0x160
+[  119.349642]  ? syscall_exit_to_user_mode+0x27/0x50
+[  119.349644]  ? do_syscall_64+0x66/0x80
+[  119.349646]  ? do_syscall_64+0x66/0x80
+[  119.349647]  ? exit_to_user_mode_prepare+0x142/0x240
+[  119.349650]  ? syscall_exit_to_user_mode+0x27/0x50
+[  119.349652]  ? do_syscall_64+0x66/0x80
+[  119.349653]  ? exc_page_fault+0x7f/0x180
+[  119.349655]  ? entry_SYSCALL_64_after_hwframe+0x78/0xe2
+[  119.349659]  </TASK>
+[  119.349660] Modules linked in: hid_tmff_new(OE) usb_tminit_new(OE) hid_tminit_new(OE) rfcomm snd_seq_dummy snd_hrtimer snd_seq nft_masq nft_ct nft_reject_ipv4 nf_reject_ipv4 nft_reject act_csum cls_u32 sch_htb xt_conntrack xt_MASQUERADE bridge stp llc xt_set ip_set nft_chain_nat nf_nat nf_conntrack nf_defrag_ipv6 nf_defrag_ipv4 xt_addrtype nft_compat nf_tables vboxnetadp(OE) vboxnetflt(OE) overlay vboxdrv(OE) qrtr cmac algif_hash algif_skcipher af_alg bnep uinput squashfs mousedev intel_rapl_msr snd_usb_audio snd_usbmidi_lib snd_ump intel_rapl_common snd_rawmidi snd_seq_device mc x86_pkg_temp_thermal intel_powerclamp coretemp kvm_intel btusb kvm btrtl btintel irqbypass btbcm crct10dif_pclmul btmtk crc32_pclmul polyval_clmulni polyval_generic bluetooth gf128mul snd_hda_codec_realtek ghash_clmulni_intel snd_hda_codec_ca0110 ecdh_generic snd_hda_codec_hdmi sha512_ssse3 snd_hda_codec_generic sha1_ssse3 ext4 aesni_intel eeepc_wmi asus_wmi snd_hda_intel at24 crypto_simd joydev ledtrig_audio snd_intel_dspcfg sparse_keymap
+[  119.349695]  snd_intel_sdw_acpi cryptd crc16 platform_profile snd_hda_codec mbcache iTCO_wdt i8042 rapl intel_pmc_bxt jbd2 nvidia_drm(POE) raid0 iTCO_vendor_support snd_hda_core nvidia_uvm(POE) nvidia_modeset(POE) intel_cstate i2c_i801 snd_hwdep serio snd_pcm intel_uncore rfkill mei_me wmi_bmof pcspkr i2c_smbus lpc_ich snd_timer snd e1000e soundcore mei md_mod mac_hid nvidia(POE) i2c_dev sg crypto_user dm_mod fuse loop nfnetlink bpf_preload ip_tables x_tables usbhid btrfs blake2b_generic libcrc32c crc32c_generic xor raid6_pq mxm_wmi sha256_ssse3 xhci_pci video xhci_pci_renesas wmi crc32c_intel
+[  119.349719] Unloaded tainted modules: hid_tminit_new(OE):1 hid_tmff_new(OE):1 [last unloaded: hid_tminit_new(OE)]
+[  119.349724] CR2: ffffffffc802b290
+[  119.349725] ---[ end trace 0000000000000000 ]---
+[  119.349726] RIP: 0010:0xffffffffc802b290
+[  119.349730] Code: Unable to access opcode bytes at 0xffffffffc802b266.
+[  119.349731] RSP: 0018:ffffd37702383cb0 EFLAGS: 00010046
+[  119.349732] RAX: ffffffffc802b290 RBX: ffff8cdf18096808 RCX: 000000000000ffff
+[  119.349733] RDX: 0000000100ff0000 RSI: 000000000000ffff RDI: ffff8cdf29616000
+[  119.349734] RBP: 0000000000000015 R08: 000000000000ffff R09: 0000000000000003
+[  119.349735] R10: 0000000000000060 R11: 000000000000003e R12: 0000000000000060
+[  119.349736] R13: 000000000000ffff R14: ffff8cdf296161f0 R15: 0000000000000282
+[  119.349737] FS:  00000001002ff6c0(0000) GS:ffff8ce22f5c0000(0000) knlGS:000000007ffa0000
+[  119.349738] CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+[  119.349739] CR2: ffffffffc802b266 CR3: 00000000012e8004 CR4: 00000000000606e0
+[  119.349740] note: wine_sechost_se[6549] exited with irqs disabled
+[  119.349741] note: wine_sechost_se[6549] exited with preempt_count 1
+[  157.452374] hid-tmff2 0003:044F:B65E.000B: T500RS: Device closed by application (mode=1)
+[  157.452391] hid-tmff2 0003:044F:B65E.000B: Stopping continuous force updates
