@@ -766,6 +766,13 @@ static void tmff2_remove(struct hid_device *hdev)
 
 	hid_err(hdev, "removing device\n");
 
+	/* CRITICAL FIX: Clear input device callbacks to prevent stale pointers */
+	if (tmff2->input_dev) {
+		tmff2->input_dev->open = NULL;
+		tmff2->input_dev->close = NULL;
+		hid_info(hdev, "Cleared input device open/close callbacks\n");
+	}
+
 	/* CRITICAL FIX: Remove sysfs files to prevent "duplicate filename" errors on reprobe */
 	if (tmff2->params & PARAM_GAIN)
 		device_remove_file(dev, &dev_attr_gain);
