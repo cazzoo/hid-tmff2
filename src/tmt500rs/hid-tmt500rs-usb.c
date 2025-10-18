@@ -1020,11 +1020,13 @@ static ssize_t constant_gain_show(struct device *dev,
 		struct device_attribute *attr, char *buf)
 {
 	struct hid_device *hdev = to_hid_device(dev);
-	struct t500rs_device_entry *t500rs = hid_get_drvdata(hdev);
+	struct tmff2_device_entry *tmff2 = hid_get_drvdata(hdev);
+	struct t500rs_device_entry *t500rs;
 
-	if (!t500rs)
+	if (!tmff2 || !tmff2->data)
 		return -ENODEV;
 
+	t500rs = tmff2->data;
 	return scnprintf(buf, PAGE_SIZE, "%u\n", t500rs->constant_gain);
 }
 
@@ -1032,12 +1034,15 @@ static ssize_t constant_gain_store(struct device *dev,
 		struct device_attribute *attr, const char *buf, size_t count)
 {
 	struct hid_device *hdev = to_hid_device(dev);
-	struct t500rs_device_entry *t500rs = hid_get_drvdata(hdev);
+	struct tmff2_device_entry *tmff2 = hid_get_drvdata(hdev);
+	struct t500rs_device_entry *t500rs;
 	unsigned int value;
 	int ret;
 
-	if (!t500rs)
+	if (!tmff2 || !tmff2->data)
 		return -ENODEV;
+
+	t500rs = tmff2->data;
 
 	ret = kstrtouint(buf, 0, &value);
 	if (ret) {
@@ -1061,11 +1066,13 @@ static ssize_t periodic_gain_show(struct device *dev,
 		struct device_attribute *attr, char *buf)
 {
 	struct hid_device *hdev = to_hid_device(dev);
-	struct t500rs_device_entry *t500rs = hid_get_drvdata(hdev);
+	struct tmff2_device_entry *tmff2 = hid_get_drvdata(hdev);
+	struct t500rs_device_entry *t500rs;
 
-	if (!t500rs)
+	if (!tmff2 || !tmff2->data)
 		return -ENODEV;
 
+	t500rs = tmff2->data;
 	return scnprintf(buf, PAGE_SIZE, "%u\n", t500rs->periodic_gain);
 }
 
@@ -1073,12 +1080,15 @@ static ssize_t periodic_gain_store(struct device *dev,
 		struct device_attribute *attr, const char *buf, size_t count)
 {
 	struct hid_device *hdev = to_hid_device(dev);
-	struct t500rs_device_entry *t500rs = hid_get_drvdata(hdev);
+	struct tmff2_device_entry *tmff2 = hid_get_drvdata(hdev);
+	struct t500rs_device_entry *t500rs;
 	unsigned int value;
 	int ret;
 
-	if (!t500rs)
+	if (!tmff2 || !tmff2->data)
 		return -ENODEV;
+
+	t500rs = tmff2->data;
 
 	ret = kstrtouint(buf, 0, &value);
 	if (ret) {
@@ -1102,11 +1112,13 @@ static ssize_t t500rs_spring_gain_show(struct device *dev,
 		struct device_attribute *attr, char *buf)
 {
 	struct hid_device *hdev = to_hid_device(dev);
-	struct t500rs_device_entry *t500rs = hid_get_drvdata(hdev);
+	struct tmff2_device_entry *tmff2 = hid_get_drvdata(hdev);
+	struct t500rs_device_entry *t500rs;
 
-	if (!t500rs)
+	if (!tmff2 || !tmff2->data)
 		return -ENODEV;
 
+	t500rs = tmff2->data;
 	return scnprintf(buf, PAGE_SIZE, "%u\n", t500rs->spring_gain);
 }
 
@@ -1114,12 +1126,15 @@ static ssize_t t500rs_spring_gain_store(struct device *dev,
 		struct device_attribute *attr, const char *buf, size_t count)
 {
 	struct hid_device *hdev = to_hid_device(dev);
-	struct t500rs_device_entry *t500rs = hid_get_drvdata(hdev);
+	struct tmff2_device_entry *tmff2 = hid_get_drvdata(hdev);
+	struct t500rs_device_entry *t500rs;
 	unsigned int value;
 	int ret;
 
-	if (!t500rs)
+	if (!tmff2 || !tmff2->data)
 		return -ENODEV;
+
+	t500rs = tmff2->data;
 
 	ret = kstrtouint(buf, 0, &value);
 	if (ret) {
@@ -1143,11 +1158,13 @@ static ssize_t t500rs_damper_gain_show(struct device *dev,
 		struct device_attribute *attr, char *buf)
 {
 	struct hid_device *hdev = to_hid_device(dev);
-	struct t500rs_device_entry *t500rs = hid_get_drvdata(hdev);
+	struct tmff2_device_entry *tmff2 = hid_get_drvdata(hdev);
+	struct t500rs_device_entry *t500rs;
 
-	if (!t500rs)
+	if (!tmff2 || !tmff2->data)
 		return -ENODEV;
 
+	t500rs = tmff2->data;
 	return scnprintf(buf, PAGE_SIZE, "%u\n", t500rs->damper_gain);
 }
 
@@ -1155,12 +1172,15 @@ static ssize_t t500rs_damper_gain_store(struct device *dev,
 		struct device_attribute *attr, const char *buf, size_t count)
 {
 	struct hid_device *hdev = to_hid_device(dev);
-	struct t500rs_device_entry *t500rs = hid_get_drvdata(hdev);
+	struct tmff2_device_entry *tmff2 = hid_get_drvdata(hdev);
+	struct t500rs_device_entry *t500rs;
 	unsigned int value;
 	int ret;
 
-	if (!t500rs)
+	if (!tmff2 || !tmff2->data)
 		return -ENODEV;
+
+	t500rs = tmff2->data;
 
 	ret = kstrtouint(buf, 0, &value);
 	if (ret) {
@@ -1507,21 +1527,31 @@ int t500rs_wheel_init(struct tmff2_device_entry *tmff2, int open_mode)
 	}
 
 	/* Create sysfs attributes for per-effect gains */
+	/* Note: Ignore -EEXIST errors (attribute already exists from previous init) */
+
 	ret = device_create_file(&t500rs->hdev->dev, &dev_attr_constant_gain);
-	if (ret)
+	if (ret && ret != -EEXIST)
 		hid_warn(t500rs->hdev, "Failed to create constant_gain sysfs: %d\n", ret);
+	else if (ret == 0)
+		hid_info(t500rs->hdev, "Created constant_gain sysfs attribute\n");
 
 	ret = device_create_file(&t500rs->hdev->dev, &dev_attr_periodic_gain);
-	if (ret)
+	if (ret && ret != -EEXIST)
 		hid_warn(t500rs->hdev, "Failed to create periodic_gain sysfs: %d\n", ret);
+	else if (ret == 0)
+		hid_info(t500rs->hdev, "Created periodic_gain sysfs attribute\n");
 
 	ret = device_create_file(&t500rs->hdev->dev, &dev_attr_t500rs_spring_gain);
-	if (ret)
+	if (ret && ret != -EEXIST)
 		hid_warn(t500rs->hdev, "Failed to create t500rs_spring_gain sysfs: %d\n", ret);
+	else if (ret == 0)
+		hid_info(t500rs->hdev, "Created t500rs_spring_gain sysfs attribute\n");
 
 	ret = device_create_file(&t500rs->hdev->dev, &dev_attr_t500rs_damper_gain);
-	if (ret)
+	if (ret && ret != -EEXIST)
 		hid_warn(t500rs->hdev, "Failed to create t500rs_damper_gain sysfs: %d\n", ret);
+	else if (ret == 0)
+		hid_info(t500rs->hdev, "Created t500rs_damper_gain sysfs attribute\n");
 
 	hid_info(t500rs->hdev, "T500RS initialized successfully (USB INTERRUPT mode)\n");
 	hid_info(t500rs->hdev, "Endpoint: 0x%02x, Buffer: %zu bytes\n",
@@ -1561,10 +1591,12 @@ int t500rs_wheel_destroy(void *data)
 	}
 
 	/* Remove sysfs attributes */
+	hid_info(t500rs->hdev, "Removing per-effect gain sysfs attributes...\n");
 	device_remove_file(&t500rs->hdev->dev, &dev_attr_constant_gain);
 	device_remove_file(&t500rs->hdev->dev, &dev_attr_periodic_gain);
 	device_remove_file(&t500rs->hdev->dev, &dev_attr_t500rs_spring_gain);
 	device_remove_file(&t500rs->hdev->dev, &dev_attr_t500rs_damper_gain);
+	hid_info(t500rs->hdev, "Sysfs attributes removed\n");
 
 	/* Free resources */
 	kfree(t500rs->send_buffer);
