@@ -1,0 +1,54 @@
+[  401.777929] BUG: unable to handle page fault for address: 0000000000001948
+[  401.777932] #PF: supervisor read access in kernel mode
+[  401.777933] #PF: error_code(0x0000) - not-present page
+[  401.777934] PGD 800000024f370067 P4D 800000024f370067 PUD 269454067 PMD 17e15f067 PTE 0
+[  401.777937] Oops: 0000 [#2] PREEMPT SMP PTI
+[  401.777939] CPU: 3 PID: 9741 Comm: winedevice.exe Tainted: P      D    OE      6.6.107-1-MANJARO #1 817a58fad5dd0668fe9f292579813a9e8c38bd20
+[  401.777942] Hardware name: System manufacturer System Product Name/P8Z68-V PRO, BIOS 0902 09/19/2011
+[  401.777943] RIP: 0010:tmff2_from_input+0x41/0xb0 [hid_tmff_new]
+[  401.777951] Code: cf e0 f5 48 8b 9d 98 02 00 00 48 85 db 74 44 48 89 c6 48 c7 c7 84 25 51 c8 e8 8b d0 e0 f5 48 c7 c7 84 25 51 c8 e8 bf cf e0 f5 <48> 8b ab 48 19 00 00 48 85 ed 74 3a 48 89 c6 48 c7 c7 84 25 51 c8
+[  401.777952] RSP: 0018:ffffcf7781bebba8 EFLAGS: 00010046
+[  401.777954] RAX: 0000000000000a16 RBX: 0000000000000000 RCX: 0000000000000001
+[  401.777955] RDX: 0000000000000001 RSI: ffffffffbd0b78bb RDI: ffffffffc8512584
+[  401.777956] RBP: ffff8d6d4a613800 R08: ffff8d6d01927458 R09: 0000000000000000
+[  401.777957] R10: ffff8d6c17e36000 R11: 0000000000000000 R12: ffff8d6d01927408
+[  401.777958] R13: ffff8d6b4b61c400 R14: ffff8d6c17e36038 R15: ffff8d6cd75d0a78
+[  401.777959] FS:  00000001005ff6c0(0000) GS:ffff8d6def4c0000(0000) knlGS:000000007ff70000
+[  401.777960] CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+[  401.777961] CR2: 0000000000001948 CR3: 00000001c7266003 CR4: 00000000000606e0
+[  401.777963] Call Trace:
+[  401.777964]  <TASK>
+[  401.777965]  ? input_open_device+0x6b/0xc0
+[  401.777969]  ? evdev_open+0x1db/0x210
+[  401.777971]  ? chrdev_open+0xc9/0x260
+[  401.777973]  ? __pfx_chrdev_open+0x10/0x10
+[  401.777974]  ? do_dentry_open+0x23d/0x540
+[  401.777976]  ? path_openat+0xcad/0x10c0
+[  401.777979]  ? switch_fpu_return+0x4f/0xe0
+[  401.777981]  ? do_filp_open+0xb3/0x160
+[  401.777984]  ? do_sys_openat2+0xab/0xe0
+[  401.777986]  ? __x64_sys_openat+0x62/0xa0
+[  401.777988]  ? do_syscall_64+0x5a/0x80
+[  401.777991]  ? do_syscall_64+0x66/0x80
+[  401.777992]  ? do_syscall_64+0x66/0x80
+[  401.777994]  ? do_syscall_64+0x66/0x80
+[  401.777996]  ? exc_page_fault+0x7f/0x180
+[  401.777998]  ? entry_SYSCALL_64_after_hwframe+0x78/0xe2
+[  401.778002]  </TASK>
+[  401.778002] Modules linked in: hid_tmff_new(OE) usb_tminit_new(OE) hid_tminit_new(OE) rfcomm snd_seq_dummy snd_hrtimer snd_seq nft_masq nft_ct nft_reject_ipv4 nf_reject_ipv4 nft_reject act_csum cls_u32 sch_htb xt_conntrack xt_MASQUERADE bridge stp llc xt_set ip_set nft_chain_nat nf_nat nf_conntrack nf_defrag_ipv6 nf_defrag_ipv4 xt_addrtype nft_compat nf_tables vboxnetadp(OE) vboxnetflt(OE) overlay vboxdrv(OE) qrtr cmac algif_hash algif_skcipher af_alg bnep uinput nvidia_uvm(POE) snd_usb_audio snd_usbmidi_lib snd_ump snd_rawmidi snd_seq_device mousedev mc intel_rapl_msr intel_rapl_common x86_pkg_temp_thermal intel_powerclamp coretemp kvm_intel raid0 kvm irqbypass snd_hda_codec_realtek snd_hda_codec_ca0110 joydev crct10dif_pclmul crc32_pclmul snd_hda_codec_generic polyval_clmulni snd_hda_codec_hdmi polyval_generic gf128mul btusb ext4 snd_hda_intel ghash_clmulni_intel snd_intel_dspcfg btrtl iTCO_wdt sha512_ssse3 snd_intel_sdw_acpi at24 btintel intel_pmc_bxt nvidia_drm(POE) sha1_ssse3 iTCO_vendor_support btbcm
+[  401.778036]  snd_hda_codec mbcache aesni_intel nvidia_modeset(POE) btmtk snd_hda_core squashfs jbd2 eeepc_wmi crypto_simd bluetooth asus_wmi cryptd ledtrig_audio snd_hwdep rapl sparse_keymap snd_pcm platform_profile intel_cstate intel_uncore i8042 snd_timer ecdh_generic serio mei_me i2c_i801 crc16 snd rfkill pcspkr i2c_smbus wmi_bmof lpc_ich e1000e soundcore mei md_mod mac_hid nvidia(POE) i2c_dev sg crypto_user dm_mod fuse loop nfnetlink bpf_preload ip_tables x_tables usbhid btrfs blake2b_generic libcrc32c crc32c_generic xor raid6_pq mxm_wmi sha256_ssse3 xhci_pci xhci_pci_renesas video wmi crc32c_intel
+[  401.778061] Unloaded tainted modules: hid_tminit_new(OE):1 usb_tminit_new(OE):1 hid_tmff_new(OE):2 [last unloaded: hid_tminit_new(OE)]
+[  401.778066] CR2: 0000000000001948
+[  401.778067] ---[ end trace 0000000000000000 ]---
+[  401.778068] RIP: 0010:0xffffffffc760f0f0
+[  401.778084] Code: Unable to access opcode bytes at 0xffffffffc760f0c6.
+[  401.778084] RSP: 0018:ffffcf778ace3b08 EFLAGS: 00010286
+[  401.778086] RAX: ffffffffc760f0f0 RBX: 0000000000000000 RCX: 0000000000000001
+[  401.778087] RDX: 0000000000000001 RSI: ffff8d6ac4144c58 RDI: ffff8d6ac84c9000
+[  401.778088] RBP: ffff8d6ac84c9000 R08: ffff8d6ac4144c58 R09: 0000000000000000
+[  401.778089] R10: ffff8d6cb240e000 R11: 0000000000000000 R12: ffff8d6ac4144c08
+[  401.778089] R13: ffff8d6b3a7ced00 R14: ffff8d6cb240e038 R15: ffff8d6ac2df1ab8
+[  401.778090] FS:  00000001005ff6c0(0000) GS:ffff8d6def4c0000(0000) knlGS:000000007ff70000
+[  401.778092] CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+[  401.778093] CR2: ffffffffc760f0c6 CR3: 00000001c7266003 CR4: 00000000000606e0
+[  401.778094] note: winedevice.exe[9741] exited with irqs disabled

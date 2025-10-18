@@ -766,11 +766,12 @@ static void tmff2_remove(struct hid_device *hdev)
 
 	hid_err(hdev, "removing device\n");
 
-	/* CRITICAL FIX: Clear input device callbacks to prevent stale pointers */
+	/* CRITICAL FIX: Clear input device callbacks and private data to prevent stale pointers */
 	if (tmff2->input_dev) {
 		tmff2->input_dev->open = NULL;
 		tmff2->input_dev->close = NULL;
-		hid_info(hdev, "Cleared input device open/close callbacks\n");
+		input_set_drvdata(tmff2->input_dev, NULL);
+		hid_info(hdev, "Cleared input device callbacks and private data\n");
 	}
 
 	/* CRITICAL FIX: Remove sysfs files to prevent "duplicate filename" errors on reprobe */
@@ -795,6 +796,9 @@ static void tmff2_remove(struct hid_device *hdev)
 	} else {
 		hid_warn(hdev, "No wheel_destroy callback defined!\n");
 	}
+
+	/* Clear hid device private data before freeing */
+	hid_set_drvdata(hdev, NULL);
 
 	kfree(tmff2);
 }
