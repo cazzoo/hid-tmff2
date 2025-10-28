@@ -832,6 +832,10 @@ static void tmff2_remove(struct hid_device *hdev)
 	/* Clear hid device private data before freeing */
 	hid_set_drvdata(hdev, NULL);
 
+	/* CRITICAL FIX: Stop HID hardware to properly cleanup USB device structures */
+	hid_hw_stop(hdev);
+	hid_info(hdev, "HID hardware stopped\n");
+
 	kfree(tmff2);
 }
 
