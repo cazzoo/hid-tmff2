@@ -40,18 +40,34 @@ Steam Input can block direct FFB access. **This is the most common fix.**
 5. Uncheck **"Generic Gamepad Configuration Support"**
 6. **Restart Steam**
 
-### Solution 2: Set SDL2 Environment Variables
+### Solution 2: Set SDL2 Environment Variables (CRITICAL FOR T500RS)
 
-Add these to the game's launch options in Steam:
+**RECOMMENDED LAUNCH OPTIONS for T500RS:**
 
 ```bash
-SDL_JOYSTICK_HIDAPI=0 SDL_JOYSTICK_RAWINPUT=0 %command%
+SDL_JOYSTICK_DEVICE=/dev/input/event31 %command%
+```
+
+**Replace `event31` with your wheel's event device number!** Find it with:
+```bash
+cat /proc/bus/input/devices | grep -A 5 "Thrustmaster"
+# Look for the line: H: Handlers=event31 js1
 ```
 
 **How to set:**
 1. Right-click game in Steam
 2. **Properties** → **General**
 3. **Launch Options**: Add the above line
+
+**Why this works:**
+- **Bypasses js0/js1 conflicts** - Some systems have multiple joystick devices (e.g., "Mouse passthrough") that confuse games
+- **Direct event device access** - SDL2 uses the event device directly, avoiding joystick device conflicts
+- **All axes work** - Steering wheel AND pedals are detected correctly
+
+**Alternative (if above doesn't work):**
+```bash
+SDL_JOYSTICK_HIDAPI=0 SDL_JOYSTICK_RAWINPUT=0 %command%
+```
 
 **What this does:**
 - `SDL_JOYSTICK_HIDAPI=0` - Disables SDL2's HIDAPI backend (use evdev instead)
@@ -187,9 +203,40 @@ Some Proton versions have better FFB support:
 ### Solution 10: Game-Specific Fixes
 
 #### Automobilista 2
-- **Known issue**: Sometimes needs game restart after changing FFB settings
-- **Fix**: Set FFB settings, exit completely, restart game
-- **Alternative**: Delete `Documents/Automobilista 2/` config folder and reconfigure
+
+**CRITICAL: Device Detection Issue**
+- **Problem**: Wheel and pedals detected, but **no force feedback** (wheel turns freely)
+- **Cause**: AMS2 may not properly detect FFB capabilities through Proton/SDL2
+- **Solution**: Adjust in-game FFB settings to force enable effects
+
+**Step-by-Step Fix:**
+
+1. **Launch the game** with correct launch options: `SDL_JOYSTICK_DEVICE=/dev/input/eventXX %command%`
+
+2. **Go to Options → Controls & Calibration**
+
+3. **Force Feedback Settings** (CRITICAL):
+   - **FFB Effects Level**: **100%** (must be 100% or FFB won't work!)
+   - **Master Scale**: **100%** (start here, adjust later)
+   - **FX Scale**: **100%**
+   - **Low Force Boost**: **20-30%** (helps with detail on T500RS)
+   - **Smoothing**: **0-5%** (too much kills detail)
+
+4. **Advanced FFB Settings** (if available):
+   - **Enable all effect types** (Spring, Damper, Friction, etc.)
+   - **Tire Force**: **100%**
+   - **Suspension Force**: **100%**
+
+5. **SAVE and EXIT the game completely**
+
+6. **Restart the game** - FFB should now work!
+
+**If still no FFB:**
+- Delete config folder: `~/.steam/steam/steamapps/compatdata/1066890/pfx/drive_c/users/steamuser/Documents/Automobilista 2/`
+- Restart game and reconfigure from scratch
+- Make sure **Steam Input is DISABLED** for the game
+
+**Known issue**: AMS2 sometimes needs game restart after changing FFB settings
 
 #### Assetto Corsa Competizione
 - **Enable "Enhanced Understeer Effect"** in FFB settings
@@ -249,8 +296,9 @@ PROTON_LOG=1 %command%
 
 For Automobilista 2 (or any Proton racing game):
 
+- [ ] **Find your event device number**: `cat /proc/bus/input/devices | grep -A 5 "Thrustmaster"`
 - [ ] **Disable Steam Input** for the game
-- [ ] **Add launch options**: `SDL_JOYSTICK_HIDAPI=0 %command%`
+- [ ] **Add launch options**: `SDL_JOYSTICK_DEVICE=/dev/input/eventXX %command%` (replace XX)
 - [ ] **Verify udev rules** are installed
 - [ ] **Check in-game FFB settings** are enabled and at 100%
 - [ ] **Test with fftest** to confirm driver works

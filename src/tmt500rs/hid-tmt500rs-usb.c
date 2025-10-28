@@ -55,6 +55,10 @@ struct t500rs_device_entry {
 	bool force_timer_active;
 	bool device_active;  /* Set to false during destruction to prevent new work */
 
+	/* Timer debugging */
+	unsigned long timer_start_jiffies;  /* When the timer was started */
+	unsigned long force_update_count;   /* Number of force updates sent */
+
 	/* Gain settings (0-65535 range, where 65535 = 100%) */
 	u16 device_gain;  /* Device-level master gain (set via sysfs) */
 	u16 game_gain;    /* In-game gain (set dynamically by game via set_gain callback) */
@@ -164,10 +168,14 @@ static void t500rs_force_update_work(struct work_struct *work)
 		return;
 	}
 
-	/* Get current force level */
+	/* Get current force level and update counter */
 	spin_lock_irqsave(&t500rs->force_lock, flags);
 	level = t500rs->current_force_level;
+	t500rs->force_update_count++;
 	spin_unlock_irqrestore(&t500rs->force_lock, flags);
+
+	/* Calculate elapsed time since timer started */
+	unsigned long elapsed_ms = jiffies_to_msecs(jiffies - t500rs->timer_start_jiffies);
 
 	/* Send Report 0x03 - Force level */
 	buf[0] = 0x03;
@@ -175,7 +183,8 @@ static void t500rs_force_update_work(struct work_struct *work)
 	buf[2] = 0x00;
 	buf[3] = (u8)level;
 
-	hid_info(t500rs->hdev, "Force update: sending level=%d (0x%02x)\n", level, buf[3]);
+	hid_info(t500rs->hdev, "Force update #%lu (elapsed: %lu ms): sending level=%d (0x%02x)\n",
+		 t500rs->force_update_count, elapsed_ms, level, buf[3]);
 	t500rs_send_usb(t500rs, buf, 4);
 }
 
@@ -216,7 +225,11 @@ static void t500rs_start_force_timer(struct t500rs_device_entry *t500rs, s8 forc
 	spin_lock_irqsave(&t500rs->force_lock, flags);
 	t500rs->current_force_level = force_level;
 	t500rs->force_timer_active = true;
+	t500rs->timer_start_jiffies = jiffies;
+	t500rs->force_update_count = 0;
 	spin_unlock_irqrestore(&t500rs->force_lock, flags);
+
+	hid_info(t500rs->hdev, "🚀 Starting force timer with level=%d\n", force_level);
 
 	/* Start timer (20ms = 50Hz) */
 	mod_timer(&t500rs->force_timer, jiffies + msecs_to_jiffies(20));
@@ -226,11 +239,24 @@ static void t500rs_start_force_timer(struct t500rs_device_entry *t500rs, s8 forc
 static void t500rs_stop_force_timer(struct t500rs_device_entry *t500rs)
 {
 	unsigned long flags;
+	unsigned long elapsed_ms;
+	unsigned long update_count;
+	bool was_active;
 
 	if (!t500rs)
 		return;
 
-	hid_info(t500rs->hdev, "Stopping continuous force updates\n");
+	spin_lock_irqsave(&t500rs->force_lock, flags);
+	was_active = t500rs->force_timer_active;
+	spin_unlock_irqrestore(&t500rs->force_lock, flags);
+
+	/* Only log stats if timer was actually running */
+	if (was_active && t500rs->timer_start_jiffies != 0) {
+		elapsed_ms = jiffies_to_msecs(jiffies - t500rs->timer_start_jiffies);
+		update_count = t500rs->force_update_count;
+		hid_info(t500rs->hdev, "🛑 Stopping force timer after %lu updates in %lu ms\n",
+			 update_count, elapsed_ms);
+	}
 
 	spin_lock_irqsave(&t500rs->force_lock, flags);
 	t500rs->force_timer_active = false;
@@ -392,6 +418,43 @@ static int t500rs_upload_constant(struct t500rs_device_entry *t500rs,
 	}
 
 	hid_info(t500rs->hdev, "✅ Constant effect %d uploaded (simple sequence)\n", effect->id);
+
+	/* CRITICAL FIX FOR AMS2: Always update the force level when uploading.
+	 * AMS2 calls stop/upload/play in rapid succession, so the timer might be
+	 * stopped when upload is called. We update the force level here so that
+	 * when play_effect starts the timer, it will use the correct force value.
+	 */
+	{
+		s8 signed_level;
+		s32 scaled;
+
+		/* Scale to -127..127 (signed 8-bit range) with minimum threshold
+		 * to preserve small forces. If input is non-zero, output is at least ±15.
+		 * This matches Windows driver behavior where very weak forces are amplified.
+		 * AMS2 sends level=-1 after ~10s which needs to be amplified to be feelable.
+		 */
+		if (level == 0) {
+			signed_level = 0;
+		} else {
+			scaled = (level * 127) / 32767;
+			if (scaled >= -14 && scaled <= 14 && scaled != 0) {
+				/* Amplify very small forces to minimum feelable level */
+				signed_level = (level > 0) ? 15 : -15;
+			} else if (scaled == 0) {
+				/* Preserve sign for extremely small forces */
+				signed_level = (level > 0) ? 15 : -15;
+			} else {
+				signed_level = (s8)scaled;
+			}
+		}
+
+		hid_info(t500rs->hdev, "Updating force level for next play: %d -> %d (0x%02x)\n",
+			 level, signed_level, (u8)signed_level);
+
+		/* Update the force level (will be used when timer starts/restarts) */
+		t500rs_update_force_level(t500rs, signed_level);
+	}
+
 	return 0;
 }
 
@@ -736,20 +799,22 @@ int t500rs_play_effect(void *data, struct tmff2_effect_state *state)
 
 	/* For constant force, start continuous force updates */
 	if (effect->type == FF_CONSTANT) {
-		int level = effect->u.constant.level;
 		s8 signed_level;
+		unsigned long flags;
 
 		/* NOTE: Gain is now sent to device via Report 0x43 in set_gain() */
 		/* No need to apply gain here - the device handles it */
 
-		hid_info(t500rs->hdev, "Constant force: level=%d\n", level);
+		/* CRITICAL FIX FOR AMS2: Use the force level that was set by upload_effect.
+		 * AMS2 calls stop/upload/play in rapid succession, so upload_effect has
+		 * already calculated and stored the correct force level in current_force_level.
+		 */
+		spin_lock_irqsave(&t500rs->force_lock, flags);
+		signed_level = t500rs->current_force_level;
+		spin_unlock_irqrestore(&t500rs->force_lock, flags);
 
-		/* Scale to -127..127 (signed 8-bit range) */
-		/* Note: level is signed 16-bit (-32767 to 32767) */
-		signed_level = (s8)((level * 127) / 32767);
-
-		hid_info(t500rs->hdev, "Scaled force level: %d -> %d (0x%02x)\n",
-			 level, signed_level, (u8)signed_level);
+		hid_info(t500rs->hdev, "Constant force: using level=%d (0x%02x) from upload_effect\n",
+			 signed_level, (u8)signed_level);
 
 		/* CRITICAL: Send Report 0x03 BEFORE Report 0x41! */
 		/* This matches the working userspace driver sequence */
@@ -782,6 +847,7 @@ int t500rs_play_effect(void *data, struct tmff2_effect_state *state)
 
 		/* T500RS requires CONTINUOUS force updates at 50Hz! */
 		/* Start the force update timer which will send Report 0x03 every 20ms */
+		/* The timer will use current_force_level which was set by upload_effect */
 		t500rs_start_force_timer(t500rs, signed_level);
 
 		return 0;
@@ -834,10 +900,58 @@ int t500rs_stop_effect(void *data, struct tmff2_effect_state *state)
 	return ret;
 }
 
-/* Update effect - just re-upload */
+/* Update effect - re-upload and update force level if constant force */
 int t500rs_update_effect(void *data, struct tmff2_effect_state *state)
 {
-	return t500rs_upload_effect(data, state);
+	struct t500rs_device_entry *t500rs = data;
+	struct ff_effect *effect = &state->effect;
+	int ret;
+
+	if (!t500rs)
+		return -ENODEV;
+
+	/* Re-upload the effect */
+	ret = t500rs_upload_effect(data, state);
+	if (ret)
+		return ret;
+
+	/* CRITICAL FIX: If this is a constant force effect and the timer is active,
+	 * update the force level being sent to the wheel.
+	 * AMS2 calls update_effect() repeatedly to change force strength during gameplay.
+	 */
+	if (effect->type == FF_CONSTANT && t500rs->force_timer_active) {
+		int level = effect->u.constant.level;
+		s8 signed_level;
+		s32 scaled;
+
+		/* Scale to -127..127 (signed 8-bit range) with minimum threshold
+		 * to preserve small forces. If input is non-zero, output is at least ±15.
+		 * This matches Windows driver behavior where very weak forces are amplified.
+		 * AMS2 sends level=-1 after ~10s which needs to be amplified to be feelable.
+		 */
+		if (level == 0) {
+			signed_level = 0;
+		} else {
+			scaled = (level * 127) / 32767;
+			if (scaled >= -14 && scaled <= 14 && scaled != 0) {
+				/* Amplify very small forces to minimum feelable level */
+				signed_level = (level > 0) ? 15 : -15;
+			} else if (scaled == 0) {
+				/* Preserve sign for extremely small forces */
+				signed_level = (level > 0) ? 15 : -15;
+			} else {
+				signed_level = (s8)scaled;
+			}
+		}
+
+		hid_info(t500rs->hdev, "Update constant force: level=%d -> %d (0x%02x)\n",
+			 level, signed_level, (u8)signed_level);
+
+		/* Update the force level that the timer will send */
+		t500rs_update_force_level(t500rs, signed_level);
+	}
+
+	return 0;
 }
 
 /* Set gain - called dynamically by games during gameplay */

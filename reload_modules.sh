@@ -104,12 +104,24 @@ sleep 3
 echo -e "${GREEN}  ✓ Done${NC}"
 echo ""
 
-# Step 6: Load main driver
-echo -e "${YELLOW}[6/6] Loading main driver...${NC}"
-modprobe hid_tmff_new && echo -e "${GREEN}  ✓ hid_tmff_new loaded${NC}" || {
-    echo -e "${RED}  ✗ Failed to load hid_tmff_new${NC}"
+# Step 6: Load main driver (from local build directory)
+echo -e "${YELLOW}[6/6] Loading main driver from local build...${NC}"
+
+# Get the directory where this script is located
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+
+# Load the locally built module
+if [ -f "$SCRIPT_DIR/hid_tmff_new.ko" ]; then
+    echo "  - Loading $SCRIPT_DIR/hid_tmff_new.ko"
+    insmod "$SCRIPT_DIR/hid_tmff_new.ko" && echo -e "${GREEN}  ✓ hid_tmff_new loaded from local build${NC}" || {
+        echo -e "${RED}  ✗ Failed to load hid_tmff_new${NC}"
+        exit 1
+    }
+else
+    echo -e "${RED}  ✗ Module not found: $SCRIPT_DIR/hid_tmff_new.ko${NC}"
+    echo "  Run 'make' first to build the module"
     exit 1
-}
+fi
 echo ""
 
 # Show loaded modules
