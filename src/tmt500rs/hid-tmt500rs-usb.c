@@ -248,6 +248,8 @@ static void t500rs_stop_force_timer(struct t500rs_device_entry *t500rs)
 
 	spin_lock_irqsave(&t500rs->force_lock, flags);
 	was_active = t500rs->force_timer_active;
+	t500rs->force_timer_active = false;
+	t500rs->current_force_level = 0;
 	spin_unlock_irqrestore(&t500rs->force_lock, flags);
 
 	/* Only log stats if timer was actually running */
@@ -258,13 +260,14 @@ static void t500rs_stop_force_timer(struct t500rs_device_entry *t500rs)
 			 update_count, elapsed_ms);
 	}
 
-	spin_lock_irqsave(&t500rs->force_lock, flags);
-	t500rs->force_timer_active = false;
-	t500rs->current_force_level = 0;
-	spin_unlock_irqrestore(&t500rs->force_lock, flags);
+	/* Stop the timer - this is safe from any context */
+	del_timer(&t500rs->force_timer);
 
-	del_timer_sync(&t500rs->force_timer);
-	cancel_work_sync(&t500rs->force_work);
+	/* Only cancel work if we're NOT being called from the work handler itself
+	 * to avoid "scheduling while atomic" bug */
+	if (!in_interrupt() && !in_atomic()) {
+		cancel_work_sync(&t500rs->force_work);
+	}
 }
 
 /* Update force level (called from play_effect) */
@@ -428,24 +431,15 @@ static int t500rs_upload_constant(struct t500rs_device_entry *t500rs,
 		s8 signed_level;
 		s32 scaled;
 
-		/* Scale to -127..127 (signed 8-bit range) with minimum threshold
-		 * to preserve small forces. If input is non-zero, output is at least ±15.
-		 * This matches Windows driver behavior where very weak forces are amplified.
-		 * AMS2 sends level=-1 after ~10s which needs to be amplified to be feelable.
+		/* Scale to -127..127 (signed 8-bit range)
+		 * Apply deadzone: forces below ±2000 (6% of max) are treated as zero.
+		 * This matches game intent - very small forces like -1 are "almost zero".
 		 */
-		if (level == 0) {
+		if (level >= -2000 && level <= 2000) {
 			signed_level = 0;
 		} else {
 			scaled = (level * 127) / 32767;
-			if (scaled >= -14 && scaled <= 14 && scaled != 0) {
-				/* Amplify very small forces to minimum feelable level */
-				signed_level = (level > 0) ? 15 : -15;
-			} else if (scaled == 0) {
-				/* Preserve sign for extremely small forces */
-				signed_level = (level > 0) ? 15 : -15;
-			} else {
-				signed_level = (s8)scaled;
-			}
+			signed_level = (s8)scaled;
 		}
 
 		hid_info(t500rs->hdev, "Updating force level for next play: %d -> %d (0x%02x)\n",
@@ -924,24 +918,15 @@ int t500rs_update_effect(void *data, struct tmff2_effect_state *state)
 		s8 signed_level;
 		s32 scaled;
 
-		/* Scale to -127..127 (signed 8-bit range) with minimum threshold
-		 * to preserve small forces. If input is non-zero, output is at least ±15.
-		 * This matches Windows driver behavior where very weak forces are amplified.
-		 * AMS2 sends level=-1 after ~10s which needs to be amplified to be feelable.
+		/* Scale to -127..127 (signed 8-bit range)
+		 * Apply deadzone: forces below ±2000 (6% of max) are treated as zero.
+		 * This matches game intent - very small forces like -1 are "almost zero".
 		 */
-		if (level == 0) {
+		if (level >= -2000 && level <= 2000) {
 			signed_level = 0;
 		} else {
 			scaled = (level * 127) / 32767;
-			if (scaled >= -14 && scaled <= 14 && scaled != 0) {
-				/* Amplify very small forces to minimum feelable level */
-				signed_level = (level > 0) ? 15 : -15;
-			} else if (scaled == 0) {
-				/* Preserve sign for extremely small forces */
-				signed_level = (level > 0) ? 15 : -15;
-			} else {
-				signed_level = (s8)scaled;
-			}
+			signed_level = (s8)scaled;
 		}
 
 		hid_info(t500rs->hdev, "Update constant force: level=%d -> %d (0x%02x)\n",
