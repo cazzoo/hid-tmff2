@@ -40,6 +40,17 @@ static bool t500rs_send_42_05_after_start;
 module_param(t500rs_send_42_05_after_start, bool, 0644);
 MODULE_PARM_DESC(t500rs_send_42_05_after_start, "Send 0x42 0x05 immediately after 0x41 START");
 
+/* Logging verbosity (0=minimal, 1=verbose) */
+static int t500rs_log_level;
+module_param(t500rs_log_level, int, 0644);
+MODULE_PARM_DESC(t500rs_log_level, "Log level: 0=minimal (default), 1=verbose");
+
+/* Debug logging helper (requires local variable named 't500rs') */
+#define T500RS_DBG(fmt, ...) do { \
+	if (t500rs_log_level > 0) \
+		hid_info(t500rs->hdev, fmt, ##__VA_ARGS__); \
+} while (0)
+
 /* Work item for USB transfers */
 struct t500rs_work_item {
 	struct work_struct work;
@@ -200,7 +211,7 @@ static void t500rs_force_update_work(struct work_struct *work)
 	 * Re-uploading the effect (Reports 0x02 and 0x01) seems to reset this timeout.
 	 */
 	if (t500rs->force_update_count % 250 == 0) {  /* Every 5 seconds (250 * 20ms) */
-		hid_info(t500rs->hdev, "⚠️ Re-uploading effect to keep T500RS alive (elapsed: %lu ms)\n", elapsed_ms);
+		T500RS_DBG("Re-uploading effect to keep T500RS alive (elapsed: %lu ms)\n", elapsed_ms);
 
 		/* Report 0x02 - Envelope */
 		memset(buf, 0, 15);
@@ -235,7 +246,7 @@ static void t500rs_force_update_work(struct work_struct *work)
 	buf[2] = 0x00;
 	buf[3] = (u8)level;
 
-	hid_info(t500rs->hdev, "Force update #%lu (elapsed: %lu ms): sending level=%d (0x%02x)\n",
+	T500RS_DBG("Force update #%lu (elapsed: %lu ms): level=%d (0x%02x)\n",
 		 t500rs->force_update_count, elapsed_ms, level, buf[3]);
 	t500rs_send_usb(t500rs, buf, 4);
 }
@@ -272,7 +283,7 @@ static void t500rs_start_force_timer(struct t500rs_device_entry *t500rs, s8 forc
 	if (!t500rs)
 		return;
 
-	hid_info(t500rs->hdev, "Starting continuous force updates at 50Hz, level=%d\n", force_level);
+	T500RS_DBG("Starting continuous force updates at 50Hz, level=%d\n", force_level);
 
 	spin_lock_irqsave(&t500rs->force_lock, flags);
 	t500rs->current_force_level = force_level;
@@ -281,7 +292,7 @@ static void t500rs_start_force_timer(struct t500rs_device_entry *t500rs, s8 forc
 	t500rs->force_update_count = 0;
 	spin_unlock_irqrestore(&t500rs->force_lock, flags);
 
-	hid_info(t500rs->hdev, "🚀 Starting force timer with level=%d\n", force_level);
+	T500RS_DBG("Starting force timer with level=%d\n", force_level);
 
 	/* Start timer (20ms = 50Hz) */
 	mod_timer(&t500rs->force_timer, jiffies + msecs_to_jiffies(20));
@@ -308,7 +319,7 @@ static void t500rs_stop_force_timer(struct t500rs_device_entry *t500rs)
 	if (was_active && t500rs->timer_start_jiffies != 0) {
 		elapsed_ms = jiffies_to_msecs(jiffies - t500rs->timer_start_jiffies);
 		update_count = t500rs->force_update_count;
-		hid_info(t500rs->hdev, "🛑 Stopping force timer after %lu updates in %lu ms\n",
+		T500RS_DBG("Stopping force timer after %lu updates in %lu ms\n",
 			 update_count, elapsed_ms);
 	}
 
@@ -432,7 +443,7 @@ static int t500rs_upload_constant(struct t500rs_device_entry *t500rs,
 
 	/* Note: Gain is applied in play_effect, not here */
 
-	hid_info(t500rs->hdev, "Upload constant: id=%d, level=%d\n",
+	T500RS_DBG("Upload constant: id=%d, level=%d\n",
 		 effect->id, level);
 
 	/* NO DEADZONE - Send all forces exactly as requested, matching Windows behavior */
@@ -443,7 +454,7 @@ static int t500rs_upload_constant(struct t500rs_device_entry *t500rs,
 	buf[0] = 0x02;
 	buf[1] = 0x1c;  /* Subtype 0x1c */
 	buf[2] = 0x00;
-	hid_info(t500rs->hdev, "Sending Report 0x02 (envelope)...\n");
+	T500RS_DBG("Sending Report 0x02 (envelope)...\n");
 	ret = t500rs_send_usb(t500rs, buf, 9);
 	if (ret) {
 		hid_err(t500rs->hdev, "Failed to send Report 0x02: %d\n", ret);
@@ -467,14 +478,14 @@ static int t500rs_upload_constant(struct t500rs_device_entry *t500rs,
 	buf[12] = 0x00;
 	buf[13] = 0x00;
 	buf[14] = 0x00;
-	hid_info(t500rs->hdev, "Sending Report 0x01 (duration/control)...\n");
+	T500RS_DBG("Sending Report 0x01 (duration/control)...\n");
 	ret = t500rs_send_usb(t500rs, buf, 15);
 	if (ret) {
 		hid_err(t500rs->hdev, "Failed to send Report 0x01: %d\n", ret);
 		return ret;
 	}
 
-	hid_info(t500rs->hdev, "✅ Constant effect %d uploaded (simple sequence)\n", effect->id);
+	T500RS_DBG("Constant effect %d uploaded (simple sequence)\n", effect->id);
 
 	/* CRITICAL FIX FOR AMS2: Always update the force level when uploading.
 	 * AMS2 calls stop/upload/play in rapid succession, so the timer might be
@@ -492,7 +503,7 @@ static int t500rs_upload_constant(struct t500rs_device_entry *t500rs,
 		scaled = (level * 127) / 32767;
 		signed_level = (s8)scaled;
 
-		hid_info(t500rs->hdev, "Upload constant: id=%d, level=%d -> %d (0x%02x)\n",
+		T500RS_DBG("Upload constant: id=%d, level=%d -> %d (0x%02x)\n",
 			 effect->id, level, signed_level, (u8)signed_level);
 
 		/* Update the force level (will be used when timer starts/restarts) */
@@ -508,18 +519,18 @@ static int t500rs_upload_constant(struct t500rs_device_entry *t500rs,
 		__active = t500rs->force_timer_active;
 		spin_unlock_irqrestore(&t500rs->force_lock, __fl);
 		if (!__active && buf) {
-			hid_info(t500rs->hdev, "Auto-arm constant on upload: priming level=0 and sending START\n");
+			T500RS_DBG("Auto-arm constant on upload: priming level=0 and sending START\n");
 			/* Prime level 0 */
 			buf[0] = 0x03; buf[1] = 0x0e; buf[2] = 0x00; buf[3] = 0x00;
 			(void)t500rs_send_usb(t500rs, buf, 4);
 			/* Send START (EffectID=0) */
 			buf[0] = 0x41; buf[1] = 0x00; buf[2] = 0x41; buf[3] = 0x01;
-			hid_info(t500rs->hdev, "Sending Report 0x41 (START): %02x %02x %02x %02x\n",
+			T500RS_DBG("Sending Report 0x41 (START): %02x %02x %02x %02x\n",
 				buf[0], buf[1], buf[2], buf[3]);
 			(void)t500rs_send_usb(t500rs, buf, 4);
 			/* Optional: send 0x42 0x05 after START (param) */
 			if (t500rs_send_42_05_after_start) {
-				hid_info(t500rs->hdev, "Sending Report 0x42 0x05 (post-START)\n");
+				T500RS_DBG("Sending Report 0x42 0x05 (post-START)\n");
 				buf[0] = 0x42; buf[1] = 0x05;
 				(void)t500rs_send_usb(t500rs, buf, 2);
 			}
@@ -872,7 +883,7 @@ int t500rs_play_effect(void *data, struct tmff2_effect_state *state)
 	/* For constant force, start continuous force updates */
 			/* Optional: send 0x42 0x05 immediately after START to mirror Windows captures */
 			if (t500rs_send_42_05_after_start) {
-				hid_info(t500rs->hdev, "Sending Report 0x42 0x05 (post-START)\n");
+				T500RS_DBG("Sending Report 0x42 0x05 (post-START)\n");
 				u8 apply_buf[2] = {0x42, 0x05};
 				(void)t500rs_send_usb(t500rs, apply_buf, 2);
 			}
@@ -903,12 +914,12 @@ int t500rs_play_effect(void *data, struct tmff2_effect_state *state)
 				__active = t500rs->force_timer_active;
 				spin_unlock_irqrestore(&t500rs->force_lock, __fl);
 				if (__active) {
-					hid_info(t500rs->hdev, "Constant already armed; skipping 0x41 START\n");
+					T500RS_DBG("Constant already armed; skipping 0x41 START\n");
 					return 0;
 				}
 			}
 
-		hid_info(t500rs->hdev, "Constant force: using level=%d (0x%02x) from upload_effect\n",
+		T500RS_DBG("Constant force: using level=%d (0x%02x) from upload_effect\n",
 			 signed_level, (u8)signed_level);
 
 		/* CRITICAL: Send Report 0x03 BEFORE Report 0x41! */
@@ -918,7 +929,7 @@ int t500rs_play_effect(void *data, struct tmff2_effect_state *state)
 		buf[2] = 0x00;
 		buf[3] = (u8)signed_level;
 
-		hid_info(t500rs->hdev, "Sending Report 0x03 (force level): level=%d (0x%02x)\n",
+		T500RS_DBG("Sending Report 0x03 (force level): level=%d (0x%02x)\n",
 			 signed_level, (u8)signed_level);
 		ret = t500rs_send_usb(t500rs, buf, 4);
 		if (ret) {
@@ -933,7 +944,7 @@ int t500rs_play_effect(void *data, struct tmff2_effect_state *state)
 		buf[2] = 0x41;  /* START command */
 		buf[3] = 0x01;
 
-		hid_info(t500rs->hdev, "Sending Report 0x41 (START): %02x %02x %02x %02x\n",
+		T500RS_DBG("Sending Report 0x41 (START): %02x %02x %02x %02x\n",
 			buf[0], buf[1], buf[2], buf[3]);
 		ret = t500rs_send_usb(t500rs, buf, 4);
 		if (ret) {
@@ -957,7 +968,7 @@ int t500rs_play_effect(void *data, struct tmff2_effect_state *state)
 	buf[2] = 0x41;  /* START command */
 	buf[3] = 0x01;
 
-	hid_info(t500rs->hdev, "Sending START command (EffectID=0) for effect %d\n", effect->id);
+	T500RS_DBG("Sending START command (EffectID=0) for effect %d\n", effect->id);
 	return t500rs_send_usb(t500rs, buf, 4);
 }
 
@@ -992,9 +1003,9 @@ int t500rs_stop_effect(void *data, struct tmff2_effect_state *state)
 			/* Zero the force and keep streaming (if active) */
 			t500rs_update_force_level(t500rs, 0);
 			if (was_active)
-				hid_info(t500rs->hdev, "Soft-stop constant: zeroing force, keeping timer active\n");
+				T500RS_DBG("Soft-stop constant: zeroing force, keeping timer active\n");
 			else
-				hid_info(t500rs->hdev, "Soft-stop constant: timer not active, nothing to stop\n");
+				T500RS_DBG("Soft-stop constant: timer not active, nothing to stop\n");
 			return 0;
 		} else {
 			/* Windows-style: stop timer and send STOP (0x41 00 00 01) */
@@ -1003,10 +1014,10 @@ int t500rs_stop_effect(void *data, struct tmff2_effect_state *state)
 			buf[1] = 0x00;
 			buf[2] = 0x00;  /* STOP command */
 			buf[3] = 0x01;
-			hid_info(t500rs->hdev, "Sending Report 0x41 (STOP): %02x %02x %02x %02x\n",
+			T500RS_DBG("Sending Report 0x41 (STOP): %02x %02x %02x %02x\n",
 				buf[0], buf[1], buf[2], buf[3]);
 			ret = t500rs_send_usb(t500rs, buf, 4);
-			hid_info(t500rs->hdev, "Stop effect (constant) returned: %d\n", ret);
+			T500RS_DBG("Stop effect (constant) returned: %d\n", ret);
 			return ret;
 		}
 	}
@@ -1020,7 +1031,7 @@ int t500rs_stop_effect(void *data, struct tmff2_effect_state *state)
 	buf[3] = 0x01;
 
 	ret = t500rs_send_usb(t500rs, buf, 4);
-	hid_info(t500rs->hdev, "Stop effect (non-constant) returned: %d\n", ret);
+	T500RS_DBG("Stop effect (non-constant) returned: %d\n", ret);
 	return ret;
 }
 
@@ -1052,7 +1063,7 @@ int t500rs_update_effect(void *data, struct tmff2_effect_state *state)
 		scaled = (level * 127) / 32767;
 		signed_level = (s8)scaled;
 
-		hid_info(t500rs->hdev, "Update constant force: level=%d -> %d (0x%02x)\n",
+		T500RS_DBG("Update constant force: level=%d -> %d (0x%02x)\n",
 			 level, signed_level, (u8)signed_level);
 
 		/* Update the force level state */
@@ -1062,14 +1073,14 @@ int t500rs_update_effect(void *data, struct tmff2_effect_state *state)
 			/* Timer running: next tick will send updated level */
 		} else if (t500rs_autostart_on_update && signed_level != 0) {
 			/* Auto-start: game updated magnitude while stopped (optional) */
-			hid_info(t500rs->hdev, "Auto-start constant force on non-zero update while stopped (level=%d)\n",
+			T500RS_DBG("Auto-start constant force on non-zero update while stopped (level=%d)\n",
 				 signed_level);
 			/* Prime with one 0x03, then START */
 			if (buf) {
 				buf[0] = 0x03; buf[1] = 0x0e; buf[2] = 0x00; buf[3] = (u8)signed_level;
 				t500rs_send_usb(t500rs, buf, 4);
 				buf[0] = 0x41; buf[1] = 0x00; buf[2] = 0x41; buf[3] = 0x01;
-				hid_info(t500rs->hdev, "Sending Report 0x41 (START): %02x %02x %02x %02x\n",
+				T500RS_DBG("Sending Report 0x41 (START): %02x %02x %02x %02x\n",
 					buf[0], buf[1], buf[2], buf[3]);
 				t500rs_send_usb(t500rs, buf, 4);
 				if (t500rs_send_42_05_after_start) { buf[0]=0x42; buf[1]=0x05; t500rs_send_usb(t500rs, buf, 2); }
@@ -1104,7 +1115,7 @@ int t500rs_set_gain(void *data, u16 gain)
 	/* Convert to device range (0-127, where 127 = 100%) */
 	device_gain_byte = (u8)((combined_gain * 127) / 65535);
 
-	hid_info(t500rs->hdev, "Set gain: game=%u (%u%%), device=%u (%u%%), combined=%u (%u%%), sending=0x%02x\n",
+	T500RS_DBG("Set gain: game=%u (%u%%), device=%u (%u%%), combined=%u (%u%%), sending=0x%02x\n",
 		 gain, (gain * 100) / 65535,
 		 t500rs->device_gain, (t500rs->device_gain * 100) / 65535,
 		 combined_gain, (combined_gain * 100) / 65535,

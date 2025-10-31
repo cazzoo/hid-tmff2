@@ -112,8 +112,8 @@ SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 
 # Load the locally built module
 if [ -f "$SCRIPT_DIR/hid_tmff_new.ko" ]; then
-    echo "  - Loading $SCRIPT_DIR/hid_tmff_new.ko"
-    insmod "$SCRIPT_DIR/hid_tmff_new.ko" && echo -e "${GREEN}  ✓ hid_tmff_new loaded from local build${NC}" || {
+    echo "  - Loading $SCRIPT_DIR/hid_tmff_new.ko with params: $*"
+    insmod "$SCRIPT_DIR/hid_tmff_new.ko" "$@" && echo -e "${GREEN}  ✓ hid_tmff_new loaded from local build${NC}" || {
         echo -e "${RED}  ✗ Failed to load hid_tmff_new${NC}"
         exit 1
     }
