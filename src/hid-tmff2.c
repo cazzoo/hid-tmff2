@@ -445,8 +445,6 @@ static int tmff2_play(struct input_dev *dev, int effect_id, int value)
 	if (!tmff2)
 		return -ENODEV;
 
-	hid_info(tmff2->hdev, "tmff2_play: effect_id=%d, value=%d\n", effect_id, value);
-
 	state = &tmff2->states[effect_id];
 	if (!state)
 		return 0;
@@ -457,11 +455,9 @@ static int tmff2_play(struct input_dev *dev, int effect_id, int value)
 		state->start_time = JIFFIES2MS(jiffies);
 		__set_bit(FF_EFFECT_QUEUE_START, &state->flags);
 		__clear_bit(FF_EFFECT_QUEUE_STOP, &state->flags);
-		hid_info(tmff2->hdev, "tmff2_play: Set FF_EFFECT_QUEUE_START for effect %d\n", effect_id);
 	} else {
 		__set_bit(FF_EFFECT_QUEUE_STOP, &state->flags);
 		__clear_bit(FF_EFFECT_QUEUE_START, &state->flags);
-		hid_info(tmff2->hdev, "tmff2_play: Set FF_EFFECT_QUEUE_STOP for effect %d\n", effect_id);
 	}
 
 	spin_unlock_irqrestore(&tmff2->lock, lock_flags);

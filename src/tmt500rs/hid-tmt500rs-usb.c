@@ -143,7 +143,7 @@ static void t500rs_work_handler(struct work_struct *work)
 	}
 
 	/* DEBUG: Log what we're sending */
-	hid_info(t500rs->hdev, "USB TX [%zu]: %02x %02x %02x %02x %02x %02x %02x %02x\n",
+	T500RS_DBG("USB TX [%zu]: %02x %02x %02x %02x %02x %02x %02x %02x\n",
 		 item->len,
 		 item->len > 0 ? item->data[0] : 0,
 		 item->len > 1 ? item->data[1] : 0,
@@ -168,7 +168,7 @@ static void t500rs_work_handler(struct work_struct *work)
 		hid_warn(t500rs->hdev, "USB transfer incomplete: %d/%zu bytes\n",
 			 transferred, item->len);
 	} else {
-		hid_info(t500rs->hdev, "USB transfer OK: %d bytes\n", transferred);
+		T500RS_DBG("USB transfer OK: %d bytes\n", transferred);
 	}
 
 	/* Store result and signal completion */
@@ -393,7 +393,7 @@ static int t500rs_send_usb_blocking(struct t500rs_device_entry *t500rs, const u8
 	}
 
 	/* DEBUG: Log what we're sending */
-	hid_info(t500rs->hdev, "INIT USB TX [%zu]: %02x %02x %02x %02x %02x %02x %02x %02x\n",
+	T500RS_DBG("INIT USB TX [%zu]: %02x %02x %02x %02x %02x %02x %02x %02x\n",
 		 len,
 		 len > 0 ? data[0] : 0,
 		 len > 1 ? data[1] : 0,
@@ -420,7 +420,7 @@ static int t500rs_send_usb_blocking(struct t500rs_device_entry *t500rs, const u8
 		return -EIO;
 	}
 
-	hid_info(t500rs->hdev, "INIT USB transfer OK: %d bytes\n", transferred);
+	T500RS_DBG("INIT USB transfer OK: %d bytes\n", transferred);
 	return 0;
 }
 
@@ -587,7 +587,7 @@ static int t500rs_upload_condition(struct t500rs_device_entry *t500rs,
 	right_strength = (right_strength * 127) / 65535;
 	left_strength = (left_strength * 127) / 65535;
 
-	hid_info(t500rs->hdev, "Upload condition: id=%d, type=0x%02x, gain=%u%%, R=%d, L=%d\n",
+	T500RS_DBG("Upload condition: id=%d, type=0x%02x, gain=%u%%, R=%d, L=%d\n",
 		 effect->id, effect_type, effect_gain, right_strength, left_strength);
 
 	/* Report 0x05 - Condition parameters (coefficients) */
@@ -702,7 +702,7 @@ static int t500rs_upload_periodic(struct t500rs_device_entry *t500rs,
 		period = 100;
 	}
 
-	hid_info(t500rs->hdev, "Upload %s: id=%d, magnitude=%d (0x%02x), period=%dms\n",
+	T500RS_DBG("Upload %s: id=%d, magnitude=%d (0x%02x), period=%dms\n",
 		 type_name, effect->id, magnitude, mag, period);
 
 	/* Report 0x02 - Envelope */
@@ -755,7 +755,7 @@ static int t500rs_upload_periodic(struct t500rs_device_entry *t500rs,
 		return ret;
 	}
 
-	hid_info(t500rs->hdev, "✅ %s effect %d uploaded\n", type_name, effect->id);
+	T500RS_DBG("%s effect %d uploaded\n", type_name, effect->id);
 	return 0;
 }
 
@@ -778,7 +778,7 @@ static int t500rs_upload_ramp(struct t500rs_device_entry *t500rs,
 	/* Scale to 0-255 */
 	start_scaled = (abs(start_level) * 0xff) / 32767;
 
-	hid_info(t500rs->hdev, "Upload ramp: id=%d, start=%d, end=%d, duration=%dms\n",
+	T500RS_DBG("Upload ramp: id=%d, start=%d, end=%d, duration=%dms\n",
 		 effect->id, start_level, end_level, duration_ms);
 
 	/* Report 0x02 - Envelope */
@@ -833,7 +833,7 @@ static int t500rs_upload_ramp(struct t500rs_device_entry *t500rs,
 		return ret;
 	}
 
-	hid_info(t500rs->hdev, "✅ Ramp effect %d uploaded (simple mode)\n", effect->id);
+	T500RS_DBG("Ramp effect %d uploaded (simple mode)\n", effect->id);
 	return 0;
 }
 
@@ -874,7 +874,7 @@ int t500rs_play_effect(void *data, struct tmff2_effect_state *state)
 	if (!t500rs)
 		return -ENODEV;
 
-	hid_info(t500rs->hdev, "Play effect: id=%d, type=0x%02x (FF_CONSTANT=0x%02x)\n",
+	T500RS_DBG("Play effect: id=%d, type=0x%02x (FF_CONSTANT=0x%02x)\n",
 		 effect->id, effect->type, FF_CONSTANT);
 
 	/* NOTE: Condition effect disable code removed - testing Hypothesis 6 */
@@ -990,7 +990,7 @@ int t500rs_stop_effect(void *data, struct tmff2_effect_state *state)
 		return -ENOMEM;
 	}
 
-	hid_info(t500rs->hdev, "Stop effect: id=%d, type=%d\n", state->effect.id, state->effect.type);
+	T500RS_DBG("Stop effect: id=%d, type=%d\n", state->effect.id, state->effect.type);
 
 	/* For constant force: either SOFT-STOP (param) or Windows-style STOP */
 	if (state->effect.type == FF_CONSTANT) {
@@ -1148,7 +1148,7 @@ int t500rs_set_autocenter(void *data, u16 autocenter)
 	/* Convert from 0-65535 range to 0-100 percentage */
 	autocenter_percent = (u8)((autocenter * 100) / 65535);
 
-	hid_info(t500rs->hdev, "Set autocenter: %u%% (value=%u)\n",
+	T500RS_DBG("Set autocenter: %u%% (value=%u)\n",
 		 autocenter_percent, autocenter);
 
 	/* Allocate separate buffer to avoid conflicts with FFB operations */
@@ -1170,7 +1170,7 @@ int t500rs_set_autocenter(void *data, u16 autocenter)
 			kfree(buf);
 			return ret;
 		}
-		hid_info(t500rs->hdev, "Autocenter disabled\n");
+		T500RS_DBG("Autocenter disabled\n");
 	} else {
 		/* Enable autocenter: Report 0x40 0x04 0x01 */
 		buf[0] = 0x40;
@@ -1199,7 +1199,7 @@ int t500rs_set_autocenter(void *data, u16 autocenter)
 			return ret;
 		}
 
-		hid_info(t500rs->hdev, "Autocenter enabled at %u%%\n", autocenter_percent);
+		T500RS_DBG("Autocenter enabled at %u%%\n", autocenter_percent);
 	}
 
 	/* Apply settings: Report 0x42 0x05 */
@@ -1228,11 +1228,11 @@ int t500rs_set_range(void *data, u16 range)
 
 	/* Clamp range to valid values */
 	if (range < 270) {
-		hid_info(t500rs->hdev, "Range %u too small, clamping to 270\n", range);
+		hid_warn(t500rs->hdev, "Range %u too small, clamping to 270\n", range);
 		range = 270;
 	}
 	if (range > 1080) {
-		hid_info(t500rs->hdev, "Range %u too large, clamping to 1080\n", range);
+		hid_warn(t500rs->hdev, "Range %u too large, clamping to 1080\n", range);
 		range = 1080;
 	}
 
@@ -1243,7 +1243,7 @@ int t500rs_set_range(void *data, u16 range)
 		return -ENOMEM;
 	}
 
-	hid_info(t500rs->hdev, "Setting wheel range to %u degrees\n", range);
+	T500RS_DBG("Setting wheel range to %u degrees\n", range);
 
 	/* Based on USB captures and Windows driver analysis:
 	 * Report 0x42 0x05 appears after range changes
@@ -1263,7 +1263,7 @@ int t500rs_set_range(void *data, u16 range)
 
 	kfree(buf);
 
-	hid_info(t500rs->hdev, "Range set to %u degrees\n", range);
+	T500RS_DBG("Range set to %u degrees\n", range);
 	return 0;
 }
 
@@ -1309,7 +1309,7 @@ static ssize_t constant_gain_store(struct device *dev,
 	}
 
 	t500rs->constant_gain = (u8)value;
-	hid_info(hdev, "Constant gain set to %u%%\n", value);
+	hid_dbg(hdev, "Constant gain set to %u%%\n", value);
 
 	return count;
 }
@@ -1355,7 +1355,7 @@ static ssize_t periodic_gain_store(struct device *dev,
 	}
 
 	t500rs->periodic_gain = (u8)value;
-	hid_info(hdev, "Periodic gain set to %u%%\n", value);
+	hid_dbg(hdev, "Periodic gain set to %u%%\n", value);
 
 	return count;
 }
@@ -1401,7 +1401,7 @@ static ssize_t t500rs_spring_gain_store(struct device *dev,
 	}
 
 	t500rs->spring_gain = (u8)value;
-	hid_info(hdev, "Spring gain set to %u%%\n", value);
+	hid_dbg(hdev, "Spring gain set to %u%%\n", value);
 
 	return count;
 }
@@ -1447,7 +1447,7 @@ static ssize_t t500rs_damper_gain_store(struct device *dev,
 	}
 
 	t500rs->damper_gain = (u8)value;
-	hid_info(hdev, "Damper gain set to %u%%\n", value);
+	hid_dbg(hdev, "Damper gain set to %u%%\n", value);
 
 	return count;
 }
@@ -1461,7 +1461,7 @@ int t500rs_open(void *data, int open_mode)
 	if (!t500rs)
 		return -ENODEV;
 
-	hid_info(t500rs->hdev, "T500RS: Device opened by application (mode=%d)\n", open_mode);
+	T500RS_DBG("T500RS: Device opened by application (mode=%d)\n", open_mode);
 
 	/* CRITICAL: Flush work queue to prevent deadlock with usbhid_open() */
 	/* The work queue may be trying to send USB data while usbhid is opening */
@@ -1483,7 +1483,7 @@ int t500rs_close(void *data, int open_mode)
 	if (!t500rs)
 		return -ENODEV;
 
-	hid_info(t500rs->hdev, "T500RS: Device closed by application (mode=%d)\n", open_mode);
+	T500RS_DBG("T500RS: Device closed by application (mode=%d)\n", open_mode);
 
 	/* Stop any ongoing force effects */
 	t500rs_stop_force_timer(t500rs);
@@ -1513,7 +1513,7 @@ int t500rs_wheel_init(struct tmff2_device_entry *tmff2, int open_mode)
 		return -EINVAL;
 	}
 
-	hid_info(tmff2->hdev, "T500RS: Initializing USB INTERRUPT mode\n");
+	hid_dbg(tmff2->hdev, "T500RS: Initializing USB INTERRUPT mode\n");
 
 	/* Allocate device data */
 	t500rs = kzalloc(sizeof(*t500rs), GFP_KERNEL);
@@ -1556,7 +1556,7 @@ int t500rs_wheel_init(struct tmff2_device_entry *tmff2, int open_mode)
 	ep = &t500rs->usbif->cur_altsetting->endpoint[1];
 	t500rs->ep_out = ep->desc.bEndpointAddress;
 
-	hid_info(t500rs->hdev, "Found INTERRUPT OUT endpoint: 0x%02x\n", t500rs->ep_out);
+	T500RS_DBG("Found INTERRUPT OUT endpoint: 0x%02x\n", t500rs->ep_out);
 
 	/* Allocate send buffer */
 	t500rs->buffer_length = T500RS_BUFFER_LENGTH;
@@ -1605,7 +1605,7 @@ int t500rs_wheel_init(struct tmff2_device_entry *tmff2, int open_mode)
 	init_buf = t500rs->send_buffer;
 
 	/* Send initialization sequence (from userspace driver) */
-	hid_info(t500rs->hdev, "Sending initialization sequence...\n");
+	T500RS_DBG("Sending initialization sequence...\n");
 
 	/* Report 0x42 - Init (15 bytes) */
 	memset(init_buf, 0, 15);
@@ -1776,7 +1776,7 @@ int t500rs_wheel_init(struct tmff2_device_entry *tmff2, int open_mode)
 	if (ret) {
 		hid_warn(t500rs->hdev, "Stop autocenter effect failed: %d\n", ret);
 	} else {
-		hid_info(t500rs->hdev, "Autocenter fully disabled\n");
+		T500RS_DBG("Autocenter fully disabled\n");
 	}
 
 	/* Create sysfs attributes for per-effect gains */
@@ -1786,28 +1786,28 @@ int t500rs_wheel_init(struct tmff2_device_entry *tmff2, int open_mode)
 	if (ret && ret != -EEXIST)
 		hid_warn(t500rs->hdev, "Failed to create constant_gain sysfs: %d\n", ret);
 	else if (ret == 0)
-		hid_info(t500rs->hdev, "Created constant_gain sysfs attribute\n");
+		T500RS_DBG("Created constant_gain sysfs attribute\n");
 
 	ret = device_create_file(&t500rs->hdev->dev, &dev_attr_periodic_gain);
 	if (ret && ret != -EEXIST)
 		hid_warn(t500rs->hdev, "Failed to create periodic_gain sysfs: %d\n", ret);
 	else if (ret == 0)
-		hid_info(t500rs->hdev, "Created periodic_gain sysfs attribute\n");
+		T500RS_DBG("Created periodic_gain sysfs attribute\n");
 
 	ret = device_create_file(&t500rs->hdev->dev, &dev_attr_t500rs_spring_gain);
 	if (ret && ret != -EEXIST)
 		hid_warn(t500rs->hdev, "Failed to create t500rs_spring_gain sysfs: %d\n", ret);
 	else if (ret == 0)
-		hid_info(t500rs->hdev, "Created t500rs_spring_gain sysfs attribute\n");
+		T500RS_DBG("Created t500rs_spring_gain sysfs attribute\n");
 
 	ret = device_create_file(&t500rs->hdev->dev, &dev_attr_t500rs_damper_gain);
 	if (ret && ret != -EEXIST)
 		hid_warn(t500rs->hdev, "Failed to create t500rs_damper_gain sysfs: %d\n", ret);
 	else if (ret == 0)
-		hid_info(t500rs->hdev, "Created t500rs_damper_gain sysfs attribute\n");
+		T500RS_DBG("Created t500rs_damper_gain sysfs attribute\n");
 
 	hid_info(t500rs->hdev, "T500RS initialized successfully (USB INTERRUPT mode)\n");
-	hid_info(t500rs->hdev, "Endpoint: 0x%02x, Buffer: %zu bytes\n",
+	T500RS_DBG("Endpoint: 0x%02x, Buffer: %zu bytes\n",
 		 t500rs->ep_out, t500rs->buffer_length);
 
 	return 0;
@@ -1829,7 +1829,7 @@ int t500rs_wheel_destroy(void *data)
 	if (!t500rs)
 		return 0;
 
-	hid_info(t500rs->hdev, "T500RS: Cleaning up\n");
+	T500RS_DBG("T500RS: Cleaning up\n");
 
 	/* CRITICAL: Mark device as inactive to prevent new work from being queued */
 	t500rs->device_active = false;
@@ -1844,12 +1844,12 @@ int t500rs_wheel_destroy(void *data)
 	}
 
 	/* Remove sysfs attributes */
-	hid_info(t500rs->hdev, "Removing per-effect gain sysfs attributes...\n");
+	T500RS_DBG("Removing per-effect gain sysfs attributes...\n");
 	device_remove_file(&t500rs->hdev->dev, &dev_attr_constant_gain);
 	device_remove_file(&t500rs->hdev->dev, &dev_attr_periodic_gain);
 	device_remove_file(&t500rs->hdev->dev, &dev_attr_t500rs_spring_gain);
 	device_remove_file(&t500rs->hdev->dev, &dev_attr_t500rs_damper_gain);
-	hid_info(t500rs->hdev, "Sysfs attributes removed\n");
+	T500RS_DBG("Sysfs attributes removed\n");
 
 	/* Free resources */
 	kfree(t500rs->send_buffer);
