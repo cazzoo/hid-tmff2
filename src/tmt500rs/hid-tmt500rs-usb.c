@@ -519,6 +519,7 @@ static int t500rs_upload_constant(struct t500rs_device_entry *t500rs,
 			(void)t500rs_send_usb(t500rs, buf, 4);
 			/* Optional: send 0x42 0x05 after START (param) */
 			if (t500rs_send_42_05_after_start) {
+				hid_info(t500rs->hdev, "Sending Report 0x42 0x05 (post-START)\n");
 				buf[0] = 0x42; buf[1] = 0x05;
 				(void)t500rs_send_usb(t500rs, buf, 2);
 			}
@@ -871,6 +872,7 @@ int t500rs_play_effect(void *data, struct tmff2_effect_state *state)
 	/* For constant force, start continuous force updates */
 			/* Optional: send 0x42 0x05 immediately after START to mirror Windows captures */
 			if (t500rs_send_42_05_after_start) {
+				hid_info(t500rs->hdev, "Sending Report 0x42 0x05 (post-START)\n");
 				u8 apply_buf[2] = {0x42, 0x05};
 				(void)t500rs_send_usb(t500rs, apply_buf, 2);
 			}
