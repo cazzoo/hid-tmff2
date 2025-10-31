@@ -97,6 +97,9 @@ struct tmff2_device_entry {
 	ssize_t (*alt_mode_show)(void *data, char *buf);
 	ssize_t (*alt_mode_store)(void *data, const char *buf, size_t count);
 	int (*set_autocenter)(void *data, uint16_t autocenter);
+	int (*set_spring_level)(void *data, uint8_t level);
+	int (*set_damper_level)(void *data, uint8_t level);
+	int (*set_friction_level)(void *data, uint8_t level);
 	__u8 *(*wheel_fixup)(struct hid_device *hdev, __u8 *rdesc, unsigned int *rsize);
 
 	/* void pointers are dangerous, I know, but in this case likely the

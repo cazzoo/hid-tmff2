@@ -107,6 +107,7 @@ static const signed short t500rs_effects[] = {
 	FF_PERIODIC,
 	FF_RAMP,
 	FF_GAIN,
+	FF_AUTOCENTER,
 	-1
 };
 
@@ -1070,8 +1071,10 @@ int t500rs_set_autocenter(void *data, u16 autocenter)
 	T500RS_DBG("Set autocenter: %u%% (value=%u)\n",
 		 autocenter_percent, autocenter);
 
-	/* Allocate separate buffer to avoid conflicts with FFB operations */
-	buf = kzalloc(t500rs->buffer_length, GFP_KERNEL);
+	/* Allocate separate buffer to avoid conflicts with FFB operations
+	 * Use GFP_ATOMIC because this can be called from atomic context
+	 * (input_ff_event holds spinlocks) */
+	buf = kzalloc(t500rs->buffer_length, GFP_ATOMIC);
 	if (!buf) {
 		hid_err(t500rs->hdev, "Failed to allocate buffer for autocenter\n");
 		return -ENOMEM;
@@ -1103,8 +1106,9 @@ int t500rs_set_autocenter(void *data, u16 autocenter)
 			return ret;
 		}
 
-		/* Small delay to ensure enable command is processed */
-		usleep_range(5000, 6000);
+		/* NOTE: Removed usleep_range() here - cannot sleep in atomic context!
+		 * This function is called from input_ff_event() which holds spinlocks.
+		 * The USB subsystem handles queuing properly without explicit delays. */
 
 		/* Set autocenter strength: Report 0x40 0x03 [value] */
 		buf[0] = 0x40;
@@ -1155,8 +1159,10 @@ int t500rs_set_range(void *data, u16 range)
 		range = 1080;
 	}
 
-	/* Allocate separate buffer to avoid conflicts with FFB operations */
-	buf = kzalloc(t500rs->buffer_length, GFP_KERNEL);
+	/* Allocate separate buffer to avoid conflicts with FFB operations
+	 * Use GFP_ATOMIC because this can be called from atomic context
+	 * (though currently only called from probe/sysfs, being safe) */
+	buf = kzalloc(t500rs->buffer_length, GFP_ATOMIC);
 	if (!buf) {
 		hid_err(t500rs->hdev, "Failed to allocate buffer for range setting\n");
 		return -ENOMEM;
@@ -1183,6 +1189,69 @@ int t500rs_set_range(void *data, u16 range)
 	kfree(buf);
 
 	T500RS_DBG("Range set to %u degrees\n", range);
+	return 0;
+}
+
+/* Set spring level (0-100) - called from sysfs */
+int t500rs_set_spring_level(void *data, u8 level)
+{
+	struct t500rs_device_entry *t500rs = data;
+
+	if (!t500rs)
+		return -ENODEV;
+
+	/* Clamp to valid range */
+	if (level > 100)
+		level = 100;
+
+	/* Update the spring gain setting */
+	t500rs->spring_gain = level;
+
+	T500RS_DBG("Spring level set to %u%%\n", level);
+
+	/* Note: The new level will be applied when the next spring effect is uploaded/updated */
+	return 0;
+}
+
+/* Set damper level (0-100) - called from sysfs */
+int t500rs_set_damper_level(void *data, u8 level)
+{
+	struct t500rs_device_entry *t500rs = data;
+
+	if (!t500rs)
+		return -ENODEV;
+
+	/* Clamp to valid range */
+	if (level > 100)
+		level = 100;
+
+	/* Update the damper gain setting */
+	t500rs->damper_gain = level;
+
+	T500RS_DBG("Damper level set to %u%%\n", level);
+
+	/* Note: The new level will be applied when the next damper effect is uploaded/updated */
+	return 0;
+}
+
+/* Set friction level (0-100) - called from sysfs */
+int t500rs_set_friction_level(void *data, u8 level)
+{
+	struct t500rs_device_entry *t500rs = data;
+
+	if (!t500rs)
+		return -ENODEV;
+
+	/* Clamp to valid range */
+	if (level > 100)
+		level = 100;
+
+	/* Update the friction gain setting */
+	t500rs->friction_gain = level;
+
+	T500RS_DBG("Friction level set to %u%%\n", level);
+
+	/* Note: The new level will be applied when the next friction effect is uploaded/updated */
 	return 0;
 }
 
@@ -1790,6 +1859,9 @@ int t500rs_populate_api(struct tmff2_device_entry *tmff2)
 	tmff2->set_gain = t500rs_set_gain;
 	tmff2->set_autocenter = t500rs_set_autocenter;
 	tmff2->set_range = t500rs_set_range;
+	tmff2->set_spring_level = t500rs_set_spring_level;
+	tmff2->set_damper_level = t500rs_set_damper_level;
+	tmff2->set_friction_level = t500rs_set_friction_level;
 
 	tmff2->wheel_init = t500rs_wheel_init;
 	tmff2->wheel_destroy = t500rs_wheel_destroy;
