@@ -1172,21 +1172,20 @@ int t500rs_set_range(void *data, u16 range)
 	T500RS_DBG("Setting wheel range to %u degrees\n", range);
 
 	/* Based on USB capture analysis of "changed_rotation_angle_from_900_to_200_degrees.pcapng":
-	 * The T500RS uses Report 0x40 0x11 [value_lo] [value_hi] to set rotation range
+	 * The T500RS uses Report 0x40 0x11 [value_hi] [value_lo] to set rotation range
 	 *
-	 * Observed values from capture:
-	 * - 900° → 0xf6d2 (63186 decimal)
-	 * - 200° → 0xa13d (41277 decimal)
+	 * Observed values from capture (BIG-ENDIAN byte order):
+	 * - 900° → 0xf6d2 (63186 decimal) → bytes: 40 11 f6 d2
+	 * - 200° → 0xa13d (41277 decimal) → bytes: 40 11 a1 3d
 	 *
-	 * Linear interpolation formula:
-	 * value = 41277 + ((range - 200) * (63186 - 41277)) / (900 - 200)
-	 * value = 41277 + ((range - 200) * 21909) / 700
-	 * value = 41277 + ((range - 200) * 31.3) approximately
+	 * Linear regression formula:
+	 * slope = (63186 - 41277) / (900 - 200) = 21909 / 700 = 31.298571
+	 * intercept = 41277 - (200 * 31.298571) = 35017.285714
 	 *
-	 * Simplified: value ≈ 34997 + (range * 31.3)
-	 * More accurate: value = 35000 + (range * 31)  (integer math)
+	 * Formula: value = 35017 + (range * 31.3)
+	 * Integer approximation: value = 35017 + ((range * 313) / 10)
 	 */
-	range_value = 35000 + (range * 31);
+	range_value = 35017 + ((range * 313) / 10);
 
 	/* Send Report 0x40 0x11 [value_hi] [value_lo] to set range
 	 * NOTE: This uses BIG-ENDIAN byte order (high byte first)! */
