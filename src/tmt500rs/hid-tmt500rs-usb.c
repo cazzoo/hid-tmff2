@@ -1188,11 +1188,12 @@ int t500rs_set_range(void *data, u16 range)
 	 */
 	range_value = 35000 + (range * 31);
 
-	/* Send Report 0x40 0x11 [value_lo] [value_hi] to set range */
+	/* Send Report 0x40 0x11 [value_hi] [value_lo] to set range
+	 * NOTE: This uses BIG-ENDIAN byte order (high byte first)! */
 	buf[0] = 0x40;
 	buf[1] = 0x11;
-	buf[2] = range_value & 0xFF;        /* Low byte */
-	buf[3] = (range_value >> 8) & 0xFF; /* High byte */
+	buf[2] = (range_value >> 8) & 0xFF; /* High byte first (big-endian) */
+	buf[3] = range_value & 0xFF;        /* Low byte second */
 
 	ret = t500rs_send_usb(t500rs, buf, 4);
 	if (ret) {
