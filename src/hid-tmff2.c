@@ -87,6 +87,7 @@ static struct tmff2_device_entry *tmff2_from_input(struct input_dev *input_dev)
 static ssize_t spring_level_store(struct device *dev,
 		struct device_attribute *attr, const char *buf, size_t count)
 {
+	struct tmff2_device_entry *tmff2 = tmff2_from_hdev(to_hid_device(dev));
 	unsigned int value;
 	int ret;
 
@@ -103,6 +104,13 @@ static ssize_t spring_level_store(struct device *dev,
 
 	spring_level = value;
 
+	/* Apply immediately to hardware if device supports it */
+	if (tmff2 && tmff2->set_spring_level) {
+		ret = tmff2->set_spring_level(tmff2->data, value);
+		if (ret)
+			return ret;
+	}
+
 	return count;
 }
 
@@ -116,6 +124,7 @@ static DEVICE_ATTR_RW(spring_level);
 static ssize_t damper_level_store(struct device *dev,
 		struct device_attribute *attr, const char *buf, size_t count)
 {
+	struct tmff2_device_entry *tmff2 = tmff2_from_hdev(to_hid_device(dev));
 	unsigned int value;
 	int ret;
 
@@ -133,6 +142,13 @@ static ssize_t damper_level_store(struct device *dev,
 
 	damper_level = value;
 
+	/* Apply immediately to hardware if device supports it */
+	if (tmff2 && tmff2->set_damper_level) {
+		ret = tmff2->set_damper_level(tmff2->data, value);
+		if (ret)
+			return ret;
+	}
+
 	return count;
 }
 
@@ -146,6 +162,7 @@ static DEVICE_ATTR_RW(damper_level);
 static ssize_t friction_level_store(struct device *dev,
 		struct device_attribute *attr, const char *buf, size_t count)
 {
+	struct tmff2_device_entry *tmff2 = tmff2_from_hdev(to_hid_device(dev));
 	unsigned int value;
 	int ret;
 
@@ -162,6 +179,13 @@ static ssize_t friction_level_store(struct device *dev,
 	}
 
 	friction_level = value;
+
+	/* Apply immediately to hardware if device supports it */
+	if (tmff2 && tmff2->set_friction_level) {
+		ret = tmff2->set_friction_level(tmff2->data, value);
+		if (ret)
+			return ret;
+	}
 
 	return count;
 }

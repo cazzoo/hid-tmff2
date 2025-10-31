@@ -84,6 +84,9 @@ struct t500rs_device_entry {
 	u8 friction_gain;  /* Friction effects gain */
 	u8 inertia_gain;   /* Inertia effects gain */
 
+	/* Current wheel range for smooth transitions */
+	u16 current_range;  /* Current rotation range in degrees */
+
 	int (*open)(struct input_dev *dev);
 	void (*close)(struct input_dev *dev);
 };
@@ -107,6 +110,7 @@ static const signed short t500rs_effects[] = {
 	FF_PERIODIC,
 	FF_RAMP,
 	FF_GAIN,
+	FF_AUTOCENTER,
 	-1
 };
 
@@ -1070,8 +1074,10 @@ int t500rs_set_autocenter(void *data, u16 autocenter)
 	T500RS_DBG("Set autocenter: %u%% (value=%u)\n",
 		 autocenter_percent, autocenter);
 
-	/* Allocate separate buffer to avoid conflicts with FFB operations */
-	buf = kzalloc(t500rs->buffer_length, GFP_KERNEL);
+	/* Allocate separate buffer to avoid conflicts with FFB operations
+	 * Use GFP_ATOMIC because this can be called from atomic context
+	 * (input_ff_event holds spinlocks) */
+	buf = kzalloc(t500rs->buffer_length, GFP_ATOMIC);
 	if (!buf) {
 		hid_err(t500rs->hdev, "Failed to allocate buffer for autocenter\n");
 		return -ENOMEM;
@@ -1103,8 +1109,9 @@ int t500rs_set_autocenter(void *data, u16 autocenter)
 			return ret;
 		}
 
-		/* Small delay to ensure enable command is processed */
-		usleep_range(5000, 6000);
+		/* NOTE: Removed usleep_range() here - cannot sleep in atomic context!
+		 * This function is called from input_ff_event() which holds spinlocks.
+		 * The USB subsystem handles queuing properly without explicit delays. */
 
 		/* Set autocenter strength: Report 0x40 0x03 [value] */
 		buf[0] = 0x40;
@@ -1135,28 +1142,29 @@ int t500rs_set_autocenter(void *data, u16 autocenter)
 	return 0;
 }
 
-/* Set wheel rotation range (270-1080 degrees) */
+/* Set wheel rotation range */
 int t500rs_set_range(void *data, u16 range)
 {
 	struct t500rs_device_entry *t500rs = data;
 	u8 *buf;
 	int ret;
+	u16 range_value, current_value, target_value;
+	int step, i, num_steps;
 
 	if (!t500rs)
 		return -ENODEV;
 
-	/* Clamp range to valid values */
-	if (range < 270) {
-		hid_warn(t500rs->hdev, "Range %u too small, clamping to 270\n", range);
-		range = 270;
-	}
+	/* Clamp range to maximum value only
+	 * Allow testing values below 270° to find hardware minimum */
 	if (range > 1080) {
 		hid_warn(t500rs->hdev, "Range %u too large, clamping to 1080\n", range);
 		range = 1080;
 	}
 
-	/* Allocate separate buffer to avoid conflicts with FFB operations */
-	buf = kzalloc(t500rs->buffer_length, GFP_KERNEL);
+	/* Allocate separate buffer to avoid conflicts with FFB operations
+	 * Use GFP_ATOMIC because this can be called from atomic context
+	 * (though currently only called from probe/sysfs, being safe) */
+	buf = kzalloc(t500rs->buffer_length, GFP_ATOMIC);
 	if (!buf) {
 		hid_err(t500rs->hdev, "Failed to allocate buffer for range setting\n");
 		return -ENOMEM;
@@ -1164,25 +1172,145 @@ int t500rs_set_range(void *data, u16 range)
 
 	T500RS_DBG("Setting wheel range to %u degrees\n", range);
 
-	/* Based on USB captures and Windows driver analysis:
-	 * Report 0x42 0x05 appears after range changes
-	 * This might be a "refresh/apply settings" command
+	/* Based on testing with actual hardware:
+	 * The T500RS uses Report 0x40 0x11 [value_lo] [value_hi] to set rotation range
 	 *
-	 * For now, send Report 0x42 0x05 to trigger range update
-	 * TODO: Investigate actual range setting protocol
+	 * Hardware testing showed:
+	 * - Byte order is LITTLE-ENDIAN (low byte first)
+	 * - Formula: value = range * 60
+	 * - Smooth transitions prevent hard mechanical ticking
+	 *
+	 * To smooth the transition, we send multiple intermediate values
+	 * when the range change is large.
 	 */
+	target_value = range * 60;
+	current_value = t500rs->current_range * 60;
+
+	/* Calculate number of steps based on the change magnitude
+	 * Larger changes need more steps for smooth transition
+	 * Use many small steps to prevent hard mechanical ticking */
+	range_value = (target_value > current_value) ?
+	              (target_value - current_value) : (current_value - target_value);
+
+	/* Use approximately 1 step per 500 units of change, minimum 1, maximum 50 */
+	num_steps = range_value / 500;
+	if (num_steps < 1)
+		num_steps = 1;
+	if (num_steps > 50)
+		num_steps = 50;
+
+	step = (target_value - current_value) / num_steps;
+
+	/* Send gradual range changes */
+	for (i = 1; i <= num_steps; i++) {
+		if (i == num_steps) {
+			range_value = target_value;  /* Ensure we hit exact target */
+		} else {
+			range_value = current_value + (step * i);
+		}
+
+		/* Send Report 0x40 0x11 [value_lo] [value_hi] to set range
+		 * NOTE: This uses LITTLE-ENDIAN byte order (low byte first)! */
+		buf[0] = 0x40;
+		buf[1] = 0x11;
+		buf[2] = range_value & 0xFF;        /* Low byte first (little-endian) */
+		buf[3] = (range_value >> 8) & 0xFF; /* High byte second */
+
+		ret = t500rs_send_usb(t500rs, buf, 4);
+		if (ret) {
+			hid_err(t500rs->hdev, "Failed to send range command: %d\n", ret);
+			kfree(buf);
+			return ret;
+		}
+
+		T500RS_DBG("Range step %d/%d: value=0x%04x\n", i, num_steps, range_value);
+
+		/* Very small delay between steps for smooth transition
+		 * (only if not the last step) */
+		if (i < num_steps && num_steps > 1) {
+			mdelay(2);  /* 2ms delay between steps */
+		}
+	}
+
+	/* Store current range for next transition */
+	t500rs->current_range = range;
+
+	/* Apply settings with Report 0x42 0x05 */
 	buf[0] = 0x42;
 	buf[1] = 0x05;
 	ret = t500rs_send_usb(t500rs, buf, 2);
 	if (ret) {
-		hid_err(t500rs->hdev, "Failed to set range: %d\n", ret);
+		hid_err(t500rs->hdev, "Failed to apply range settings: %d\n", ret);
 		kfree(buf);
 		return ret;
 	}
 
-	kfree(buf);
+	T500RS_DBG("Range set to %u degrees (final value=0x%04x)\n", range, target_value);
 
-	T500RS_DBG("Range set to %u degrees\n", range);
+	kfree(buf);
+	return 0;
+}
+
+/* Set spring level (0-100) - called from sysfs */
+int t500rs_set_spring_level(void *data, u8 level)
+{
+	struct t500rs_device_entry *t500rs = data;
+
+	if (!t500rs)
+		return -ENODEV;
+
+	/* Clamp to valid range */
+	if (level > 100)
+		level = 100;
+
+	/* Update the spring gain setting */
+	t500rs->spring_gain = level;
+
+	T500RS_DBG("Spring level set to %u%%\n", level);
+
+	/* Note: The new level will be applied when the next spring effect is uploaded/updated */
+	return 0;
+}
+
+/* Set damper level (0-100) - called from sysfs */
+int t500rs_set_damper_level(void *data, u8 level)
+{
+	struct t500rs_device_entry *t500rs = data;
+
+	if (!t500rs)
+		return -ENODEV;
+
+	/* Clamp to valid range */
+	if (level > 100)
+		level = 100;
+
+	/* Update the damper gain setting */
+	t500rs->damper_gain = level;
+
+	T500RS_DBG("Damper level set to %u%%\n", level);
+
+	/* Note: The new level will be applied when the next damper effect is uploaded/updated */
+	return 0;
+}
+
+/* Set friction level (0-100) - called from sysfs */
+int t500rs_set_friction_level(void *data, u8 level)
+{
+	struct t500rs_device_entry *t500rs = data;
+
+	if (!t500rs)
+		return -ENODEV;
+
+	/* Clamp to valid range */
+	if (level > 100)
+		level = 100;
+
+	/* Update the friction gain setting */
+	t500rs->friction_gain = level;
+
+	T500RS_DBG("Friction level set to %u%%\n", level);
+
+	/* Note: The new level will be applied when the next friction effect is uploaded/updated */
 	return 0;
 }
 
@@ -1513,6 +1641,9 @@ int t500rs_wheel_init(struct tmff2_device_entry *tmff2, int open_mode)
 	t500rs->friction_gain = 100;
 	t500rs->inertia_gain = 100;
 
+	/* Initialize current range to default (900°) for smooth transitions */
+	t500rs->current_range = 900;
+
 	/* Store original input_dev open/close callbacks */
 	t500rs->open = tmff2->input_dev->open;
 	t500rs->close = tmff2->input_dev->close;
@@ -1790,6 +1921,9 @@ int t500rs_populate_api(struct tmff2_device_entry *tmff2)
 	tmff2->set_gain = t500rs_set_gain;
 	tmff2->set_autocenter = t500rs_set_autocenter;
 	tmff2->set_range = t500rs_set_range;
+	tmff2->set_spring_level = t500rs_set_spring_level;
+	tmff2->set_damper_level = t500rs_set_damper_level;
+	tmff2->set_friction_level = t500rs_set_friction_level;
 
 	tmff2->wheel_init = t500rs_wheel_init;
 	tmff2->wheel_destroy = t500rs_wheel_destroy;
