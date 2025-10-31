@@ -23,22 +23,6 @@
 /* Gain scaling */
 #define GAIN_MAX 65535
 
-/* Module parameters to gate experimental behaviors (default: OFF to keep baseline) */
-static bool t500rs_soft_stop_constant;
-module_param(t500rs_soft_stop_constant, bool, 0644);
-MODULE_PARM_DESC(t500rs_soft_stop_constant, "Use soft-stop for constant (level=0, keep timer)");
-
-static bool t500rs_auto_arm_on_upload;
-module_param(t500rs_auto_arm_on_upload, bool, 0644);
-MODULE_PARM_DESC(t500rs_auto_arm_on_upload, "Send START on constant upload (prime level=0)");
-
-static bool t500rs_autostart_on_update;
-module_param(t500rs_autostart_on_update, bool, 0644);
-MODULE_PARM_DESC(t500rs_autostart_on_update, "Auto-start constant when non-zero update arrives while stopped");
-
-static bool t500rs_send_42_05_after_start;
-module_param(t500rs_send_42_05_after_start, bool, 0644);
-MODULE_PARM_DESC(t500rs_send_42_05_after_start, "Send 0x42 0x05 immediately after 0x41 START");
 
 /* Logging verbosity (0=minimal, 1=verbose) */
 static int t500rs_log_level;
@@ -510,34 +494,6 @@ static int t500rs_upload_constant(struct t500rs_device_entry *t500rs,
 		t500rs_update_force_level(t500rs, signed_level);
 	}
 
-	/* Auto-arm constant effect on upload (optional, default OFF) */
-	if (t500rs_auto_arm_on_upload) {
-		unsigned long __fl;
-		bool __active;
-		u8 *buf = t500rs->send_buffer;
-		spin_lock_irqsave(&t500rs->force_lock, __fl);
-		__active = t500rs->force_timer_active;
-		spin_unlock_irqrestore(&t500rs->force_lock, __fl);
-		if (!__active && buf) {
-			T500RS_DBG("Auto-arm constant on upload: priming level=0 and sending START\n");
-			/* Prime level 0 */
-			buf[0] = 0x03; buf[1] = 0x0e; buf[2] = 0x00; buf[3] = 0x00;
-			(void)t500rs_send_usb(t500rs, buf, 4);
-			/* Send START (EffectID=0) */
-			buf[0] = 0x41; buf[1] = 0x00; buf[2] = 0x41; buf[3] = 0x01;
-			T500RS_DBG("Sending Report 0x41 (START): %02x %02x %02x %02x\n",
-				buf[0], buf[1], buf[2], buf[3]);
-			(void)t500rs_send_usb(t500rs, buf, 4);
-			/* Optional: send 0x42 0x05 after START (param) */
-			if (t500rs_send_42_05_after_start) {
-				T500RS_DBG("Sending Report 0x42 0x05 (post-START)\n");
-				buf[0] = 0x42; buf[1] = 0x05;
-				(void)t500rs_send_usb(t500rs, buf, 2);
-			}
-			/* Start 50Hz updates at level 0 */
-			t500rs_start_force_timer(t500rs, 0);
-		}
-	}
 	return 0;
 }
 
@@ -881,12 +837,6 @@ int t500rs_play_effect(void *data, struct tmff2_effect_state *state)
 	/* Keeping it simple to match userspace driver more closely */
 
 	/* For constant force, start continuous force updates */
-			/* Optional: send 0x42 0x05 immediately after START to mirror Windows captures */
-			if (t500rs_send_42_05_after_start) {
-				T500RS_DBG("Sending Report 0x42 0x05 (post-START)\n");
-				u8 apply_buf[2] = {0x42, 0x05};
-				(void)t500rs_send_usb(t500rs, apply_buf, 2);
-			}
 
 
 	if (effect->type == FF_CONSTANT) {
@@ -994,22 +944,8 @@ int t500rs_stop_effect(void *data, struct tmff2_effect_state *state)
 
 	/* For constant force: either SOFT-STOP (param) or Windows-style STOP */
 	if (state->effect.type == FF_CONSTANT) {
-		if (t500rs_soft_stop_constant) {
-			bool was_active;
-			unsigned long flags;
-			spin_lock_irqsave(&t500rs->force_lock, flags);
-			was_active = t500rs->force_timer_active;
-			spin_unlock_irqrestore(&t500rs->force_lock, flags);
-			/* Zero the force and keep streaming (if active) */
-			t500rs_update_force_level(t500rs, 0);
-			if (was_active)
-				T500RS_DBG("Soft-stop constant: zeroing force, keeping timer active\n");
-			else
-				T500RS_DBG("Soft-stop constant: timer not active, nothing to stop\n");
-			return 0;
-		} else {
-			/* Windows-style: stop timer and send STOP (0x41 00 00 01) */
-			t500rs_stop_force_timer(t500rs);
+		/* Windows-style: stop timer and send STOP (0x41 00 00 01) */
+				t500rs_stop_force_timer(t500rs);
 			buf[0] = 0x41;
 			buf[1] = 0x00;
 			buf[2] = 0x00;  /* STOP command */
@@ -1019,7 +955,6 @@ int t500rs_stop_effect(void *data, struct tmff2_effect_state *state)
 			ret = t500rs_send_usb(t500rs, buf, 4);
 			T500RS_DBG("Stop effect (constant) returned: %d\n", ret);
 			return ret;
-		}
 	}
 
 	/* For other effect types, send stop command - Report 0x41
@@ -1057,7 +992,6 @@ int t500rs_update_effect(void *data, struct tmff2_effect_state *state)
 		int level = effect->u.constant.level;
 		s8 signed_level;
 		s32 scaled;
-		u8 *buf = t500rs->send_buffer;
 
 		/* Simple linear scaling from -32767..32767 to -127..127 */
 		scaled = (level * 127) / 32767;
@@ -1071,24 +1005,9 @@ int t500rs_update_effect(void *data, struct tmff2_effect_state *state)
 
 		if (t500rs->force_timer_active) {
 			/* Timer running: next tick will send updated level */
-		} else if (t500rs_autostart_on_update && signed_level != 0) {
-			/* Auto-start: game updated magnitude while stopped (optional) */
-			T500RS_DBG("Auto-start constant force on non-zero update while stopped (level=%d)\n",
-				 signed_level);
-			/* Prime with one 0x03, then START */
-			if (buf) {
-				buf[0] = 0x03; buf[1] = 0x0e; buf[2] = 0x00; buf[3] = (u8)signed_level;
-				t500rs_send_usb(t500rs, buf, 4);
-				buf[0] = 0x41; buf[1] = 0x00; buf[2] = 0x41; buf[3] = 0x01;
-				T500RS_DBG("Sending Report 0x41 (START): %02x %02x %02x %02x\n",
-					buf[0], buf[1], buf[2], buf[3]);
-				t500rs_send_usb(t500rs, buf, 4);
-				if (t500rs_send_42_05_after_start) { buf[0]=0x42; buf[1]=0x05; t500rs_send_usb(t500rs, buf, 2); }
-			}
-			/* Start the periodic updates */
-			t500rs_start_force_timer(t500rs, signed_level);
-		}
 	}
+		}
+
 
 	return 0;
 }
