@@ -84,6 +84,9 @@ struct t500rs_device_entry {
 	u8 friction_gain;  /* Friction effects gain */
 	u8 inertia_gain;   /* Inertia effects gain */
 
+	/* Current wheel range for smooth transitions */
+	u16 current_range;  /* Current rotation range in degrees */
+
 	int (*open)(struct input_dev *dev);
 	void (*close)(struct input_dev *dev);
 };
@@ -1139,22 +1142,20 @@ int t500rs_set_autocenter(void *data, u16 autocenter)
 	return 0;
 }
 
-/* Set wheel rotation range (270-1080 degrees) */
+/* Set wheel rotation range */
 int t500rs_set_range(void *data, u16 range)
 {
 	struct t500rs_device_entry *t500rs = data;
 	u8 *buf;
 	int ret;
-	u16 range_value;
+	u16 range_value, current_value, target_value;
+	int step, i, num_steps;
 
 	if (!t500rs)
 		return -ENODEV;
 
-	/* Clamp range to valid values */
-	if (range < 270) {
-		hid_warn(t500rs->hdev, "Range %u too small, clamping to 270\n", range);
-		range = 270;
-	}
+	/* Clamp range to maximum value only
+	 * Allow testing values below 270° to find hardware minimum */
 	if (range > 1080) {
 		hid_warn(t500rs->hdev, "Range %u too large, clamping to 1080\n", range);
 		range = 1080;
@@ -1176,40 +1177,64 @@ int t500rs_set_range(void *data, u16 range)
 	 *
 	 * Hardware testing showed:
 	 * - Byte order is LITTLE-ENDIAN (low byte first)
-	 * - Relationship is DIRECT: higher value = more rotation
-	 * - Hardware has a MINIMUM threshold of 1000 (values below this are ignored)
+	 * - Formula: value = range * 60
+	 * - Smooth transitions prevent hard mechanical ticking
 	 *
-	 * Formula: value = (range - 270) * 50
-	 * But clamped to minimum of 1000 (corresponds to ~290°)
-	 *
-	 * This gives:
-	 * 270° → 1000 (minimum - clamped)
-	 * 290° → 1000 (minimum threshold)
-	 * 540° → 13500
-	 * 900° → 31500
-	 * 1080° → 40500 (maximum rotation)
+	 * To smooth the transition, we send multiple intermediate values
+	 * when the range change is large.
 	 */
-	range_value = (range - 270) * 50;
-	if (range_value < 1000) {
-		range_value = 1000;
-		T500RS_DBG("Range value clamped to minimum threshold (1000)\n");
+	target_value = range * 60;
+	current_value = t500rs->current_range * 60;
+
+	/* Calculate number of steps based on the change magnitude
+	 * Larger changes need more steps for smooth transition */
+	range_value = (target_value > current_value) ?
+	              (target_value - current_value) : (current_value - target_value);
+
+	if (range_value > 10000) {
+		num_steps = 10;  /* Large change: use 10 steps */
+	} else if (range_value > 5000) {
+		num_steps = 5;   /* Medium change: use 5 steps */
+	} else if (range_value > 1000) {
+		num_steps = 3;   /* Small change: use 3 steps */
+	} else {
+		num_steps = 1;   /* Tiny change: direct */
 	}
 
-	/* Send Report 0x40 0x11 [value_lo] [value_hi] to set range
-	 * NOTE: This uses LITTLE-ENDIAN byte order (low byte first)! */
-	buf[0] = 0x40;
-	buf[1] = 0x11;
-	buf[2] = range_value & 0xFF;        /* Low byte first (little-endian) */
-	buf[3] = (range_value >> 8) & 0xFF; /* High byte second */
+	step = (target_value - current_value) / num_steps;
 
-	ret = t500rs_send_usb(t500rs, buf, 4);
-	if (ret) {
-		hid_err(t500rs->hdev, "Failed to send range command: %d\n", ret);
-		kfree(buf);
-		return ret;
+	/* Send gradual range changes */
+	for (i = 1; i <= num_steps; i++) {
+		if (i == num_steps) {
+			range_value = target_value;  /* Ensure we hit exact target */
+		} else {
+			range_value = current_value + (step * i);
+		}
+
+		/* Send Report 0x40 0x11 [value_lo] [value_hi] to set range
+		 * NOTE: This uses LITTLE-ENDIAN byte order (low byte first)! */
+		buf[0] = 0x40;
+		buf[1] = 0x11;
+		buf[2] = range_value & 0xFF;        /* Low byte first (little-endian) */
+		buf[3] = (range_value >> 8) & 0xFF; /* High byte second */
+
+		ret = t500rs_send_usb(t500rs, buf, 4);
+		if (ret) {
+			hid_err(t500rs->hdev, "Failed to send range command: %d\n", ret);
+			kfree(buf);
+			return ret;
+		}
+
+		T500RS_DBG("Range step %d/%d: value=0x%04x\n", i, num_steps, range_value);
+
+		/* Small delay between steps (only if not the last step) */
+		if (i < num_steps && num_steps > 1) {
+			mdelay(10);  /* 10ms delay between steps */
+		}
 	}
 
-	T500RS_DBG("Range set to %u degrees (value=0x%04x)\n", range, range_value);
+	/* Store current range for next transition */
+	t500rs->current_range = range;
 
 	/* Apply settings with Report 0x42 0x05 */
 	buf[0] = 0x42;
@@ -1220,6 +1245,8 @@ int t500rs_set_range(void *data, u16 range)
 		kfree(buf);
 		return ret;
 	}
+
+	T500RS_DBG("Range set to %u degrees (final value=0x%04x)\n", range, target_value);
 
 	kfree(buf);
 	return 0;
@@ -1614,6 +1641,9 @@ int t500rs_wheel_init(struct tmff2_device_entry *tmff2, int open_mode)
 	t500rs->damper_gain = 100;
 	t500rs->friction_gain = 100;
 	t500rs->inertia_gain = 100;
+
+	/* Initialize current range to default (900°) for smooth transitions */
+	t500rs->current_range = 900;
 
 	/* Store original input_dev open/close callbacks */
 	t500rs->open = tmff2->input_dev->open;
