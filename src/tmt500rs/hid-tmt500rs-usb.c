@@ -1187,19 +1187,17 @@ int t500rs_set_range(void *data, u16 range)
 	current_value = t500rs->current_range * 60;
 
 	/* Calculate number of steps based on the change magnitude
-	 * Larger changes need more steps for smooth transition */
+	 * Larger changes need more steps for smooth transition
+	 * Use many small steps to prevent hard mechanical ticking */
 	range_value = (target_value > current_value) ?
 	              (target_value - current_value) : (current_value - target_value);
 
-	if (range_value > 10000) {
-		num_steps = 10;  /* Large change: use 10 steps */
-	} else if (range_value > 5000) {
-		num_steps = 5;   /* Medium change: use 5 steps */
-	} else if (range_value > 1000) {
-		num_steps = 3;   /* Small change: use 3 steps */
-	} else {
-		num_steps = 1;   /* Tiny change: direct */
-	}
+	/* Use approximately 1 step per 500 units of change, minimum 1, maximum 50 */
+	num_steps = range_value / 500;
+	if (num_steps < 1)
+		num_steps = 1;
+	if (num_steps > 50)
+		num_steps = 50;
 
 	step = (target_value - current_value) / num_steps;
 
@@ -1227,9 +1225,10 @@ int t500rs_set_range(void *data, u16 range)
 
 		T500RS_DBG("Range step %d/%d: value=0x%04x\n", i, num_steps, range_value);
 
-		/* Small delay between steps (only if not the last step) */
+		/* Very small delay between steps for smooth transition
+		 * (only if not the last step) */
 		if (i < num_steps && num_steps > 1) {
-			mdelay(10);  /* 10ms delay between steps */
+			mdelay(2);  /* 2ms delay between steps */
 		}
 	}
 
