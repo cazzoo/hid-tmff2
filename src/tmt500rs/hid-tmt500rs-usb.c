@@ -1145,6 +1145,7 @@ int t500rs_set_range(void *data, u16 range)
 	struct t500rs_device_entry *t500rs = data;
 	u8 *buf;
 	int ret;
+	u16 range_value;
 
 	if (!t500rs)
 		return -ENODEV;
@@ -1170,25 +1171,49 @@ int t500rs_set_range(void *data, u16 range)
 
 	T500RS_DBG("Setting wheel range to %u degrees\n", range);
 
-	/* Based on USB captures and Windows driver analysis:
-	 * Report 0x42 0x05 appears after range changes
-	 * This might be a "refresh/apply settings" command
+	/* Based on USB capture analysis of "changed_rotation_angle_from_900_to_200_degrees.pcapng":
+	 * The T500RS uses Report 0x40 0x11 [value_lo] [value_hi] to set rotation range
 	 *
-	 * For now, send Report 0x42 0x05 to trigger range update
-	 * TODO: Investigate actual range setting protocol
+	 * Observed values from capture:
+	 * - 900° → 0xf6d2 (63186 decimal)
+	 * - 200° → 0xa13d (41277 decimal)
+	 *
+	 * Linear interpolation formula:
+	 * value = 41277 + ((range - 200) * (63186 - 41277)) / (900 - 200)
+	 * value = 41277 + ((range - 200) * 21909) / 700
+	 * value = 41277 + ((range - 200) * 31.3) approximately
+	 *
+	 * Simplified: value ≈ 34997 + (range * 31.3)
+	 * More accurate: value = 35000 + (range * 31)  (integer math)
 	 */
+	range_value = 35000 + (range * 31);
+
+	/* Send Report 0x40 0x11 [value_lo] [value_hi] to set range */
+	buf[0] = 0x40;
+	buf[1] = 0x11;
+	buf[2] = range_value & 0xFF;        /* Low byte */
+	buf[3] = (range_value >> 8) & 0xFF; /* High byte */
+
+	ret = t500rs_send_usb(t500rs, buf, 4);
+	if (ret) {
+		hid_err(t500rs->hdev, "Failed to send range command: %d\n", ret);
+		kfree(buf);
+		return ret;
+	}
+
+	T500RS_DBG("Range set to %u degrees (value=0x%04x)\n", range, range_value);
+
+	/* Apply settings with Report 0x42 0x05 */
 	buf[0] = 0x42;
 	buf[1] = 0x05;
 	ret = t500rs_send_usb(t500rs, buf, 2);
 	if (ret) {
-		hid_err(t500rs->hdev, "Failed to set range: %d\n", ret);
+		hid_err(t500rs->hdev, "Failed to apply range settings: %d\n", ret);
 		kfree(buf);
 		return ret;
 	}
 
 	kfree(buf);
-
-	T500RS_DBG("Range set to %u degrees\n", range);
 	return 0;
 }
 
