@@ -1171,28 +1171,36 @@ int t500rs_set_range(void *data, u16 range)
 
 	T500RS_DBG("Setting wheel range to %u degrees\n", range);
 
-	/* Based on USB capture analysis of "changed_rotation_angle_from_900_to_200_degrees.pcapng":
-	 * The T500RS uses Report 0x40 0x11 [value_hi] [value_lo] to set rotation range
+	/* Based on testing with actual hardware:
+	 * The T500RS uses Report 0x40 0x11 [value_lo] [value_hi] to set rotation range
 	 *
-	 * Observed values from capture (BIG-ENDIAN byte order):
-	 * - 900° → 0xf6d2 (63186 decimal) → bytes: 40 11 f6 d2
-	 * - 200° → 0xa13d (41277 decimal) → bytes: 40 11 a1 3d
+	 * Hardware testing showed:
+	 * - Byte order is LITTLE-ENDIAN (low byte first)
+	 * - Relationship is DIRECT: higher value = more rotation
+	 * - Hardware has a MINIMUM threshold of 1000 (values below this are ignored)
 	 *
-	 * Linear regression formula:
-	 * slope = (63186 - 41277) / (900 - 200) = 21909 / 700 = 31.298571
-	 * intercept = 41277 - (200 * 31.298571) = 35017.285714
+	 * Formula: value = (range - 270) * 50
+	 * But clamped to minimum of 1000 (corresponds to ~290°)
 	 *
-	 * Formula: value = 35017 + (range * 31.3)
-	 * Integer approximation: value = 35017 + ((range * 313) / 10)
+	 * This gives:
+	 * 270° → 1000 (minimum - clamped)
+	 * 290° → 1000 (minimum threshold)
+	 * 540° → 13500
+	 * 900° → 31500
+	 * 1080° → 40500 (maximum rotation)
 	 */
-	range_value = 35017 + ((range * 313) / 10);
+	range_value = (range - 270) * 50;
+	if (range_value < 1000) {
+		range_value = 1000;
+		T500RS_DBG("Range value clamped to minimum threshold (1000)\n");
+	}
 
-	/* Send Report 0x40 0x11 [value_hi] [value_lo] to set range
-	 * NOTE: This uses BIG-ENDIAN byte order (high byte first)! */
+	/* Send Report 0x40 0x11 [value_lo] [value_hi] to set range
+	 * NOTE: This uses LITTLE-ENDIAN byte order (low byte first)! */
 	buf[0] = 0x40;
 	buf[1] = 0x11;
-	buf[2] = (range_value >> 8) & 0xFF; /* High byte first (big-endian) */
-	buf[3] = range_value & 0xFF;        /* Low byte second */
+	buf[2] = range_value & 0xFF;        /* Low byte first (little-endian) */
+	buf[3] = (range_value >> 8) & 0xFF; /* High byte second */
 
 	ret = t500rs_send_usb(t500rs, buf, 4);
 	if (ret) {
