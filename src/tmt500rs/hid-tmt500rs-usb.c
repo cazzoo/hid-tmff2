@@ -115,12 +115,12 @@ static const signed short t500rs_effects[] = {
 
 /* Forward declarations to avoid implicit declarations before worker uses them */
 static int t500rs_send_usb(struct t500rs_device_entry *t500rs, const u8 *data, size_t len);
-int t500rs_set_autocenter(void *data, u16 autocenter);
-int t500rs_set_range(void *data, u16 range);
-int t500rs_upload_effect(void *data, struct tmff2_effect_state *state);
-int t500rs_update_effect(void *data, struct tmff2_effect_state *state);
-int t500rs_play_effect(void *data, struct tmff2_effect_state *state);
-int t500rs_stop_effect(void *data, struct tmff2_effect_state *state);
+static int t500rs_set_autocenter(void *data, u16 autocenter);
+static int t500rs_set_range(void *data, u16 range);
+static int t500rs_upload_effect(void *data, struct tmff2_effect_state *state);
+static int t500rs_update_effect(void *data, struct tmff2_effect_state *state);
+static int t500rs_play_effect(void *data, struct tmff2_effect_state *state);
+static int t500rs_stop_effect(void *data, struct tmff2_effect_state *state);
 
 /* --- Async IO queue: helpers and worker --- */
 
@@ -268,7 +268,7 @@ static int t500rs_queue_set_gain(void *data, u16 gain)
 	u8 device_gain_byte;
 	if (!t500rs)
 		return -ENODEV;
-	device_gain_byte = (u8)((gain * 255) / 65535);
+	device_gain_byte = (u8)((gain * 255) / GAIN_MAX);
 	op.type = T500_OP_SET_GAIN;
 	op.value8 = device_gain_byte;
 	return t500rs_queue_op(t500rs, &op);
@@ -544,10 +544,6 @@ static int t500rs_upload_periodic(struct t500rs_device_entry *t500rs,
 	/* Magnitude - scale to 0-127 */
 	mag = (abs(magnitude) * 127) / 32767;
 
-	/* Ensure minimum magnitude */
-	if (mag < 20) {
-		mag = 50;  /* Default to medium if too low */
-	}
 
 	/* Period (frequency) - default to 100ms = 10 Hz if not set */
 	if (period == 0) {
@@ -646,9 +642,6 @@ static int t500rs_upload_ramp(struct t500rs_device_entry *t500rs,
 	u16 duration_ms = effect->replay.length;
 	u16 start_scaled;
 
-	/* Apply global gain */
-	extern int gain;
-	start_level = (start_level * gain) / 65535;
 
 	/* Scale to 0-255 */
 	start_scaled = (abs(start_level) * 0xff) / 32767;
@@ -713,7 +706,7 @@ static int t500rs_upload_ramp(struct t500rs_device_entry *t500rs,
 }
 
 /* Upload effect */
-int t500rs_upload_effect(void *data, struct tmff2_effect_state *state)
+static int t500rs_upload_effect(void *data, struct tmff2_effect_state *state)
 {
 	struct t500rs_device_entry *t500rs = data;
 	struct ff_effect *effect = &state->effect;
@@ -739,7 +732,7 @@ int t500rs_upload_effect(void *data, struct tmff2_effect_state *state)
 }
 
 /* Play effect */
-int t500rs_play_effect(void *data, struct tmff2_effect_state *state)
+static int t500rs_play_effect(void *data, struct tmff2_effect_state *state)
 {
 	struct t500rs_device_entry *t500rs = data;
 	struct ff_effect *effect = &state->effect;
@@ -797,7 +790,7 @@ int t500rs_play_effect(void *data, struct tmff2_effect_state *state)
 }
 
 /* Stop effect */
-int t500rs_stop_effect(void *data, struct tmff2_effect_state *state)
+static int t500rs_stop_effect(void *data, struct tmff2_effect_state *state)
 {
 	struct t500rs_device_entry *t500rs = data;
 	u8 *buf;
@@ -839,7 +832,7 @@ int t500rs_stop_effect(void *data, struct tmff2_effect_state *state)
 }
 
 /* Update effect - re-upload and update force level if constant force */
-int t500rs_update_effect(void *data, struct tmff2_effect_state *state)
+static int t500rs_update_effect(void *data, struct tmff2_effect_state *state)
 {
 	struct t500rs_device_entry *t500rs = data;
 	struct ff_effect *effect = &state->effect;
@@ -874,39 +867,9 @@ int t500rs_update_effect(void *data, struct tmff2_effect_state *state)
 	return 0;
 }
 
-/* Set gain - base driver already multiplies game gain by sysfs gain */
-int t500rs_set_gain(void *data, u16 gain)
-{
-	struct t500rs_device_entry *t500rs = data;
-	u8 *buf;
-	u8 device_gain_byte;
-	int ret;
-
-	if (!t500rs)
-		return -ENODEV;
-
-	/* Convert 0-65535 to device range 0-255 (0xFF = 100%) */
-	device_gain_byte = (u8)((gain * 255) / 65535);
-	T500RS_DBG("Set gain: combined=%u (%u%%) -> device=0x%02x\n",
-		 gain, (gain * 100) / 65535, device_gain_byte);
-
-	/* Use DMA-safe buffer (kmalloc'd) */
-	buf = t500rs->send_buffer;
-	if (!buf)
-		return -ENOMEM;
-
-	/* Send Report 0x43 - Set global gain */
-	buf[0] = 0x43;
-	buf[1] = device_gain_byte;
-
-	ret = t500rs_send_usb(t500rs, buf, 2);
-	if (ret)
-		return ret;
-	return 0;
-}
 
 /* Set autocenter */
-int t500rs_set_autocenter(void *data, u16 autocenter)
+static int t500rs_set_autocenter(void *data, u16 autocenter)
 {
 	struct t500rs_device_entry *t500rs = data;
 	u8 *buf;
@@ -922,14 +885,10 @@ int t500rs_set_autocenter(void *data, u16 autocenter)
 	T500RS_DBG("Set autocenter: %u%% (value=%u)\n",
 		 autocenter_percent, autocenter);
 
-	/* Allocate separate buffer to avoid conflicts with FFB operations
-	 * Use GFP_ATOMIC because this can be called from atomic context
-	 * (input_ff_event holds spinlocks) */
-	buf = kzalloc(t500rs->buffer_length, GFP_ATOMIC);
-	if (!buf) {
-		hid_err(t500rs->hdev, "Failed to allocate buffer for autocenter\n");
+	/* Use DMA-safe preallocated buffer */
+	buf = t500rs->send_buffer;
+	if (!buf)
 		return -ENOMEM;
-	}
 
 	if (autocenter == 0) {
 		/* Disable autocenter: Report 0x40 0x04 0x00 */
@@ -940,7 +899,6 @@ int t500rs_set_autocenter(void *data, u16 autocenter)
 		ret = t500rs_send_usb(t500rs, buf, 4);
 		if (ret) {
 			hid_err(t500rs->hdev, "Failed to disable autocenter: %d\n", ret);
-			kfree(buf);
 			return ret;
 		}
 		T500RS_DBG("Autocenter disabled\n");
@@ -953,7 +911,6 @@ int t500rs_set_autocenter(void *data, u16 autocenter)
 		ret = t500rs_send_usb(t500rs, buf, 4);
 		if (ret) {
 			hid_err(t500rs->hdev, "Failed to enable autocenter: %d\n", ret);
-			kfree(buf);
 			return ret;
 		}
 
@@ -969,7 +926,6 @@ int t500rs_set_autocenter(void *data, u16 autocenter)
 		ret = t500rs_send_usb(t500rs, buf, 4);
 		if (ret) {
 			hid_err(t500rs->hdev, "Failed to set autocenter strength: %d\n", ret);
-			kfree(buf);
 			return ret;
 		}
 
@@ -982,16 +938,14 @@ int t500rs_set_autocenter(void *data, u16 autocenter)
 	ret = t500rs_send_usb(t500rs, buf, 2);
 	if (ret) {
 		hid_err(t500rs->hdev, "Failed to apply autocenter settings: %d\n", ret);
-		kfree(buf);
 		return ret;
 	}
 
-	kfree(buf);
 	return 0;
 }
 
 /* Set wheel rotation range */
-int t500rs_set_range(void *data, u16 range)
+static int t500rs_set_range(void *data, u16 range)
 {
 	struct t500rs_device_entry *t500rs = data;
 	u8 *buf;
@@ -1009,14 +963,10 @@ int t500rs_set_range(void *data, u16 range)
 		range = 1080;
 	}
 
-	/* Allocate separate buffer to avoid conflicts with FFB operations
-	 * Use GFP_ATOMIC because this can be called from atomic context
-	 * (though currently only called from probe/sysfs, being safe) */
-	buf = kzalloc(t500rs->buffer_length, GFP_ATOMIC);
-	if (!buf) {
-		hid_err(t500rs->hdev, "Failed to allocate buffer for range setting\n");
+	/* Use DMA-safe preallocated buffer */
+	buf = t500rs->send_buffer;
+	if (!buf)
 		return -ENOMEM;
-	}
 
 	T500RS_DBG("Setting wheel range to %u degrees\n", range);
 
@@ -1067,7 +1017,6 @@ int t500rs_set_range(void *data, u16 range)
 		ret = t500rs_send_usb(t500rs, buf, 4);
 		if (ret) {
 			hid_err(t500rs->hdev, "Failed to send range command: %d\n", ret);
-			kfree(buf);
 			return ret;
 		}
 
@@ -1087,18 +1036,16 @@ int t500rs_set_range(void *data, u16 range)
 	ret = t500rs_send_usb(t500rs, buf, 2);
 	if (ret) {
 		hid_err(t500rs->hdev, "Failed to apply range settings: %d\n", ret);
-		kfree(buf);
 		return ret;
 	}
 
 	T500RS_DBG("Range set to %u degrees (final value=0x%04x)\n", range, target_value);
 
-	kfree(buf);
 	return 0;
 }
 
 /* Set spring level (0-100) - called from sysfs */
-int t500rs_set_spring_level(void *data, u8 level)
+static int t500rs_set_spring_level(void *data, u8 level)
 {
 	struct t500rs_device_entry *t500rs = data;
 
@@ -1119,7 +1066,7 @@ int t500rs_set_spring_level(void *data, u8 level)
 }
 
 /* Set damper level (0-100) - called from sysfs */
-int t500rs_set_damper_level(void *data, u8 level)
+static int t500rs_set_damper_level(void *data, u8 level)
 {
 	struct t500rs_device_entry *t500rs = data;
 
@@ -1140,7 +1087,7 @@ int t500rs_set_damper_level(void *data, u8 level)
 }
 
 /* Set friction level (0-100) - called from sysfs */
-int t500rs_set_friction_level(void *data, u8 level)
+static int t500rs_set_friction_level(void *data, u8 level)
 {
 	struct t500rs_device_entry *t500rs = data;
 
@@ -1163,7 +1110,7 @@ int t500rs_set_friction_level(void *data, u8 level)
 
 
 /* Initialize T500RS device */
-int t500rs_wheel_init(struct tmff2_device_entry *tmff2, int open_mode)
+static int t500rs_wheel_init(struct tmff2_device_entry *tmff2, int open_mode)
 {
 	struct t500rs_device_entry *t500rs;
 	struct usb_host_endpoint *ep;
@@ -1436,7 +1383,7 @@ err_alloc:
 }
 
 /* Cleanup T500RS device */
-int t500rs_wheel_destroy(void *data)
+static int t500rs_wheel_destroy(void *data)
 {
 	struct t500rs_device_entry *t500rs = data;
 

@@ -122,3 +122,16 @@ Next
 - If further boost is desired, add optional module params (conservative defaults):
   - periodic_boost_percent (scale periodic magnitude)
   - periodic_min_mag (raise minimum periodic amplitude)
+
+
+Cleanup
+- Disabled unused direct t500rs_set_gain() in -usb module via #if 0 (we use queue_set_gain + do_set_gain_byte in worker). Intent is atomic-context safety and a single path for Report 0x43.
+
+Further hygiene (production alignment)
+- Limit internal linkage: made implementation functions static and forward declarations static (upload/update/play/stop, set_autocenter/range, set_*_level, wheel_init/destroy). Export only populate_api.
+- Remove ad-hoc magnitude boost: dropped periodic minimum-magnitude clamp to keep neutral mapping (let set_gain and game control strength).
+- Remove extern dependency: deleted extern gain usage from ramp upload; rely on proper global gain via Report 0x43.
+- Zero allocations in control paths: set_autocenter/set_range now reuse DMA-safe send_buffer; removed per-call kzalloc/kfree; worker serializes operations so no buffer races.
+- Minor readability: use GAIN_MAX macro in queue_set_gain.
+- Remove dead code: fully deleted the unused direct t500rs_set_gain() block previously guarded by #if 0.
+
