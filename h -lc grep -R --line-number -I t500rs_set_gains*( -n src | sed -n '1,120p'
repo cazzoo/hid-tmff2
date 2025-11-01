@@ -1,9 +1,0 @@
-[33mcommit 849d8d67b776e218521d509392224dda8042f593[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mt500rs/usb-async-and-periodic[m[33m)[m
-Author: Augment Agent <augment@local>
-Date:   Sun Nov 2 00:28:32 2025 +0100
-
-    t500rs: map set_gain to full 0..255 for Report 0x43 to improve periodic/ABS headroom; update progress log
-
- cline_docs/t500rs_usb_refactor_progress.md | 18 [32m++++++++++++++++++[m
- src/tmt500rs/hid-tmt500rs-usb.c            |  6 [32m+++[m[31m---[m
- 2 files changed, 21 insertions(+), 3 deletions(-)
