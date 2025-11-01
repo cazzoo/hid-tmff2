@@ -268,7 +268,7 @@ static int t500rs_queue_set_gain(void *data, u16 gain)
 	u8 device_gain_byte;
 	if (!t500rs)
 		return -ENODEV;
-	device_gain_byte = (u8)((gain * 127) / 65535);
+	device_gain_byte = (u8)((gain * 255) / 65535);
 	op.type = T500_OP_SET_GAIN;
 	op.value8 = device_gain_byte;
 	return t500rs_queue_op(t500rs, &op);
@@ -885,8 +885,8 @@ int t500rs_set_gain(void *data, u16 gain)
 	if (!t500rs)
 		return -ENODEV;
 
-	/* Convert 0-65535 to device range 0-127 (127 = 100%) */
-	device_gain_byte = (u8)((gain * 127) / 65535);
+	/* Convert 0-65535 to device range 0-255 (0xFF = 100%) */
+	device_gain_byte = (u8)((gain * 255) / 65535);
 	T500RS_DBG("Set gain: combined=%u (%u%%) -> device=0x%02x\n",
 		 gain, (gain * 100) / 65535, device_gain_byte);
 

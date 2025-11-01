@@ -104,3 +104,21 @@ Validation
 Next
 - Broader in-game validation for periodic effects (sine/square/triangle/saw)
 - Keep an eye on range/autocenter behavior in titles; adjust if required
+
+
+## 2025-11-01 (cont.)
+
+ABS feedback / periodic strength mapping
+- Observation: In-game ABS felt weak; rumble is rewritten to FF_PERIODIC (sine, 50 ms) by base driver.
+- Change: Adjusted global gain mapping to device range for Report 0x43. set_gain now maps 0..65535 -> 0..255 (0xFF = 100%), matching device init and ensuring full headroom for periodic/rumble-derived ABS.
+- Implementation: Updated both queued and direct set_gain paths to use 255 scale; Report 0x43 payload now uses full byte.
+
+Validation
+- Build + reload OK; no new dmesg warnings (only expected tmff2_play info logs).
+- fftest: periodic plays OK.
+- User report: ABS is now felt in-game.
+
+Next
+- If further boost is desired, add optional module params (conservative defaults):
+  - periodic_boost_percent (scale periodic magnitude)
+  - periodic_min_mag (raise minimum periodic amplitude)
