@@ -496,22 +496,33 @@ static int tmff2_play(struct input_dev *dev, int effect_id, int value)
 	return 0;
 }
 
-/* Dummy callbacks for when module is being removed - prevent NULL pointer crashes */
+/* Fix NULL pointer execution crash - Use dummy callbacks instead of NULL
+CRITICAL FIX: Prevents kernel crash when trying to execute NULL
+force feedback callbacks.*/
 static int tmff2_dummy_upload(struct input_dev *dev, struct ff_effect *effect, struct ff_effect *old)
 {
 	return -ENODEV;
 }
 
+/* Fix NULL pointer execution crash - Use dummy callbacks instead of NULL
+CRITICAL FIX: Prevents kernel crash when trying to execute NULL
+force feedback callbacks.*/
 static int tmff2_dummy_playback(struct input_dev *dev, int effect_id, int value)
 {
 	return -ENODEV;
 }
 
+/* Fix NULL pointer execution crash - Use dummy callbacks instead of NULL
+CRITICAL FIX: Prevents kernel crash when trying to execute NULL
+force feedback callbacks.*/
 static void tmff2_dummy_set_gain(struct input_dev *dev, u16 gain)
 {
 	/* Do nothing */
 }
 
+/* Fix NULL pointer execution crash - Use dummy callbacks instead of NULL
+CRITICAL FIX: Prevents kernel crash when trying to execute NULL
+force feedback callbacks.*/
 static void tmff2_dummy_set_autocenter(struct input_dev *dev, u16 magnitude)
 {
 	/* Do nothing */

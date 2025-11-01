@@ -2,7 +2,7 @@
 /*
  * Force feedback support for Thrustmaster T500RS
  *
- * USB INTERRUPT implementation based on working userspace driver
+ * USB INTERRUPT implementation
  * Uses endpoint 0x01 OUT for all communication
  */
 
@@ -10,6 +10,8 @@
 #include <linux/input.h>
 #include <linux/slab.h>
 #include <linux/usb.h>
+#include <linux/workqueue.h>
+
 #include "../hid-tmff2.h"
 
 /* T500RS Constants */
@@ -34,16 +36,29 @@ MODULE_PARM_DESC(t500rs_log_level, "Log level: 0=minimal (default), 1=verbose");
 	if (t500rs_log_level > 0) \
 		hid_info(t500rs->hdev, fmt, ##__VA_ARGS__); \
 } while (0)
+/* IO operation queue to avoid sleeping in atomic context */
+#define T500RS_OP_QUEUE_SIZE 64 /* must be power of two */
 
-/* Work item for USB transfers */
-struct t500rs_work_item {
-	struct work_struct work;
-	struct t500rs_device_entry *t500rs;
-	u8 data[32];  /* Max USB packet size */
-	size_t len;
-	int result;  /* Result of USB transfer */
-	struct completion done;  /* Completion signal */
+enum t500rs_op_type {
+	T500_OP_SET_GAIN = 0,
+	T500_OP_SET_AUTOCENTER,
+	T500_OP_SET_RANGE,
+	T500_OP_UPLOAD,
+	T500_OP_UPDATE,
+	T500_OP_PLAY,
+	T500_OP_STOP,
 };
+
+struct t500rs_op {
+	u8 type;
+	/* For effect-related operations */
+	struct ff_effect effect;
+	/* Scalars for parameter ops */
+	u16 value16; /* range/autocenter */
+	u8 value8;   /* gain byte */
+};
+
+
 
 /* T500RS device data */
 struct t500rs_device_entry {
@@ -57,38 +72,22 @@ struct t500rs_device_entry {
 	u8 *send_buffer;
 	size_t buffer_length;
 
-	struct workqueue_struct *wq;  /* Work queue for USB transfers */
-
-	/* Force update timer (T500RS needs continuous force streaming!) */
-	struct timer_list force_timer;
-	struct work_struct force_work;
-	spinlock_t force_lock;
-	s8 current_force_level;  /* Current force level (-127 to 127) */
-	bool force_timer_active;
-	bool device_active;  /* Set to false during destruction to prevent new work */
-
-	/* Timer debugging */
-	unsigned long timer_start_jiffies;  /* When the timer was started */
-	unsigned long force_update_count;   /* Number of force updates sent */
-
-	/* Gain settings (0-65535 range, where 65535 = 100%) */
-	u16 device_gain;  /* Device-level master gain (set via sysfs) */
-	u16 game_gain;    /* In-game gain (set dynamically by game via set_gain callback) */
-
-	/* Per-effect gain multipliers (0-100 range, where 100 = 100%) */
-	/* These are applied in software when uploading/playing effects */
-	u8 constant_gain;  /* Constant force effects gain */
-	u8 periodic_gain;  /* Periodic effects (sine, square, triangle) gain */
-	u8 spring_gain;    /* Spring effects gain */
-	u8 damper_gain;    /* Damper effects gain */
-	u8 friction_gain;  /* Friction effects gain */
-	u8 inertia_gain;   /* Inertia effects gain */
+	/* Per-effect levels (0-100) from base driver's sysfs callbacks */
+	u8 spring_gain;
+	u8 damper_gain;
+	u8 friction_gain;
+	u8 inertia_gain;
 
 	/* Current wheel range for smooth transitions */
 	u16 current_range;  /* Current rotation range in degrees */
 
-	int (*open)(struct input_dev *dev);
-	void (*close)(struct input_dev *dev);
+	/* Async USB IO: queue and worker (so callbacks never sleep in atomic context) */
+	struct workqueue_struct *usb_wq;
+	struct work_struct io_work;
+	spinlock_t io_lock;
+	struct t500rs_op op_queue[T500RS_OP_QUEUE_SIZE];
+	u16 op_head;
+	u16 op_tail;
 };
 
 /* Supported parameters */
@@ -114,311 +113,208 @@ static const signed short t500rs_effects[] = {
 	-1
 };
 
-/* Work queue handler - sends USB INTERRUPT transfer (can sleep) */
-static void t500rs_work_handler(struct work_struct *work)
-{
-	struct t500rs_work_item *item = container_of(work, struct t500rs_work_item, work);
-	struct t500rs_device_entry *t500rs = item->t500rs;
-	int ret, transferred;
-
-	/* CRITICAL: Check if device is still valid before accessing */
-	if (!t500rs || !t500rs->usbdev || !t500rs->hdev) {
-		pr_warn("t500rs_work_handler: Device no longer valid, aborting transfer\n");
-		item->result = -ENODEV;
-		complete(&item->done);
-		kfree(item);
-		return;
-	}
-
-	/* DEBUG: Log what we're sending */
-	T500RS_DBG("USB TX [%zu]: %02x %02x %02x %02x %02x %02x %02x %02x\n",
-		 item->len,
-		 item->len > 0 ? item->data[0] : 0,
-		 item->len > 1 ? item->data[1] : 0,
-		 item->len > 2 ? item->data[2] : 0,
-		 item->len > 3 ? item->data[3] : 0,
-		 item->len > 4 ? item->data[4] : 0,
-		 item->len > 5 ? item->data[5] : 0,
-		 item->len > 6 ? item->data[6] : 0,
-		 item->len > 7 ? item->data[7] : 0);
-
-	/* Send via USB INTERRUPT (blocking, but we're in work queue so it's OK) */
-	ret = usb_interrupt_msg(t500rs->usbdev,
-				usb_sndintpipe(t500rs->usbdev, t500rs->ep_out),
-				item->data, item->len,
-				&transferred,
-				T500RS_USB_TIMEOUT);
-
-	if (ret < 0) {
-		hid_err(t500rs->hdev, "USB transfer FAILED: ret=%d, transferred=%d/%zu\n",
-			ret, transferred, item->len);
-	} else if (transferred != item->len) {
-		hid_warn(t500rs->hdev, "USB transfer incomplete: %d/%zu bytes\n",
-			 transferred, item->len);
-	} else {
-		T500RS_DBG("USB transfer OK: %d bytes\n", transferred);
-	}
-
-	/* Store result and signal completion */
-	item->result = ret;
-	complete(&item->done);
-
-	/* Free work item (async mode - caller doesn't wait) */
-	kfree(item);
-}
-
-/* Forward declaration */
+/* Forward declarations to avoid implicit declarations before worker uses them */
 static int t500rs_send_usb(struct t500rs_device_entry *t500rs, const u8 *data, size_t len);
+int t500rs_set_autocenter(void *data, u16 autocenter);
+int t500rs_set_range(void *data, u16 range);
+int t500rs_upload_effect(void *data, struct tmff2_effect_state *state);
+int t500rs_update_effect(void *data, struct tmff2_effect_state *state);
+int t500rs_play_effect(void *data, struct tmff2_effect_state *state);
+int t500rs_stop_effect(void *data, struct tmff2_effect_state *state);
 
-/* Force update work handler - sends Report 0x03 with current force level */
-static void t500rs_force_update_work(struct work_struct *work)
+/* --- Async IO queue: helpers and worker --- */
+
+static bool t500rs_op_pop(struct t500rs_device_entry *t500rs, struct t500rs_op *out)
 {
-	struct t500rs_device_entry *t500rs = container_of(work, struct t500rs_device_entry, force_work);
-	u8 buf[15];
 	unsigned long flags;
-	s8 level;
-	unsigned long elapsed_ms;
-
-	/* CRITICAL: Check if device is still valid */
-	if (!t500rs || !t500rs->usbdev || !t500rs->hdev) {
-		pr_warn("t500rs_force_update_work: Device no longer valid, stopping\n");
-		return;
+	bool ok = false;
+	spin_lock_irqsave(&t500rs->io_lock, flags);
+	if (t500rs->op_head != t500rs->op_tail) {
+		*out = t500rs->op_queue[t500rs->op_tail];
+		t500rs->op_tail = (t500rs->op_tail + 1) & (T500RS_OP_QUEUE_SIZE - 1);
+		ok = true;
 	}
-
-	/* Get current force level and update counter */
-	spin_lock_irqsave(&t500rs->force_lock, flags);
-	level = t500rs->current_force_level;
-	t500rs->force_update_count++;
-	spin_unlock_irqrestore(&t500rs->force_lock, flags);
-
-	/* Calculate elapsed time since timer started */
-	elapsed_ms = jiffies_to_msecs(jiffies - t500rs->timer_start_jiffies);
-
-	/* WORKAROUND: Re-upload effect every 5 seconds to keep T500RS alive
-	 * The T500RS seems to stop responding to force updates after ~9-10 seconds.
-	 * Re-uploading the effect (Reports 0x02 and 0x01) seems to reset this timeout.
-	 */
-	if (t500rs->force_update_count % 250 == 0) {  /* Every 5 seconds (250 * 20ms) */
-		T500RS_DBG("Re-uploading effect to keep T500RS alive (elapsed: %lu ms)\n", elapsed_ms);
-
-		/* Report 0x02 - Envelope */
-		memset(buf, 0, 15);
-		buf[0] = 0x02;
-		buf[1] = 0x1c;
-		buf[2] = 0x00;
-		t500rs_send_usb(t500rs, buf, 9);
-
-		/* Report 0x01 - Main effect upload - MATCH WINDOWS! */
-		memset(buf, 0, 15);
-		buf[0] = 0x01;
-		buf[1] = 0x00;  /* Effect ID 0 (Windows uses 0) */
-		buf[2] = 0x00;  /* Constant force type */
-		buf[3] = 0x40;
-		buf[4] = 0xff;  /* Windows uses 0xff */
-		buf[5] = 0xff;  /* Windows uses 0xff */
-		buf[6] = 0x00;
-		buf[7] = 0xff;
-		buf[8] = 0xff;
-		buf[9] = 0x0e;
-		buf[10] = 0x00;
-		buf[11] = 0x1c;
-		buf[12] = 0x00;
-		buf[13] = 0x00;
-		buf[14] = 0x00;
-		t500rs_send_usb(t500rs, buf, 15);
-	}
-
-	/* Send Report 0x03 - Force level */
-	buf[0] = 0x03;
-	buf[1] = 0x0e;
-	buf[2] = 0x00;
-	buf[3] = (u8)level;
-
-	T500RS_DBG("Force update #%lu (elapsed: %lu ms): level=%d (0x%02x)\n",
-		 t500rs->force_update_count, elapsed_ms, level, buf[3]);
-	t500rs_send_usb(t500rs, buf, 4);
+	spin_unlock_irqrestore(&t500rs->io_lock, flags);
+	return ok;
 }
 
-/* Force update timer callback - schedules work to send force update */
-static void t500rs_force_timer_callback(struct timer_list *t)
+static int t500rs_queue_op(struct t500rs_device_entry *t500rs, const struct t500rs_op *op)
 {
-	struct t500rs_device_entry *t500rs = from_timer(t500rs, t, force_timer);
 	unsigned long flags;
-	bool active;
+	u16 next;
+	int ret = 0;
+	if (!t500rs || !op)
+		return -EINVAL;
+	spin_lock_irqsave(&t500rs->io_lock, flags);
+	next = (t500rs->op_head + 1) & (T500RS_OP_QUEUE_SIZE - 1);
+	if (next == t500rs->op_tail) {
+		ret = -ENOSPC; /* queue full */
+	} else {
+		t500rs->op_queue[t500rs->op_head] = *op;
+		t500rs->op_head = next;
+	}
+	spin_unlock_irqrestore(&t500rs->io_lock, flags);
+	if (!ret)
+		queue_work(t500rs->usb_wq, &t500rs->io_work);
+	return ret;
+}
 
+static int t500rs_do_set_gain_byte(struct t500rs_device_entry *t500rs, u8 device_gain_byte)
+{
+	u8 *buf = t500rs->send_buffer;
+	buf[0] = 0x43; /* Set global gain */
+	buf[1] = device_gain_byte;
+	return t500rs_send_usb(t500rs, buf, 2);
+}
+
+static void t500rs_io_work_handler(struct work_struct *work)
+{
+	struct t500rs_device_entry *t500rs = container_of(work, struct t500rs_device_entry, io_work);
+	struct t500rs_op op;
+	while (t500rs_op_pop(t500rs, &op)) {
+		int ret = 0;
+		switch (op.type) {
+		case T500_OP_SET_GAIN:
+			ret = t500rs_do_set_gain_byte(t500rs, op.value8);
+			break;
+		case T500_OP_SET_AUTOCENTER:
+			ret = t500rs_set_autocenter(t500rs, op.value16);
+			break;
+		case T500_OP_SET_RANGE:
+			ret = t500rs_set_range(t500rs, op.value16);
+			break;
+		case T500_OP_UPLOAD: {
+			struct tmff2_effect_state st = { };
+			st.effect = op.effect;
+			ret = t500rs_upload_effect(t500rs, &st);
+			break;
+		}
+		case T500_OP_UPDATE: {
+			struct tmff2_effect_state st = { };
+			st.effect = op.effect;
+			ret = t500rs_update_effect(t500rs, &st);
+			break;
+		}
+		case T500_OP_PLAY: {
+			struct tmff2_effect_state st = { };
+			st.effect = op.effect;
+			ret = t500rs_play_effect(t500rs, &st);
+			break;
+		}
+		case T500_OP_STOP: {
+			struct tmff2_effect_state st = { };
+			st.effect = op.effect;
+			ret = t500rs_stop_effect(t500rs, &st);
+			break;
+		}
+		default:
+			break;
+		}
+		if (ret)
+			hid_warn(t500rs->hdev, "t500rs_io_work: op %u failed: %d\n", op.type, ret);
+	}
+}
+
+/* --- Queue wrapper callbacks (never sleep) --- */
+
+static int t500rs_queue_upload_effect(void *data, struct tmff2_effect_state *state)
+{
+	struct t500rs_device_entry *t500rs = data;
+	struct t500rs_op op = { };
+	if (!t500rs || !state)
+		return -ENODEV;
+	op.type = T500_OP_UPLOAD;
+	op.effect = state->effect;
+	return t500rs_queue_op(t500rs, &op);
+}
+
+static int t500rs_queue_update_effect(void *data, struct tmff2_effect_state *state)
+{
+	struct t500rs_device_entry *t500rs = data;
+	struct t500rs_op op = { };
+	if (!t500rs || !state)
+		return -ENODEV;
+	op.type = T500_OP_UPDATE;
+	op.effect = state->effect;
+	return t500rs_queue_op(t500rs, &op);
+}
+
+static int t500rs_queue_play_effect(void *data, struct tmff2_effect_state *state)
+{
+	struct t500rs_device_entry *t500rs = data;
+	struct t500rs_op op = { };
+	if (!t500rs || !state)
+		return -ENODEV;
+	op.type = T500_OP_PLAY;
+	op.effect = state->effect;
+	return t500rs_queue_op(t500rs, &op);
+}
+
+static int t500rs_queue_stop_effect(void *data, struct tmff2_effect_state *state)
+{
+	struct t500rs_device_entry *t500rs = data;
+	struct t500rs_op op = { };
+	if (!t500rs || !state)
+		return -ENODEV;
+	op.type = T500_OP_STOP;
+	op.effect = state->effect;
+	return t500rs_queue_op(t500rs, &op);
+}
+
+static int t500rs_queue_set_gain(void *data, u16 gain)
+{
+	struct t500rs_device_entry *t500rs = data;
+	struct t500rs_op op = { };
+	u8 device_gain_byte;
 	if (!t500rs)
-		return;
-
-	/* Check if timer should continue */
-	spin_lock_irqsave(&t500rs->force_lock, flags);
-	active = t500rs->force_timer_active;
-	spin_unlock_irqrestore(&t500rs->force_lock, flags);
-
-	if (active) {
-		/* Schedule work to send force update */
-		queue_work(t500rs->wq, &t500rs->force_work);
-
-		/* Re-arm timer for next update (20ms = 50Hz) */
-		mod_timer(&t500rs->force_timer, jiffies + msecs_to_jiffies(20));
-	}
+		return -ENODEV;
+	device_gain_byte = (u8)((gain * 127) / 65535);
+	op.type = T500_OP_SET_GAIN;
+	op.value8 = device_gain_byte;
+	return t500rs_queue_op(t500rs, &op);
 }
 
-/* Start continuous force updates */
-static void t500rs_start_force_timer(struct t500rs_device_entry *t500rs, s8 force_level)
+static int t500rs_queue_set_autocenter(void *data, u16 magnitude)
 {
-	unsigned long flags;
-
+	struct t500rs_device_entry *t500rs = data;
+	struct t500rs_op op = { };
 	if (!t500rs)
-		return;
-
-	T500RS_DBG("Starting continuous force updates at 50Hz, level=%d\n", force_level);
-
-	spin_lock_irqsave(&t500rs->force_lock, flags);
-	t500rs->current_force_level = force_level;
-	t500rs->force_timer_active = true;
-	t500rs->timer_start_jiffies = jiffies;
-	t500rs->force_update_count = 0;
-	spin_unlock_irqrestore(&t500rs->force_lock, flags);
-
-	T500RS_DBG("Starting force timer with level=%d\n", force_level);
-
-	/* Start timer (20ms = 50Hz) */
-	mod_timer(&t500rs->force_timer, jiffies + msecs_to_jiffies(20));
+		return -ENODEV;
+	op.type = T500_OP_SET_AUTOCENTER;
+	op.value16 = magnitude;
+	return t500rs_queue_op(t500rs, &op);
 }
 
-/* Stop continuous force updates */
-static void t500rs_stop_force_timer(struct t500rs_device_entry *t500rs)
+static int t500rs_queue_set_range(void *data, u16 range)
 {
-	unsigned long flags;
-	unsigned long elapsed_ms;
-	unsigned long update_count;
-	bool was_active;
-
+	struct t500rs_device_entry *t500rs = data;
+	struct t500rs_op op = { };
 	if (!t500rs)
-		return;
-
-	spin_lock_irqsave(&t500rs->force_lock, flags);
-	was_active = t500rs->force_timer_active;
-	t500rs->force_timer_active = false;
-	t500rs->current_force_level = 0;
-	spin_unlock_irqrestore(&t500rs->force_lock, flags);
-
-	/* Only log stats if timer was actually running */
-	if (was_active && t500rs->timer_start_jiffies != 0) {
-		elapsed_ms = jiffies_to_msecs(jiffies - t500rs->timer_start_jiffies);
-		update_count = t500rs->force_update_count;
-		T500RS_DBG("Stopping force timer after %lu updates in %lu ms\n",
-			 update_count, elapsed_ms);
-	}
-
-	/* Stop the timer - this is safe from any context */
-	del_timer(&t500rs->force_timer);
-
-	/* Only cancel work if we're NOT being called from the work handler itself
-	 * to avoid "scheduling while atomic" bug */
-	if (!in_interrupt() && !in_atomic()) {
-		cancel_work_sync(&t500rs->force_work);
-	}
+		return -ENODEV;
+	op.type = T500_OP_SET_RANGE;
+	op.value16 = range;
+	return t500rs_queue_op(t500rs, &op);
 }
 
-/* Update force level (called from play_effect) */
-static void t500rs_update_force_level(struct t500rs_device_entry *t500rs, s8 force_level)
-{
-	unsigned long flags;
 
-	if (!t500rs)
-		return;
 
-	spin_lock_irqsave(&t500rs->force_lock, flags);
-	t500rs->current_force_level = force_level;
-	spin_unlock_irqrestore(&t500rs->force_lock, flags);
-}
 
-/* Send data via USB INTERRUPT transfer (queues work, safe from atomic context) */
+
+/* Send data via USB INTERRUPT transfer (blocking) */
 static int t500rs_send_usb(struct t500rs_device_entry *t500rs, const u8 *data, size_t len)
 {
-	struct t500rs_work_item *item;
-
-	if (!t500rs || !data || len == 0 || len > 32) {
-		return -EINVAL;
-	}
-
-	/* CRITICAL: Don't queue new work if device is being destroyed */
-	if (!t500rs->device_active) {
-		pr_warn("t500rs_send_usb: Device not active, rejecting transfer\n");
-		return -ENODEV;
-	}
-
-	/* Allocate work item */
-	item = kzalloc(sizeof(*item), GFP_ATOMIC);
-	if (!item) {
-		hid_err(t500rs->hdev, "Failed to allocate work item\n");
-		return -ENOMEM;
-	}
-
-	/* Initialize work item */
-	INIT_WORK(&item->work, t500rs_work_handler);
-	init_completion(&item->done);
-	item->t500rs = t500rs;
-	memcpy(item->data, data, len);
-	item->len = len;
-	item->result = 0;
-
-	/* Queue work - don't wait, return immediately (async) */
-	queue_work(t500rs->wq, &item->work);
-
-	/* Return success immediately - actual USB transfer happens asynchronously */
-	return 0;
-}
-
-/* Send data via USB INTERRUPT transfer (blocking, for initialization only) */
-static int t500rs_send_usb_blocking(struct t500rs_device_entry *t500rs, const u8 *data, size_t len)
-{
 	int ret, transferred;
-
-	if (!t500rs || !data || len == 0 || len > T500RS_BUFFER_LENGTH) {
+	if (!t500rs || !data || len == 0 || len > T500RS_BUFFER_LENGTH)
 		return -EINVAL;
-	}
-
-	/* DEBUG: Log what we're sending */
-	T500RS_DBG("INIT USB TX [%zu]: %02x %02x %02x %02x %02x %02x %02x %02x\n",
-		 len,
-		 len > 0 ? data[0] : 0,
-		 len > 1 ? data[1] : 0,
-		 len > 2 ? data[2] : 0,
-		 len > 3 ? data[3] : 0,
-		 len > 4 ? data[4] : 0,
-		 len > 5 ? data[5] : 0,
-		 len > 6 ? data[6] : 0,
-		 len > 7 ? data[7] : 0);
-
 	ret = usb_interrupt_msg(t500rs->usbdev,
-				usb_sndintpipe(t500rs->usbdev, t500rs->ep_out),
-				(void *)data, len,
-				&transferred,
-				T500RS_USB_TIMEOUT);
-
-	if (ret < 0) {
-		hid_err(t500rs->hdev, "USB INTERRUPT transfer failed: %d\n", ret);
+			usb_sndintpipe(t500rs->usbdev, t500rs->ep_out),
+			(void *)data, len, &transferred, T500RS_USB_TIMEOUT);
+	if (ret < 0)
 		return ret;
-	}
-
-	if (transferred != len) {
-		hid_err(t500rs->hdev, "USB transfer incomplete: %d/%zu bytes\n", transferred, len);
-		return -EIO;
-	}
-
-	T500RS_DBG("INIT USB transfer OK: %d bytes\n", transferred);
-	return 0;
+	return (transferred == len) ? 0 : -EIO;
 }
 
-/* Helper function to apply per-effect gain */
-static inline int apply_effect_gain(int value, u8 effect_gain)
-{
-	/* effect_gain is 0-100, value is effect-specific range */
-	/* Return value scaled by effect_gain percentage */
-	return (value * effect_gain) / 100;
-}
+
 
 /* Upload constant force effect */
 static int t500rs_upload_constant(struct t500rs_device_entry *t500rs,
@@ -436,7 +332,6 @@ static int t500rs_upload_constant(struct t500rs_device_entry *t500rs,
 
 	/* NO DEADZONE - Send all forces exactly as requested, matching Windows behavior */
 
-	/* SIMPLE SEQUENCE - Match working userspace driver! */
 	/* Report 0x02 - Envelope (attack/fade) */
 	memset(buf, 0, 15);
 	buf[0] = 0x02;
@@ -494,8 +389,6 @@ static int t500rs_upload_constant(struct t500rs_device_entry *t500rs,
 		T500RS_DBG("Upload constant: id=%d, level=%d -> %d (0x%02x)\n",
 			 effect->id, level, signed_level, (u8)signed_level);
 
-		/* Update the force level (will be used when timer starts/restarts) */
-		t500rs_update_force_level(t500rs, signed_level);
 	}
 
 	return 0;
@@ -539,9 +432,9 @@ static int t500rs_upload_condition(struct t500rs_device_entry *t500rs,
 	right_strength = effect->u.condition[0].right_saturation;
 	left_strength = effect->u.condition[0].left_saturation;
 
-	/* Apply per-effect gain */
-	right_strength = apply_effect_gain(right_strength, effect_gain);
-	left_strength = apply_effect_gain(left_strength, effect_gain);
+	/* Apply per-effect level scaling (0-100) */
+	right_strength = (right_strength * effect_gain) / 100;
+	left_strength = (left_strength * effect_gain) / 100;
 
 	/* Scale to device range (0-127) */
 	right_strength = (right_strength * 127) / 65535;
@@ -618,8 +511,7 @@ static int t500rs_upload_periodic(struct t500rs_device_entry *t500rs,
 	u16 period = effect->u.periodic.period;
 	u8 mag;
 
-	/* Apply per-effect gain (periodic_gain is 0-100) */
-	magnitude = apply_effect_gain(magnitude, t500rs->periodic_gain);
+	/* Use game-provided magnitude directly; base gain is applied via set_gain() */
 
 	/* Determine waveform type */
 	switch (effect->u.periodic.waveform) {
@@ -673,6 +565,29 @@ static int t500rs_upload_periodic(struct t500rs_device_entry *t500rs,
 	ret = t500rs_send_usb(t500rs, buf, 9);
 	if (ret) {
 		hid_err(t500rs->hdev, "Failed to send Report 0x02: %d\n", ret);
+		return ret;
+	}
+
+	/* Report 0x01 - Main effect upload for periodic (set waveform/type) */
+	memset(buf, 0, 15);
+	buf[0] = 0x01;
+	buf[1] = 0x00;  /* Effect ID 0 */
+	buf[2] = effect_type;  /* Waveform type (0x20..0x24) */
+	buf[3] = 0x40;
+	buf[4] = 0xff;
+	buf[5] = 0xff;
+	buf[6] = 0x00;
+	buf[7] = 0xff;
+	buf[8] = 0xff;
+	buf[9] = 0x0e;   /* Parameter subtype reference */
+	buf[10] = 0x00;
+	buf[11] = 0x1c;  /* Envelope subtype reference */
+	buf[12] = 0x00;
+	buf[13] = 0x00;
+	buf[14] = 0x00;
+	ret = t500rs_send_usb(t500rs, buf, 15);
+	if (ret) {
+		hid_err(t500rs->hdev, "Failed to send Report 0x01 (periodic main): %d\n", ret);
 		return ret;
 	}
 
@@ -837,81 +752,36 @@ int t500rs_play_effect(void *data, struct tmff2_effect_state *state)
 	T500RS_DBG("Play effect: id=%d, type=0x%02x (FF_CONSTANT=0x%02x)\n",
 		 effect->id, effect->type, FF_CONSTANT);
 
-	/* NOTE: Condition effect disable code removed - testing Hypothesis 6 */
-	/* Keeping it simple to match userspace driver more closely */
-
-	/* For constant force, start continuous force updates */
-
-
+	/* For constant force: send one level update (0x03) then START (0x41) */
 	if (effect->type == FF_CONSTANT) {
+		int level = effect->u.constant.level;
 		s8 signed_level;
-		unsigned long flags;
+		s32 scaled;
 
-		/* NOTE: Gain is now sent to device via Report 0x43 in set_gain() */
-		/* No need to apply gain here - the device handles it */
+		/* Simple linear scaling from -32767..32767 to -127..127 */
+		scaled = (level * 127) / 32767;
+		signed_level = (s8)scaled;
 
-		/* CRITICAL FIX FOR AMS2: Use the force level that was set by upload_effect.
-		 * AMS2 calls stop/upload/play in rapid succession, so upload_effect has
-		 * already calculated and stored the correct force level in current_force_level.
-		 */
-		spin_lock_irqsave(&t500rs->force_lock, flags);
-		signed_level = t500rs->current_force_level;
-		spin_unlock_irqrestore(&t500rs->force_lock, flags);
+		T500RS_DBG("Constant force: level=%d -> %d (0x%02x)\n",
+			 level, signed_level, (u8)signed_level);
 
-			/* If already armed (timer running), skip re-sending 0x41 START.
-			 * Subsequent updates will adjust force level.
-			 */
-			{
-				unsigned long __fl;
-				bool __active;
-				spin_lock_irqsave(&t500rs->force_lock, __fl);
-				__active = t500rs->force_timer_active;
-				spin_unlock_irqrestore(&t500rs->force_lock, __fl);
-				if (__active) {
-					T500RS_DBG("Constant already armed; skipping 0x41 START\n");
-					return 0;
-				}
-			}
-
-		T500RS_DBG("Constant force: using level=%d (0x%02x) from upload_effect\n",
-			 signed_level, (u8)signed_level);
-
-		/* CRITICAL: Send Report 0x03 BEFORE Report 0x41! */
-		/* This matches the working userspace driver sequence */
+		/* Send Report 0x03 (force level) */
 		buf[0] = 0x03;
 		buf[1] = 0x0e;
 		buf[2] = 0x00;
 		buf[3] = (u8)signed_level;
-
-		T500RS_DBG("Sending Report 0x03 (force level): level=%d (0x%02x)\n",
-			 signed_level, (u8)signed_level);
 		ret = t500rs_send_usb(t500rs, buf, 4);
 		if (ret) {
 			hid_err(t500rs->hdev, "Failed to send Report 0x03: %d\n", ret);
 			return ret;
 		}
 
-		/* Now send Report 0x41 START command */
-		/* This activates the effect with the force level already set */
+		/* Send Report 0x41 START */
 		buf[0] = 0x41;
-		buf[1] = 0x00;  /* Effect ID 0 to match Windows */
-		buf[2] = 0x41;  /* START command */
+		buf[1] = 0x00;  /* Effect ID 0 */
+		buf[2] = 0x41;  /* START */
 		buf[3] = 0x01;
-
-		T500RS_DBG("Sending Report 0x41 (START): %02x %02x %02x %02x\n",
-			buf[0], buf[1], buf[2], buf[3]);
-		ret = t500rs_send_usb(t500rs, buf, 4);
-		if (ret) {
-			hid_err(t500rs->hdev, "Failed to send START command: %d\n", ret);
-			return ret;
-		}
-
-		/* T500RS requires CONTINUOUS force updates at 50Hz! */
-		/* Start the force update timer which will send Report 0x03 every 20ms */
-		/* The timer will use current_force_level which was set by upload_effect */
-		t500rs_start_force_timer(t500rs, signed_level);
-
-		return 0;
+		return t500rs_send_usb(t500rs, buf, 4);
 	}
 
 	/* For other effect types, send start command - Report 0x41
@@ -946,19 +816,13 @@ int t500rs_stop_effect(void *data, struct tmff2_effect_state *state)
 
 	T500RS_DBG("Stop effect: id=%d, type=%d\n", state->effect.id, state->effect.type);
 
-	/* For constant force: either SOFT-STOP (param) or Windows-style STOP */
+	/* For constant force: Windows-style STOP (0x41 00 00 01) */
 	if (state->effect.type == FF_CONSTANT) {
-		/* Windows-style: stop timer and send STOP (0x41 00 00 01) */
-				t500rs_stop_force_timer(t500rs);
-			buf[0] = 0x41;
-			buf[1] = 0x00;
-			buf[2] = 0x00;  /* STOP command */
-			buf[3] = 0x01;
-			T500RS_DBG("Sending Report 0x41 (STOP): %02x %02x %02x %02x\n",
-				buf[0], buf[1], buf[2], buf[3]);
-			ret = t500rs_send_usb(t500rs, buf, 4);
-			T500RS_DBG("Stop effect (constant) returned: %d\n", ret);
-			return ret;
+		buf[0] = 0x41;
+		buf[1] = 0x00;
+		buf[2] = 0x00;  /* STOP */
+		buf[3] = 0x01;
+		return t500rs_send_usb(t500rs, buf, 4);
 	}
 
 	/* For other effect types, send stop command - Report 0x41
@@ -986,74 +850,58 @@ int t500rs_update_effect(void *data, struct tmff2_effect_state *state)
 	/* Do NOT re-upload here; Windows keeps the effect and only updates force level */
 	/* This avoids redundant USB traffic and state churn */
 
-	/* CRITICAL FIX: If this is a constant force effect and the timer is active,
-	 * update the force level being sent to the wheel.
-	 * AMS2 calls update_effect() repeatedly to change force strength during gameplay.
-	 *
-	 * MATCH WINDOWS: Send forces exactly as requested - no deadzone, no amplification!
-	 */
+	/* Update constant force: send single 0x03 with new level */
 	if (effect->type == FF_CONSTANT) {
 		int level = effect->u.constant.level;
 		s8 signed_level;
 		s32 scaled;
+		u8 *buf3;
 
-		/* Simple linear scaling from -32767..32767 to -127..127 */
+		buf3 = t500rs->send_buffer;
+		if (!buf3)
+			return -ENOMEM;
+
 		scaled = (level * 127) / 32767;
 		signed_level = (s8)scaled;
 
-		T500RS_DBG("Update constant force: level=%d -> %d (0x%02x)\n",
-			 level, signed_level, (u8)signed_level);
-
-		/* Update the force level state */
-		t500rs_update_force_level(t500rs, signed_level);
-
-		if (t500rs->force_timer_active) {
-			/* Timer running: next tick will send updated level */
+		buf3[0] = 0x03;
+		buf3[1] = 0x0e;
+		buf3[2] = 0x00;
+		buf3[3] = (u8)signed_level;
+		return t500rs_send_usb(t500rs, buf3, 4);
 	}
-		}
-
 
 	return 0;
 }
 
-/* Set gain - called dynamically by games during gameplay */
+/* Set gain - base driver already multiplies game gain by sysfs gain */
 int t500rs_set_gain(void *data, u16 gain)
 {
 	struct t500rs_device_entry *t500rs = data;
-	u8 buf[4];
+	u8 *buf;
 	u8 device_gain_byte;
-	u32 combined_gain;
 	int ret;
 
 	if (!t500rs)
 		return -ENODEV;
 
-	/* Store the game's gain setting */
-	t500rs->game_gain = gain;
+	/* Convert 0-65535 to device range 0-127 (127 = 100%) */
+	device_gain_byte = (u8)((gain * 127) / 65535);
+	T500RS_DBG("Set gain: combined=%u (%u%%) -> device=0x%02x\n",
+		 gain, (gain * 100) / 65535, device_gain_byte);
 
-	/* Calculate combined gain: (device_gain * game_gain) / 65535 */
-	/* Both are 0-65535, result is also 0-65535 */
-	combined_gain = ((u32)t500rs->device_gain * (u32)gain) / 65535;
-
-	/* Convert to device range (0-127, where 127 = 100%) */
-	device_gain_byte = (u8)((combined_gain * 127) / 65535);
-
-	T500RS_DBG("Set gain: game=%u (%u%%), device=%u (%u%%), combined=%u (%u%%), sending=0x%02x\n",
-		 gain, (gain * 100) / 65535,
-		 t500rs->device_gain, (t500rs->device_gain * 100) / 65535,
-		 combined_gain, (combined_gain * 100) / 65535,
-		 device_gain_byte);
+	/* Use DMA-safe buffer (kmalloc'd) */
+	buf = t500rs->send_buffer;
+	if (!buf)
+		return -ENOMEM;
 
 	/* Send Report 0x43 - Set global gain */
 	buf[0] = 0x43;
 	buf[1] = device_gain_byte;
 
 	ret = t500rs_send_usb(t500rs, buf, 2);
-	if (ret) {
-		hid_err(t500rs->hdev, "Failed to set gain: %d\n", ret);
+	if (ret)
 		return ret;
-	}
-
 	return 0;
 }
 
@@ -1227,9 +1075,7 @@ int t500rs_set_range(void *data, u16 range)
 
 		/* Very small delay between steps for smooth transition
 		 * (only if not the last step) */
-		if (i < num_steps && num_steps > 1) {
-			mdelay(2);  /* 2ms delay between steps */
-		}
+		/* Avoid explicit delays; USB stack handles pacing. */
 	}
 
 	/* Store current range for next transition */
@@ -1314,237 +1160,7 @@ int t500rs_set_friction_level(void *data, u8 level)
 	return 0;
 }
 
-/* Sysfs attributes for per-effect gains */
 
-static ssize_t constant_gain_show(struct device *dev,
-		struct device_attribute *attr, char *buf)
-{
-	struct hid_device *hdev = to_hid_device(dev);
-	struct tmff2_device_entry *tmff2 = hid_get_drvdata(hdev);
-	struct t500rs_device_entry *t500rs;
-
-	if (!tmff2 || !tmff2->data)
-		return -ENODEV;
-
-	t500rs = tmff2->data;
-	return scnprintf(buf, PAGE_SIZE, "%u\n", t500rs->constant_gain);
-}
-
-static ssize_t constant_gain_store(struct device *dev,
-		struct device_attribute *attr, const char *buf, size_t count)
-{
-	struct hid_device *hdev = to_hid_device(dev);
-	struct tmff2_device_entry *tmff2 = hid_get_drvdata(hdev);
-	struct t500rs_device_entry *t500rs;
-	unsigned int value;
-	int ret;
-
-	if (!tmff2 || !tmff2->data)
-		return -ENODEV;
-
-	t500rs = tmff2->data;
-
-	ret = kstrtouint(buf, 0, &value);
-	if (ret) {
-		hid_err(hdev, "kstrtouint failed at constant_gain_store: %d\n", ret);
-		return ret;
-	}
-
-	if (value > 100) {
-		hid_err(hdev, "constant_gain must be 0-100, got %u\n", value);
-		return -EINVAL;
-	}
-
-	t500rs->constant_gain = (u8)value;
-	hid_dbg(hdev, "Constant gain set to %u%%\n", value);
-
-	return count;
-}
-static DEVICE_ATTR_RW(constant_gain);
-
-static ssize_t periodic_gain_show(struct device *dev,
-		struct device_attribute *attr, char *buf)
-{
-	struct hid_device *hdev = to_hid_device(dev);
-	struct tmff2_device_entry *tmff2 = hid_get_drvdata(hdev);
-	struct t500rs_device_entry *t500rs;
-
-	if (!tmff2 || !tmff2->data)
-		return -ENODEV;
-
-	t500rs = tmff2->data;
-	return scnprintf(buf, PAGE_SIZE, "%u\n", t500rs->periodic_gain);
-}
-
-static ssize_t periodic_gain_store(struct device *dev,
-		struct device_attribute *attr, const char *buf, size_t count)
-{
-	struct hid_device *hdev = to_hid_device(dev);
-	struct tmff2_device_entry *tmff2 = hid_get_drvdata(hdev);
-	struct t500rs_device_entry *t500rs;
-	unsigned int value;
-	int ret;
-
-	if (!tmff2 || !tmff2->data)
-		return -ENODEV;
-
-	t500rs = tmff2->data;
-
-	ret = kstrtouint(buf, 0, &value);
-	if (ret) {
-		hid_err(hdev, "kstrtouint failed at periodic_gain_store: %d\n", ret);
-		return ret;
-	}
-
-	if (value > 100) {
-		hid_err(hdev, "periodic_gain must be 0-100, got %u\n", value);
-		return -EINVAL;
-	}
-
-	t500rs->periodic_gain = (u8)value;
-	hid_dbg(hdev, "Periodic gain set to %u%%\n", value);
-
-	return count;
-}
-static DEVICE_ATTR_RW(periodic_gain);
-
-static ssize_t t500rs_spring_gain_show(struct device *dev,
-		struct device_attribute *attr, char *buf)
-{
-	struct hid_device *hdev = to_hid_device(dev);
-	struct tmff2_device_entry *tmff2 = hid_get_drvdata(hdev);
-	struct t500rs_device_entry *t500rs;
-
-	if (!tmff2 || !tmff2->data)
-		return -ENODEV;
-
-	t500rs = tmff2->data;
-	return scnprintf(buf, PAGE_SIZE, "%u\n", t500rs->spring_gain);
-}
-
-static ssize_t t500rs_spring_gain_store(struct device *dev,
-		struct device_attribute *attr, const char *buf, size_t count)
-{
-	struct hid_device *hdev = to_hid_device(dev);
-	struct tmff2_device_entry *tmff2 = hid_get_drvdata(hdev);
-	struct t500rs_device_entry *t500rs;
-	unsigned int value;
-	int ret;
-
-	if (!tmff2 || !tmff2->data)
-		return -ENODEV;
-
-	t500rs = tmff2->data;
-
-	ret = kstrtouint(buf, 0, &value);
-	if (ret) {
-		hid_err(hdev, "kstrtouint failed at t500rs_spring_gain_store: %d\n", ret);
-		return ret;
-	}
-
-	if (value > 100) {
-		hid_err(hdev, "spring_gain must be 0-100, got %u\n", value);
-		return -EINVAL;
-	}
-
-	t500rs->spring_gain = (u8)value;
-	hid_dbg(hdev, "Spring gain set to %u%%\n", value);
-
-	return count;
-}
-static DEVICE_ATTR(t500rs_spring_gain, 0660, t500rs_spring_gain_show, t500rs_spring_gain_store);
-
-static ssize_t t500rs_damper_gain_show(struct device *dev,
-		struct device_attribute *attr, char *buf)
-{
-	struct hid_device *hdev = to_hid_device(dev);
-	struct tmff2_device_entry *tmff2 = hid_get_drvdata(hdev);
-	struct t500rs_device_entry *t500rs;
-
-	if (!tmff2 || !tmff2->data)
-		return -ENODEV;
-
-	t500rs = tmff2->data;
-	return scnprintf(buf, PAGE_SIZE, "%u\n", t500rs->damper_gain);
-}
-
-static ssize_t t500rs_damper_gain_store(struct device *dev,
-		struct device_attribute *attr, const char *buf, size_t count)
-{
-	struct hid_device *hdev = to_hid_device(dev);
-	struct tmff2_device_entry *tmff2 = hid_get_drvdata(hdev);
-	struct t500rs_device_entry *t500rs;
-	unsigned int value;
-	int ret;
-
-	if (!tmff2 || !tmff2->data)
-		return -ENODEV;
-
-	t500rs = tmff2->data;
-
-	ret = kstrtouint(buf, 0, &value);
-	if (ret) {
-		hid_err(hdev, "kstrtouint failed at t500rs_damper_gain_store: %d\n", ret);
-		return ret;
-	}
-
-	if (value > 100) {
-		hid_err(hdev, "damper_gain must be 0-100, got %u\n", value);
-		return -EINVAL;
-	}
-
-	t500rs->damper_gain = (u8)value;
-	hid_dbg(hdev, "Damper gain set to %u%%\n", value);
-
-	return count;
-}
-static DEVICE_ATTR(t500rs_damper_gain, 0660, t500rs_damper_gain_show, t500rs_damper_gain_store);
-
-/* Device open callback - called when a game/application opens the device */
-int t500rs_open(void *data, int open_mode)
-{
-	struct t500rs_device_entry *t500rs = data;
-
-	if (!t500rs)
-		return -ENODEV;
-
-	T500RS_DBG("T500RS: Device opened by application (mode=%d)\n", open_mode);
-
-	/* CRITICAL: Flush work queue to prevent deadlock with usbhid_open() */
-	/* The work queue may be trying to send USB data while usbhid is opening */
-	if (t500rs->wq)
-		flush_workqueue(t500rs->wq);
-
-	/* Call stored open callback if it exists */
-	if (t500rs->open)
-		return t500rs->open(t500rs->input_dev);
-
-	return 0;
-}
-
-/* Device close callback - called when a game/application closes the device */
-int t500rs_close(void *data, int open_mode)
-{
-	struct t500rs_device_entry *t500rs = data;
-
-	if (!t500rs)
-		return -ENODEV;
-
-	T500RS_DBG("T500RS: Device closed by application (mode=%d)\n", open_mode);
-
-	/* Stop any ongoing force effects */
-	t500rs_stop_force_timer(t500rs);
-
-	/* Flush work queue */
-	if (t500rs->wq)
-		flush_workqueue(t500rs->wq);
-
-	/* Call stored close callback if it exists */
-	if (t500rs->close)
-		t500rs->close(t500rs->input_dev);
-
-	return 0;
-}
 
 /* Initialize T500RS device */
 int t500rs_wheel_init(struct tmff2_device_entry *tmff2, int open_mode)
@@ -1613,29 +1229,21 @@ int t500rs_wheel_init(struct tmff2_device_entry *tmff2, int open_mode)
 		goto err_buffer;
 	}
 
-	/* Create work queue for USB transfers (avoids atomic context issues) */
-	t500rs->wq = create_singlethread_workqueue("t500rs_wq");
-	if (!t500rs->wq) {
-		hid_err(t500rs->hdev, "Failed to create work queue\n");
+	/* Initialize async IO queue/worker */
+	spin_lock_init(&t500rs->io_lock);
+	t500rs->op_head = 0;
+	t500rs->op_tail = 0;
+	t500rs->usb_wq = alloc_workqueue("t500rs_usb", WQ_UNBOUND | WQ_HIGHPRI, 1);
+	if (!t500rs->usb_wq) {
 		ret = -ENOMEM;
-		goto err_wq;
+		goto err_buffer;
 	}
+	INIT_WORK(&t500rs->io_work, t500rs_io_work_handler);
 
-	/* Initialize force update timer and work (T500RS needs continuous force streaming!) */
-	spin_lock_init(&t500rs->force_lock);
-	t500rs->current_force_level = 0;
-	t500rs->force_timer_active = false;
-	t500rs->device_active = true;  /* Device is now active */
-	timer_setup(&t500rs->force_timer, t500rs_force_timer_callback, 0);
-	INIT_WORK(&t500rs->force_work, t500rs_force_update_work);
 
-	/* Initialize gain settings to 100% (65535 = 100%) */
-	t500rs->device_gain = 65535;  /* Device-level master gain */
-	t500rs->game_gain = 65535;    /* In-game gain */
 
-	/* Initialize per-effect gains to 100% (0-100 range) */
-	t500rs->constant_gain = 100;
-	t500rs->periodic_gain = 100;
+
+	/* Initialize per-effect levels to 100% (0-100 range) */
 	t500rs->spring_gain = 100;
 	t500rs->damper_gain = 100;
 	t500rs->friction_gain = 100;
@@ -1644,9 +1252,6 @@ int t500rs_wheel_init(struct tmff2_device_entry *tmff2, int open_mode)
 	/* Initialize current range to default (900°) for smooth transitions */
 	t500rs->current_range = 900;
 
-	/* Store original input_dev open/close callbacks */
-	t500rs->open = tmff2->input_dev->open;
-	t500rs->close = tmff2->input_dev->close;
 
 	/* Store device data in tmff2 */
 	tmff2->data = t500rs;
@@ -1654,18 +1259,16 @@ int t500rs_wheel_init(struct tmff2_device_entry *tmff2, int open_mode)
 	/* Use send_buffer for all USB transfers (DMA-safe) */
 	init_buf = t500rs->send_buffer;
 
-	/* Send initialization sequence (from userspace driver) */
 	T500RS_DBG("Sending initialization sequence...\n");
 
 	/* Report 0x42 - Init (15 bytes) */
 	memset(init_buf, 0, 15);
 	init_buf[0] = 0x42;
 	init_buf[1] = 0x01;
-	ret = t500rs_send_usb_blocking(t500rs, init_buf, 15);
+	ret = t500rs_send_usb(t500rs, init_buf, 15);
 	if (ret) {
 		hid_warn(t500rs->hdev, "Init command 1 (0x42) failed: %d\n", ret);
 	}
-	usleep_range(40000, 41000);
 
 	/* Report 0x0a - Config 1 (15 bytes) */
 	memset(init_buf, 0, 15);
@@ -1673,11 +1276,10 @@ int t500rs_wheel_init(struct tmff2_device_entry *tmff2, int open_mode)
 	init_buf[1] = 0x04;
 	init_buf[2] = 0x90;
 	init_buf[3] = 0x03;
-	ret = t500rs_send_usb_blocking(t500rs, init_buf, 15);
+	ret = t500rs_send_usb(t500rs, init_buf, 15);
 	if (ret) {
 		hid_warn(t500rs->hdev, "Init command 2 (0x0a config1) failed: %d\n", ret);
 	}
-	usleep_range(4000, 5000);
 
 	/* Report 0x0a - Config 2 (15 bytes) */
 	memset(init_buf, 0, 15);
@@ -1685,11 +1287,10 @@ int t500rs_wheel_init(struct tmff2_device_entry *tmff2, int open_mode)
 	init_buf[1] = 0x04;
 	init_buf[2] = 0x12;
 	init_buf[3] = 0x10;
-	ret = t500rs_send_usb_blocking(t500rs, init_buf, 15);
+	ret = t500rs_send_usb(t500rs, init_buf, 15);
 	if (ret) {
 		hid_warn(t500rs->hdev, "Init command 3 (0x0a config2) failed: %d\n", ret);
 	}
-	usleep_range(4000, 5000);
 
 	/* Report 0x0a - Config 3 (15 bytes) */
 	memset(init_buf, 0, 15);
@@ -1697,11 +1298,10 @@ int t500rs_wheel_init(struct tmff2_device_entry *tmff2, int open_mode)
 	init_buf[1] = 0x04;
 	init_buf[2] = 0x00;
 	init_buf[3] = 0x06;
-	ret = t500rs_send_usb_blocking(t500rs, init_buf, 15);
+	ret = t500rs_send_usb(t500rs, init_buf, 15);
 	if (ret) {
 		hid_warn(t500rs->hdev, "Init command 4 (0x0a config3) failed: %d\n", ret);
 	}
-	usleep_range(64000, 65000);
 
 	/* Report 0x40 - Enable FFB (4 bytes) */
 	/* CRITICAL FIX: Use Windows parameters 42 7b instead of 55 d5 */
@@ -1710,21 +1310,19 @@ int t500rs_wheel_init(struct tmff2_device_entry *tmff2, int open_mode)
 	init_buf[1] = 0x11;
 	init_buf[2] = 0x42;  /* Changed from 0x55 to match Windows! */
 	init_buf[3] = 0x7b;  /* Changed from 0xd5 to match Windows! */
-	ret = t500rs_send_usb_blocking(t500rs, init_buf, 4);
+	ret = t500rs_send_usb(t500rs, init_buf, 4);
 	if (ret) {
 		hid_warn(t500rs->hdev, "Init command 5 (0x40 enable) failed: %d\n", ret);
 	}
-	usleep_range(10000, 11000);
 
 	/* Report 0x42 - Additional init (2 bytes) */
 	memset(init_buf, 0, 4);
 	init_buf[0] = 0x42;
 	init_buf[1] = 0x04;
-	ret = t500rs_send_usb_blocking(t500rs, init_buf, 2);
+	ret = t500rs_send_usb(t500rs, init_buf, 2);
 	if (ret) {
 		hid_warn(t500rs->hdev, "Init command 6 (0x42) failed: %d\n", ret);
 	}
-	usleep_range(8000, 9000);
 
 	/* Report 0x40 - Config (4 bytes) */
 	memset(init_buf, 0, 4);
@@ -1732,22 +1330,20 @@ int t500rs_wheel_init(struct tmff2_device_entry *tmff2, int open_mode)
 	init_buf[1] = 0x04;
 	init_buf[2] = 0x00;
 	init_buf[3] = 0x00;
-	ret = t500rs_send_usb_blocking(t500rs, init_buf, 4);
+	ret = t500rs_send_usb(t500rs, init_buf, 4);
 	if (ret) {
 		hid_warn(t500rs->hdev, "Init command 7 (0x40 config) failed: %d\n", ret);
 	}
-	usleep_range(8000, 9000);
 
 	/* Report 0x43 - Set global gain (2 bytes) */
 	/* CRITICAL FIX: Set gain to maximum (0xFF = 100%), not 0x00! */
 	memset(init_buf, 0, 4);
 	init_buf[0] = 0x43;
 	init_buf[1] = 0xFF;  /* Maximum gain - was 0x00 which DISABLED all forces! */
-	ret = t500rs_send_usb_blocking(t500rs, init_buf, 2);
+	ret = t500rs_send_usb(t500rs, init_buf, 2);
 	if (ret) {
 		hid_warn(t500rs->hdev, "Init command 8 (0x43) failed: %d\n", ret);
 	}
-	usleep_range(8000, 9000);
 
 	/* Report 0x41 - Clear effects (4 bytes) */
 	memset(init_buf, 0, 4);
@@ -1755,11 +1351,10 @@ int t500rs_wheel_init(struct tmff2_device_entry *tmff2, int open_mode)
 	init_buf[1] = 0x00;
 	init_buf[2] = 0x00;
 	init_buf[3] = 0x00;
-	ret = t500rs_send_usb_blocking(t500rs, init_buf, 4);
+	ret = t500rs_send_usb(t500rs, init_buf, 4);
 	if (ret) {
 		hid_warn(t500rs->hdev, "Init command 9 (0x41 clear) failed: %d\n", ret);
 	}
-	usleep_range(8000, 9000);
 
 	/* Report 0x40 - Final setup (4 bytes) */
 	memset(init_buf, 0, 4);
@@ -1767,11 +1362,10 @@ int t500rs_wheel_init(struct tmff2_device_entry *tmff2, int open_mode)
 	init_buf[1] = 0x08;
 	init_buf[2] = 0x00;
 	init_buf[3] = 0x00;
-	ret = t500rs_send_usb_blocking(t500rs, init_buf, 4);
+	ret = t500rs_send_usb(t500rs, init_buf, 4);
 	if (ret) {
 		hid_warn(t500rs->hdev, "Init command 10 (0x40 final) failed: %d\n", ret);
 	}
-	usleep_range(8000, 9000);
 
 	/* Report 0x40 - Set mode (4 bytes) */
 	memset(init_buf, 0, 4);
@@ -1779,13 +1373,12 @@ int t500rs_wheel_init(struct tmff2_device_entry *tmff2, int open_mode)
 	init_buf[1] = 0x03;
 	init_buf[2] = 0x0d;
 	init_buf[3] = 0x00;
-	ret = t500rs_send_usb_blocking(t500rs, init_buf, 4);
+	ret = t500rs_send_usb(t500rs, init_buf, 4);
 	if (ret) {
 		hid_warn(t500rs->hdev, "Init command 11 (0x40 mode) failed: %d\n", ret);
 	}
-	usleep_range(8000, 9000);
 
-	/* Disable autocenter spring properly (like userspace driver) */
+	/* Disable autocenter spring properly */
 	/* Report 0x05 - Set spring coefficients to 0 */
 	memset(init_buf, 0, 15);
 	init_buf[0] = 0x05;
@@ -1795,11 +1388,10 @@ int t500rs_wheel_init(struct tmff2_device_entry *tmff2, int open_mode)
 	init_buf[4] = 0x00;  /* Left coefficient = 0 */
 	init_buf[9] = 0x00;  /* Right saturation = 0 */
 	init_buf[10] = 0x00; /* Left saturation = 0 */
-	ret = t500rs_send_usb_blocking(t500rs, init_buf, 11);
+	ret = t500rs_send_usb(t500rs, init_buf, 11);
 	if (ret) {
 		hid_warn(t500rs->hdev, "Disable autocenter (0x05 0x0e) failed: %d\n", ret);
 	}
-	usleep_range(5000, 6000);
 
 	/* Report 0x05 - Set deadband and center */
 	memset(init_buf, 0, 15);
@@ -1810,11 +1402,10 @@ int t500rs_wheel_init(struct tmff2_device_entry *tmff2, int open_mode)
 	init_buf[4] = 0x00;  /* Center = 0 */
 	init_buf[9] = 0x00;  /* Right saturation = 0 */
 	init_buf[10] = 0x00; /* Left saturation = 0 */
-	ret = t500rs_send_usb_blocking(t500rs, init_buf, 11);
+	ret = t500rs_send_usb(t500rs, init_buf, 11);
 	if (ret) {
 		hid_warn(t500rs->hdev, "Disable autocenter (0x05 0x1c) failed: %d\n", ret);
 	}
-	usleep_range(5000, 6000);
 
 	/* Stop autocenter effect (effect ID 15) */
 	memset(init_buf, 0, 4);
@@ -1822,39 +1413,13 @@ int t500rs_wheel_init(struct tmff2_device_entry *tmff2, int open_mode)
 	init_buf[1] = 15;  /* Autocenter effect ID */
 	init_buf[2] = 0x00;  /* STOP */
 	init_buf[3] = 0x01;
-	ret = t500rs_send_usb_blocking(t500rs, init_buf, 4);
+	ret = t500rs_send_usb(t500rs, init_buf, 4);
 	if (ret) {
 		hid_warn(t500rs->hdev, "Stop autocenter effect failed: %d\n", ret);
 	} else {
 		T500RS_DBG("Autocenter fully disabled\n");
 	}
 
-	/* Create sysfs attributes for per-effect gains */
-	/* Note: Ignore -EEXIST errors (attribute already exists from previous init) */
-
-	ret = device_create_file(&t500rs->hdev->dev, &dev_attr_constant_gain);
-	if (ret && ret != -EEXIST)
-		hid_warn(t500rs->hdev, "Failed to create constant_gain sysfs: %d\n", ret);
-	else if (ret == 0)
-		T500RS_DBG("Created constant_gain sysfs attribute\n");
-
-	ret = device_create_file(&t500rs->hdev->dev, &dev_attr_periodic_gain);
-	if (ret && ret != -EEXIST)
-		hid_warn(t500rs->hdev, "Failed to create periodic_gain sysfs: %d\n", ret);
-	else if (ret == 0)
-		T500RS_DBG("Created periodic_gain sysfs attribute\n");
-
-	ret = device_create_file(&t500rs->hdev->dev, &dev_attr_t500rs_spring_gain);
-	if (ret && ret != -EEXIST)
-		hid_warn(t500rs->hdev, "Failed to create t500rs_spring_gain sysfs: %d\n", ret);
-	else if (ret == 0)
-		T500RS_DBG("Created t500rs_spring_gain sysfs attribute\n");
-
-	ret = device_create_file(&t500rs->hdev->dev, &dev_attr_t500rs_damper_gain);
-	if (ret && ret != -EEXIST)
-		hid_warn(t500rs->hdev, "Failed to create t500rs_damper_gain sysfs: %d\n", ret);
-	else if (ret == 0)
-		T500RS_DBG("Created t500rs_damper_gain sysfs attribute\n");
 
 	hid_info(t500rs->hdev, "T500RS initialized successfully (USB INTERRUPT mode)\n");
 	T500RS_DBG("Endpoint: 0x%02x, Buffer: %zu bytes\n",
@@ -1862,9 +1427,8 @@ int t500rs_wheel_init(struct tmff2_device_entry *tmff2, int open_mode)
 
 	return 0;
 
-err_wq:
-	kfree(t500rs->send_buffer);
 err_buffer:
+	kfree(t500rs->send_buffer);
 err_endpoint:
 	kfree(t500rs);
 err_alloc:
@@ -1880,26 +1444,13 @@ int t500rs_wheel_destroy(void *data)
 		return 0;
 
 	T500RS_DBG("T500RS: Cleaning up\n");
-
-	/* CRITICAL: Mark device as inactive to prevent new work from being queued */
-	t500rs->device_active = false;
-
-	/* Stop force update timer */
-	t500rs_stop_force_timer(t500rs);
-
-	/* Destroy work queue (flushes pending work) */
-	if (t500rs->wq) {
-		flush_workqueue(t500rs->wq);
-		destroy_workqueue(t500rs->wq);
+	/* Stop and destroy async worker */
+	if (t500rs->usb_wq) {
+		flush_workqueue(t500rs->usb_wq);
+		destroy_workqueue(t500rs->usb_wq);
+		t500rs->usb_wq = NULL;
 	}
 
-	/* Remove sysfs attributes */
-	T500RS_DBG("Removing per-effect gain sysfs attributes...\n");
-	device_remove_file(&t500rs->hdev->dev, &dev_attr_constant_gain);
-	device_remove_file(&t500rs->hdev->dev, &dev_attr_periodic_gain);
-	device_remove_file(&t500rs->hdev->dev, &dev_attr_t500rs_spring_gain);
-	device_remove_file(&t500rs->hdev->dev, &dev_attr_t500rs_damper_gain);
-	T500RS_DBG("Sysfs attributes removed\n");
 
 	/* Free resources */
 	kfree(t500rs->send_buffer);
@@ -1913,14 +1464,14 @@ int t500rs_populate_api(struct tmff2_device_entry *tmff2)
 {
 	int i;
 
-	tmff2->play_effect = t500rs_play_effect;
-	tmff2->upload_effect = t500rs_upload_effect;
-	tmff2->update_effect = t500rs_update_effect;
-	tmff2->stop_effect = t500rs_stop_effect;
+	tmff2->play_effect = t500rs_queue_play_effect;
+	tmff2->upload_effect = t500rs_queue_upload_effect;
+	tmff2->update_effect = t500rs_queue_update_effect;
+	tmff2->stop_effect = t500rs_queue_stop_effect;
 
-	tmff2->set_gain = t500rs_set_gain;
-	tmff2->set_autocenter = t500rs_set_autocenter;
-	tmff2->set_range = t500rs_set_range;
+	tmff2->set_gain = t500rs_queue_set_gain;
+	tmff2->set_autocenter = t500rs_queue_set_autocenter;
+	tmff2->set_range = t500rs_queue_set_range;
 	tmff2->set_spring_level = t500rs_set_spring_level;
 	tmff2->set_damper_level = t500rs_set_damper_level;
 	tmff2->set_friction_level = t500rs_set_friction_level;
@@ -1928,10 +1479,6 @@ int t500rs_populate_api(struct tmff2_device_entry *tmff2)
 	tmff2->wheel_init = t500rs_wheel_init;
 	tmff2->wheel_destroy = t500rs_wheel_destroy;
 
-	/* CRITICAL FIX: Implement open/close to prevent deadlock when games open device */
-	/* These callbacks flush the work queue to avoid USB lock contention */
-	tmff2->open = t500rs_open;
-	tmff2->close = t500rs_close;
 
 	tmff2->params = t500rs_params;
 	tmff2->max_effects = T500RS_MAX_EFFECTS;
