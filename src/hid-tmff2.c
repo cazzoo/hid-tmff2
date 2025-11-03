@@ -816,17 +816,26 @@ MODULE_DEVICE_TABLE(hid, tmff2_devices);
 static int tmff2_raw_event(struct hid_device *hdev, struct hid_report *report,
 				 __u8 *data, int size)
 {
-	/* At log level 3, emit only UNKNOWN/UNMANAGED RX packets */
-	if (t500rs_log_level >= 3 && data && size > 0) {
-		unsigned char id = data[0];
-		if (!tmff2_is_known_vendor_id(id)) {
+	/* At level 3: ignore normal input reports (axes/buttons) and idless reports;
+	 * only dump vendor/feature-like unknowns. */
+	if (t500rs_log_level >= 3 && report && data && size > 0) {
+		/* Skip input traffic entirely (these are the steering updates you saw). */
+		if (report->type == HID_INPUT_REPORT)
+			return 0;
+
+		/* Use the real Report ID, not data[0] (id==0 means no Report ID). */
+		if (report->id == 0)
+			return 0;
+
+		if (!tmff2_is_known_vendor_id((unsigned char)report->id)) {
 			char hex[3 * 64 + 4];
 			int i, off = 0, max = size > 64 ? 64 : size;
 			for (i = 0; i < max && off + 3 < sizeof(hex); i++)
 				off += scnprintf(hex + off, sizeof(hex) - off, "%02x ", data[i]);
 			if (size > max)
 				scnprintf(hex + off, sizeof(hex) - off, "...");
-			hid_info(hdev, "HID RX UNKNOWN [id=0x%02x len=%d]: %s\n", id, size, hex);
+			hid_info(hdev, "HID RX UNKNOWN [type=%d id=0x%02x len=%d]: %s\n",
+				report->type, report->id, size, hex);
 		}
 	}
 	return 0; /* always pass through */
