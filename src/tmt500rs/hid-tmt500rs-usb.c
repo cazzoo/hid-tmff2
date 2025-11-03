@@ -135,9 +135,19 @@ struct t500rs_device_entry {
   /* Current wheel range for smooth transitions */
   u16 current_range; /* Current rotation range in degrees */
 
-  /* Async USB IO: queue and worker (so callbacks never sleep in atomic context)
+  /* Async USB I/O rationale:
+   * - The core scheduler (tmff2_work_handler in hid-tmff2.c) invokes wheel callbacks
+   *   while holding tmff2->lock (spinlock/atomic context).
+   * - Our TX path uses usb_interrupt_msg(), which may sleep; sleeping under a spinlock
+   *   would deadlock or trigger WARNs.
+   * - Therefore we enqueue device operations and complete them in process context via
+   *   a work handler queued on system_highpri_wq (no per-device workqueue). This
+   *   ensures all USB traffic is emitted outside atomic context.
+   * - This is NOT "continuous force streaming" — we only serialize discrete commands
+   *   (upload/update/play/stop and param ops like gain/range).
+   * - Long-term: if the core is refactored to invoke callbacks outside the spinlock,
+   *   this async layer can be removed and calls made synchronously.
    */
-  struct workqueue_struct *usb_wq;
   struct work_struct io_work;
   spinlock_t io_lock;
   struct t500rs_op op_queue[T500RS_OP_QUEUE_SIZE];
@@ -199,7 +209,8 @@ static int t500rs_queue_op(struct t500rs_device_entry *t500rs,
   }
   spin_unlock_irqrestore(&t500rs->io_lock, flags);
   if (!ret)
-    queue_work(t500rs->usb_wq, &t500rs->io_work);
+    /* Use global system_highpri_wq: avoids per-device workqueue while keeping ordering */
+    queue_work(system_highpri_wq, &t500rs->io_work);
   return ret;
 }
 
@@ -1224,11 +1235,7 @@ static int t500rs_wheel_init(struct tmff2_device_entry *tmff2, int open_mode) {
   spin_lock_init(&t500rs->io_lock);
   t500rs->op_head = 0;
   t500rs->op_tail = 0;
-  t500rs->usb_wq = alloc_workqueue("t500rs_usb", WQ_UNBOUND | WQ_HIGHPRI, 1);
-  if (!t500rs->usb_wq) {
-    ret = -ENOMEM;
-    goto err_buffer;
-  }
+  /* Minimal change: use global system_highpri_wq instead of a dedicated per-device queue */
   INIT_WORK(&t500rs->io_work, t500rs_io_work_handler);
 
   /* Initialize per-effect levels to 100% (0-100 range) */
@@ -1430,12 +1437,8 @@ static int t500rs_wheel_destroy(void *data) {
     return 0;
 
   T500RS_DBG("T500RS: Cleaning up\n");
-  /* Stop and destroy async worker */
-  if (t500rs->usb_wq) {
-    flush_workqueue(t500rs->usb_wq);
-    destroy_workqueue(t500rs->usb_wq);
-    t500rs->usb_wq = NULL;
-  }
+  /* Ensure any queued async I/O is finished before freeing resources */
+  flush_work(&t500rs->io_work);
 
   /* Free resources */
   kfree(t500rs->send_buffer);
