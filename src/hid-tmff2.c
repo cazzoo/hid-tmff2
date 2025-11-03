@@ -5,6 +5,22 @@
 #include <linux/version.h>
 #include "hid-tmff2.h"
 
+/* Share t500rs_log_level across compilation units (level 3 = unknown-only) */
+extern int t500rs_log_level;
+
+/* Known vendor/opcode IDs managed by the driver (TX side) */
+static inline int tmff2_is_known_vendor_id(unsigned char id)
+{
+	switch (id) {
+	case 0x01: case 0x02: case 0x03: case 0x04: case 0x05:
+	case 0x40: case 0x41: case 0x42: case 0x43:
+	case 0x0a:
+		return 1;
+	default:
+		return 0;
+	}
+}
+
 
 int open_mode = 1;
 module_param(open_mode, int, 0660);
@@ -748,6 +764,7 @@ oom_err:
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(6,12,0)
 static __u8 *tmff2_report_fixup(struct hid_device *hdev, __u8 *rdesc,
+
 		unsigned int *rsize)
 #else
 static const __u8 *tmff2_report_fixup(struct hid_device *hdev, __u8 *rdesc,
@@ -782,6 +799,7 @@ static void tmff2_remove(struct hid_device *hdev)
 
 	if (tmff2->params & PARAM_DAMPER_LEVEL)
 		device_remove_file(dev, &dev_attr_damper_level);
+
 
 	if (tmff2->params & PARAM_SPRING_LEVEL)
 		device_remove_file(dev, &dev_attr_spring_level);
@@ -819,6 +837,34 @@ static const struct hid_device_id tmff2_devices[] = {
 	{}
 };
 MODULE_DEVICE_TABLE(hid, tmff2_devices);
+static int tmff2_raw_event(struct hid_device *hdev, struct hid_report *report,
+				 __u8 *data, int size)
+{
+	/* At level 3: ignore normal input reports (axes/buttons) and idless reports;
+	 * only dump vendor/feature-like unknowns. */
+	if (t500rs_log_level >= 3 && report && data && size > 0) {
+		/* Skip input traffic entirely (these are the steering updates you saw). */
+		if (report->type == HID_INPUT_REPORT)
+			return 0;
+
+		/* Use the real Report ID, not data[0] (id==0 means no Report ID). */
+		if (report->id == 0)
+			return 0;
+
+		if (!tmff2_is_known_vendor_id((unsigned char)report->id)) {
+			char hex[3 * 64 + 4];
+			int i, off = 0, max = size > 64 ? 64 : size;
+			for (i = 0; i < max && off + 3 < sizeof(hex); i++)
+				off += scnprintf(hex + off, sizeof(hex) - off, "%02x ", data[i]);
+			if (size > max)
+				scnprintf(hex + off, sizeof(hex) - off, "...");
+			hid_info(hdev, "HID RX UNKNOWN [type=%d id=0x%02x len=%d]: %s\n",
+				report->type, report->id, size, hex);
+		}
+	}
+	return 0; /* always pass through */
+}
+
 
 static struct hid_driver tmff2_driver = {
 	.name = "tmff2",
@@ -826,6 +872,7 @@ static struct hid_driver tmff2_driver = {
 	.probe = tmff2_probe,
 	.remove = tmff2_remove,
 	.report_fixup = tmff2_report_fixup,
+	.raw_event = tmff2_raw_event,
 };
 module_hid_driver(tmff2_driver);
 
