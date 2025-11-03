@@ -71,7 +71,8 @@ static inline int t500rs_is_known_tx(const unsigned char *data, size_t len)
 /* Debug logging helper (requires local variable named 't500rs') */
 #define T500RS_DBG(fmt, ...)                                                   \
   do {                                                                         \
-    if (t500rs_log_level > 0)                                                  \
+    /* Suppress normal debug at level 3 (unknown-only mode) */                 \
+    if (t500rs_log_level > 0 && t500rs_log_level < 3)                          \
       hid_info(t500rs->hdev, fmt, ##__VA_ARGS__);                              \
   } while (0)
 /* IO operation queue to avoid sleeping in atomic context */
