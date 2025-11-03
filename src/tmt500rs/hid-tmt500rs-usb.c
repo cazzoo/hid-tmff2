@@ -12,6 +12,10 @@
 #include <linux/usb.h>
 #include <linux/workqueue.h>
 
+#include <linux/kernel.h>
+#include <linux/module.h>
+#include <linux/moduleparam.h>
+
 #include "../hid-tmff2.h"
 
 /* Build-time injected version (from Makefile/Kbuild) */
@@ -37,14 +41,55 @@
 #define GAIN_MAX 65535
 
 /* Logging verbosity (0=minimal, 1=verbose) */
-static int t500rs_log_level;
+int t500rs_log_level;
 module_param(t500rs_log_level, int, 0644);
-MODULE_PARM_DESC(t500rs_log_level, "Log level: 0=minimal (default), 1=verbose");
+MODULE_PARM_DESC(t500rs_log_level,
+                 "Log level: 0=minimal, 1=verbose, 2=usb-dump TX, 3=usb-dump UNKNOWN only (TX+RX)");
+
+
+
+/* Helper: classify whether a TX buffer is a known/managed report
+ * Known first bytes (report IDs / opcodes) we intentionally emit:
+ *   0x01,0x02,0x03,0x04,0x05,0x40,0x41,0x42,0x43,0x0a
+ */
+static inline int t500rs_is_known_tx(const unsigned char *data, size_t len)
+{
+  unsigned char r, s;
+  if (!data || !len)
+    return 1;
+  r = data[0];
+  s = (len > 1) ? data[1] : 0;
+  switch (r) {
+  case 0x01:
+    return len == 15; /* main effect upload */
+  case 0x02:
+    return len == 9 && s == 0x1c; /* envelope */
+  case 0x03:
+    return len == 4 && s == 0x0e && ((len > 2) ? data[2] == 0x00 : 0); /* const force level */
+  case 0x04:
+    return (s == 0x0e) && (len == 8 || len == 9); /* periodic/ramp params */
+  case 0x05:
+    return (len == 11) && (s == 0x0e || s == 0x1c) && ((len > 2) ? data[2] == 0x00 : 0);
+  case 0x40:
+    return (len == 4) && (s == 0x03 || s == 0x04 || s == 0x08 || s == 0x11);
+  case 0x41:
+    return len == 4; /* play/stop/clear */
+  case 0x42:
+    return ((len == 2) && (s == 0x05 || s == 0x04)) || ((len == 15) && s == 0x01);
+  case 0x43:
+    return len == 2; /* global gain */
+  case 0x0a:
+    return (len == 15) && s == 0x04; /* config */
+  default:
+    return 0;
+  }
+}
 
 /* Debug logging helper (requires local variable named 't500rs') */
 #define T500RS_DBG(fmt, ...)                                                   \
   do {                                                                         \
-    if (t500rs_log_level > 0)                                                  \
+    /* Suppress normal debug at level 3 (unknown-only mode) */                 \
+    if (t500rs_log_level > 0 && t500rs_log_level < 3)                          \
       hid_info(t500rs->hdev, fmt, ##__VA_ARGS__);                              \
   } while (0)
 /* IO operation queue to avoid sleeping in atomic context */
@@ -275,12 +320,13 @@ static int t500rs_queue_set_gain(void *data, u16 gain) {
 
 static int t500rs_queue_set_autocenter(void *data, u16 magnitude) {
   struct t500rs_device_entry *t500rs = data;
-  struct t500rs_op op = {};
+  u8 percent;
   if (!t500rs)
     return -ENODEV;
-  op.type = T500_OP_SET_AUTOCENTER;
-  op.value16 = magnitude;
-  return t500rs_queue_op(t500rs, &op);
+  percent = (u8)((magnitude * 100) / 65535);
+  T500RS_DBG("Ignoring FF_AUTOCENTER request from game: %u%% (value=%u)\n",
+             percent, magnitude);
+  return 0;
 }
 
 static int t500rs_queue_set_range(void *data, u16 range) {
@@ -299,6 +345,19 @@ static int t500rs_send_usb(struct t500rs_device_entry *t500rs, const u8 *data,
   int ret, transferred;
   if (!t500rs || !data || len == 0 || len > T500RS_BUFFER_LENGTH)
     return -EINVAL;
+  if (t500rs_log_level > 1) {
+    char hex[3 * T500RS_BUFFER_LENGTH + 1];
+    size_t i, off = 0;
+    for (i = 0; i < len && off + 3 < sizeof(hex); i++)
+      off += scnprintf(hex + off, sizeof(hex) - off, "%02x ", data[i]);
+    if (t500rs_log_level == 2) {
+      hid_info(t500rs->hdev, "USB TX [%zu]: %s\n", len, hex);
+    } else if (t500rs_log_level >= 3) {
+      if (!t500rs_is_known_tx(data, len))
+        hid_info(t500rs->hdev, "USB TX UNKNOWN [%zu]: %s\n", len, hex);
+    }
+  }
+
   ret = usb_interrupt_msg(t500rs->usbdev,
                           usb_sndintpipe(t500rs->usbdev, t500rs->ep_out),
                           (void *)data, len, &transferred, T500RS_USB_TIMEOUT);
@@ -868,8 +927,7 @@ static int t500rs_set_autocenter(void *data, u16 autocenter) {
   /* Convert from 0-65535 range to 0-100 percentage */
   autocenter_percent = (u8)((autocenter * 100) / 65535);
 
-  T500RS_DBG("Set autocenter: %u%% (value=%u)\n", autocenter_percent,
-             autocenter);
+  T500RS_DBG("Set autocenter: %u%% (value=%u)\n", autocenter_percent, autocenter);
 
   /* Use DMA-safe preallocated buffer */
   buf = t500rs->send_buffer;
