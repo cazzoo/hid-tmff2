@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Force feedback support for Thrustmaster T500RS racing wheel
- * Based on reverse engineering analysis from ghidra_reverse_engineering/
+ *
+ * THIS DRIVER IS NON-FUNCTIONAL. DO NOT USE.
  */
 
 #include <linux/usb.h>
