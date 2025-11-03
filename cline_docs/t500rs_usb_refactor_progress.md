@@ -135,3 +135,37 @@ Further hygiene (production alignment)
 - Minor readability: use GAIN_MAX macro in queue_set_gain.
 - Remove dead code: fully deleted the unused direct t500rs_set_gain() block previously guarded by #if 0.
 
+
+## 2025-11-03
+
+Version logging and build-time version injection
+- Added build-time injected version macro for T500RS: T500RS_DRIVER_VERSION
+  - Defined via Makefile + Kbuild: T500RS_BASE_VERSION=0.1 and GIT short hash (rev-parse --short=7)
+  - Kbuild passes -DT500RS_DRIVER_VERSION="0.1-<hash>" using ccflags-y += $(T500RS_VERSION_DEF)
+  - C fallback define remains ("0.1-local") if not provided at build
+- On driver start (wheel_init), log the version:
+  - hid_info(hdev, "T500RS driver version %s", T500RS_DRIVER_VERSION)
+
+Validation
+- make && sudo ./reload_modules.sh
+- Verified dmesg shows the version line alongside the initialization message
+- Confirmed the loaded module is the locally built one via srcversion comparison
+
+Next
+- When cutting a release, we can pin BASE_VERSION (e.g., 0.2) and optionally drop hash
+
+
+## 2025-11-03 (cont.)
+
+Build hash + script rename and verification
+- Added BUILD_HASH to Makefile-generated version so each `make` yields `0.1-<git>+b<hash>`
+- Created `build_reload.sh` which:
+  - [0] Builds the module and fails fast on build errors
+  - [1-6] Reloads modules (cleanup, unload, init modules, load local .ko)
+  - [7] Verifies loaded module matches local build via srcversion comparison
+- Updated `reload_modules.sh` to a thin wrapper that invokes the new script
+
+Validation
+- Ran: `sudo ./build_reload.sh`
+- dmesg shows version lines with build-hash suffix, e.g. `T500RS driver version 0.1-<git>+b<b1d5fec9>`
+- Verified local vs loaded srcversion match
