@@ -47,6 +47,24 @@ MODULE_PARM_DESC(t500rs_log_level,
                  "Log level: 0=minimal, 1=verbose, 2=usb-dump TX, 3=usb-dump UNKNOWN only (TX+RX)");
 
 
+/* Quirk: whether to use the specific effect ID in 0x41 START/STOP (default: 0 -> use 0) */
+static int t500rs_cmd41_use_effect_id = 0;
+module_param(t500rs_cmd41_use_effect_id, int, 0644);
+MODULE_PARM_DESC(t500rs_cmd41_use_effect_id,
+                 "Use specific effect ID in 0x41 START/STOP (0: use ID 0, 1: use effect->id)");
+
+/* Workaround: clamp periodic offset to 0 when magnitude==0 (helps RRRE/Proton bug) */
+static int t500rs_periodic_offset_clamp_mag0 = 0;
+module_param(t500rs_periodic_offset_clamp_mag0, int, 0644);
+MODULE_PARM_DESC(t500rs_periodic_offset_clamp_mag0,
+                 "Clamp periodic offset to 0 when magnitude==0 (0: disabled, 1: enabled)");
+
+/* Clip for constant force magnitude (0..127). 127 = no clip (default). */
+static int t500rs_constant_clip = 127;
+module_param(t500rs_constant_clip, int, 0644);
+MODULE_PARM_DESC(t500rs_constant_clip,
+                 "Clip absolute constant-force level to this 7-bit value (0..127). 127 disables clipping.");
+
 
 /* Helper: classify whether a TX buffer is a known/managed report
  * Known first bytes (report IDs / opcodes) we intentionally emit:
@@ -65,11 +83,11 @@ static inline int t500rs_is_known_tx(const unsigned char *data, size_t len)
   case 0x02:
     return len == 9 && s == 0x1c; /* envelope */
   case 0x03:
-    return len == 4 && s == 0x0e && ((len > 2) ? data[2] == 0x00 : 0); /* const force level */
+    return len == 4 && s == 0x0e; /* const force level (any effect id) */
   case 0x04:
     return (s == 0x0e) && (len == 8 || len == 9); /* periodic/ramp params */
   case 0x05:
-    return (len == 11) && (s == 0x0e || s == 0x1c) && ((len > 2) ? data[2] == 0x00 : 0);
+    return (len == 11) && (s == 0x0e || s == 0x1c); /* condition params (any id) */
   case 0x40:
     return (len == 4) && (s == 0x03 || s == 0x04 || s == 0x08 || s == 0x11);
   case 0x41:
@@ -171,10 +189,10 @@ static int t500rs_send_usb(struct t500rs_device_entry *t500rs, const u8 *data,
                            size_t len);
 static int t500rs_set_autocenter(void *data, u16 autocenter);
 static int t500rs_set_range(void *data, u16 range);
-static int t500rs_upload_effect(void *data, struct tmff2_effect_state *state);
-static int t500rs_update_effect(void *data, struct tmff2_effect_state *state);
-static int t500rs_play_effect(void *data, struct tmff2_effect_state *state);
-static int t500rs_stop_effect(void *data, struct tmff2_effect_state *state);
+static int t500rs_upload_effect(void *data, const struct tmff2_effect_state *state);
+static int t500rs_update_effect(void *data, const struct tmff2_effect_state *state);
+static int t500rs_play_effect(void *data, const struct tmff2_effect_state *state);
+static int t500rs_stop_effect(void *data, const struct tmff2_effect_state *state);
 
 /* --- Async IO queue: helpers and worker --- */
 
@@ -274,7 +292,7 @@ static void t500rs_io_work_handler(struct work_struct *work) {
 /* --- Queue wrapper callbacks (never sleep) --- */
 
 static int t500rs_queue_upload_effect(void *data,
-                                      struct tmff2_effect_state *state) {
+                                      const struct tmff2_effect_state *state) {
   struct t500rs_device_entry *t500rs = data;
   struct t500rs_op op = {};
   if (!t500rs || !state)
@@ -285,7 +303,7 @@ static int t500rs_queue_upload_effect(void *data,
 }
 
 static int t500rs_queue_update_effect(void *data,
-                                      struct tmff2_effect_state *state) {
+                                      const struct tmff2_effect_state *state) {
   struct t500rs_device_entry *t500rs = data;
   struct t500rs_op op = {};
   if (!t500rs || !state)
@@ -296,7 +314,7 @@ static int t500rs_queue_update_effect(void *data,
 }
 
 static int t500rs_queue_play_effect(void *data,
-                                    struct tmff2_effect_state *state) {
+                                    const struct tmff2_effect_state *state) {
   struct t500rs_device_entry *t500rs = data;
   struct t500rs_op op = {};
   if (!t500rs || !state)
@@ -307,7 +325,7 @@ static int t500rs_queue_play_effect(void *data,
 }
 
 static int t500rs_queue_stop_effect(void *data,
-                                    struct tmff2_effect_state *state) {
+                                    const struct tmff2_effect_state *state) {
   struct t500rs_device_entry *t500rs = data;
   struct t500rs_op op = {};
   if (!t500rs || !state)
@@ -379,8 +397,8 @@ static int t500rs_send_usb(struct t500rs_device_entry *t500rs, const u8 *data,
 
 /* Upload constant force effect */
 static int t500rs_upload_constant(struct t500rs_device_entry *t500rs,
-                                  struct tmff2_effect_state *state) {
-  struct ff_effect *effect = &state->effect;
+                                  const struct tmff2_effect_state *state) {
+  const struct ff_effect *effect = &state->effect;
   u8 *buf = t500rs->send_buffer; /* Use DMA-safe buffer */
   int ret;
   int level = effect->u.constant.level;
@@ -407,7 +425,7 @@ static int t500rs_upload_constant(struct t500rs_device_entry *t500rs,
   /* Report 0x01 - Main effect upload - MATCH WINDOWS DRIVER EXACTLY! */
   memset(buf, 0, 15);
   buf[0] = 0x01;
-  buf[1] = 0x00; /* Effect ID 0 (Windows uses 0, not effect->id) */
+  buf[1] = effect->id; /* Effect ID = effect->id (fix: per-effect IDs) */
   buf[2] = 0x00; /* Constant force type */
   buf[3] = 0x40;
   buf[4] = 0xff; /* Windows uses 0xff (was 0x69) */
@@ -455,8 +473,8 @@ static int t500rs_upload_constant(struct t500rs_device_entry *t500rs,
 
 /* Upload spring/damper/friction effect */
 static int t500rs_upload_condition(struct t500rs_device_entry *t500rs,
-                                   struct tmff2_effect_state *state) {
-  struct ff_effect *effect = &state->effect;
+                                   const struct tmff2_effect_state *state) {
+  const struct ff_effect *effect = &state->effect;
   u8 *buf = t500rs->send_buffer; /* Use DMA-safe buffer */
   u8 effect_type;
   int ret;
@@ -562,8 +580,8 @@ static int t500rs_upload_condition(struct t500rs_device_entry *t500rs,
 
 /* Upload periodic effect (sine, square, triangle, saw) */
 static int t500rs_upload_periodic(struct t500rs_device_entry *t500rs,
-                                  struct tmff2_effect_state *state) {
-  struct ff_effect *effect = &state->effect;
+                                  const struct tmff2_effect_state *state) {
+  const struct ff_effect *effect = &state->effect;
   u8 *buf = t500rs->send_buffer; /* Use DMA-safe buffer */
   int ret;
   u8 effect_type;
@@ -628,7 +646,7 @@ static int t500rs_upload_periodic(struct t500rs_device_entry *t500rs,
   /* Report 0x01 - Main effect upload for periodic (set waveform/type) */
   memset(buf, 0, 15);
   buf[0] = 0x01;
-  buf[1] = 0x00;        /* Effect ID 0 */
+  buf[1] = effect->id;        /* Effect ID */
   buf[2] = effect_type; /* Waveform type (0x20..0x24) */
   buf[3] = 0x40;
   buf[4] = 0xff;
@@ -650,20 +668,36 @@ static int t500rs_upload_periodic(struct t500rs_device_entry *t500rs,
   }
 
   /* Report 0x04 - Periodic parameters */
-  memset(buf, 0, 15);
-  buf[0] = 0x04;
-  buf[1] = 0x0e;
-  buf[2] = 0x00;
-  buf[3] = mag;                  /* Magnitude */
-  buf[4] = 0x00;                 /* Offset */
-  buf[5] = 0x00;                 /* Phase */
-  buf[6] = period & 0xff;        /* Period low byte */
-  buf[7] = (period >> 8) & 0xff; /* Period high byte */
-  ret = t500rs_send_usb(t500rs, buf, 8);
-  if (ret) {
-    hid_err(t500rs->hdev, "Failed to send Report 0x04: %d\n", ret);
-    return ret;
-  }
+  do {
+    s32 raw_off = effect->u.periodic.offset;
+    s8 off_s8;
+    u8 phase8;
+    if (t500rs_periodic_offset_clamp_mag0 && magnitude == 0)
+      raw_off = 0;
+    if (raw_off > 32767) raw_off = 32767;
+    if (raw_off < -32767) raw_off = -32767;
+    off_s8 = (s8)((raw_off * 127) / 32767);
+    phase8 = (u8)((effect->u.periodic.phase * 255) / 65535);
+
+    memset(buf, 0, 15);
+    buf[0] = 0x04;
+    buf[1] = 0x0e;
+    buf[2] = 0x00;
+    buf[3] = mag;                  /* Magnitude (0..127) */
+    buf[4] = (u8)off_s8;           /* Offset (-127..127) */
+    buf[5] = phase8;               /* Phase (0..255) */
+    buf[6] = period & 0xff;        /* Period low byte */
+    buf[7] = (period >> 8) & 0xff; /* Period high byte */
+
+    T500RS_DBG("Periodic params: id=%d mag=%d off=%d phase=%u period=%u\n",
+               effect->id, mag, (int)off_s8, (unsigned)phase8, (unsigned)period);
+
+    ret = t500rs_send_usb(t500rs, buf, 8);
+    if (ret) {
+      hid_err(t500rs->hdev, "Failed to send Report 0x04: %d\n", ret);
+      return ret;
+    }
+  } while (0);
 
   /* Report 0x01 - Main effect upload */
   memset(buf, 0, 15);
@@ -694,8 +728,8 @@ static int t500rs_upload_periodic(struct t500rs_device_entry *t500rs,
 
 /* Upload ramp effect */
 static int t500rs_upload_ramp(struct t500rs_device_entry *t500rs,
-                              struct tmff2_effect_state *state) {
-  struct ff_effect *effect = &state->effect;
+                              const struct tmff2_effect_state *state) {
+  const struct ff_effect *effect = &state->effect;
   u8 *buf = t500rs->send_buffer; /* Use DMA-safe buffer */
   int ret;
   int start_level = effect->u.ramp.start_level;
@@ -766,9 +800,9 @@ static int t500rs_upload_ramp(struct t500rs_device_entry *t500rs,
 }
 
 /* Upload effect */
-static int t500rs_upload_effect(void *data, struct tmff2_effect_state *state) {
+static int t500rs_upload_effect(void *data, const struct tmff2_effect_state *state) {
   struct t500rs_device_entry *t500rs = data;
-  struct ff_effect *effect = &state->effect;
+  const struct ff_effect *effect = &state->effect;
 
   if (!t500rs)
     return -ENODEV;
@@ -791,9 +825,9 @@ static int t500rs_upload_effect(void *data, struct tmff2_effect_state *state) {
 }
 
 /* Play effect */
-static int t500rs_play_effect(void *data, struct tmff2_effect_state *state) {
+static int t500rs_play_effect(void *data, const struct tmff2_effect_state *state) {
   struct t500rs_device_entry *t500rs = data;
-  struct ff_effect *effect = &state->effect;
+  const struct ff_effect *effect = &state->effect;
   u8 *buf = t500rs->send_buffer; /* Use DMA-safe buffer */
   int ret;
 
@@ -812,14 +846,20 @@ static int t500rs_play_effect(void *data, struct tmff2_effect_state *state) {
     /* Simple linear scaling from -32767..32767 to -127..127 */
     scaled = (level * 127) / 32767;
     signed_level = (s8)scaled;
+    {
+      int clip = t500rs_constant_clip;
+      if (clip < 0) clip = 0; if (clip > 127) clip = 127;
+      if (signed_level > clip) signed_level = (s8)clip;
+      else if (signed_level < -clip) signed_level = (s8)(-clip);
+    }
 
-    T500RS_DBG("Constant force: level=%d -> %d (0x%02x)\n", level, signed_level,
-               (u8)signed_level);
+    T500RS_DBG("Constant force: level=%d -> %d (0x%02x) clip=%d\n", level, signed_level,
+               (u8)signed_level, t500rs_constant_clip);
 
     /* Send Report 0x03 (force level) */
     buf[0] = 0x03;
     buf[1] = 0x0e;
-    buf[2] = 0x00;
+    buf[2] = effect->id;
     buf[3] = (u8)signed_level;
     ret = t500rs_send_usb(t500rs, buf, 4);
     if (ret) {
@@ -829,9 +869,10 @@ static int t500rs_play_effect(void *data, struct tmff2_effect_state *state) {
 
     /* Send Report 0x41 START */
     buf[0] = 0x41;
-    buf[1] = 0x00; /* Effect ID 0 */
+    buf[1] = t500rs_cmd41_use_effect_id ? effect->id : 0x00;
     buf[2] = 0x41; /* START */
     buf[3] = 0x01;
+    T500RS_DBG("START (const) id_sel=%d (effect=%d)\n", buf[1], effect->id);
     return t500rs_send_usb(t500rs, buf, 4);
   }
 
@@ -839,16 +880,16 @@ static int t500rs_play_effect(void *data, struct tmff2_effect_state *state) {
    * T500RS expects EffectID=0 for 0x41 commands as well.
    */
   buf[0] = 0x41;
-  buf[1] = 0x00; /* Effect ID 0 to match device expectations */
+  buf[1] = t500rs_cmd41_use_effect_id ? effect->id : 0x00;
   buf[2] = 0x41; /* START command */
   buf[3] = 0x01;
 
-  T500RS_DBG("Sending START command (EffectID=0) for effect %d\n", effect->id);
+  T500RS_DBG("Sending START command for effect id=%d (id_sel=%d)\n", effect->id, buf[1]);
   return t500rs_send_usb(t500rs, buf, 4);
 }
 
 /* Stop effect */
-static int t500rs_stop_effect(void *data, struct tmff2_effect_state *state) {
+static int t500rs_stop_effect(void *data, const struct tmff2_effect_state *state) {
   struct t500rs_device_entry *t500rs = data;
   u8 *buf;
   int ret;
@@ -867,12 +908,13 @@ static int t500rs_stop_effect(void *data, struct tmff2_effect_state *state) {
   T500RS_DBG("Stop effect: id=%d, type=%d\n", state->effect.id,
              state->effect.type);
 
-  /* For constant force: Windows-style STOP (0x41 00 00 01) */
+  /* For constant force: Windows-style STOP (0x41 xx 00 01) */
   if (state->effect.type == FF_CONSTANT) {
     buf[0] = 0x41;
-    buf[1] = 0x00;
+    buf[1] = t500rs_cmd41_use_effect_id ? state->effect.id : 0x00;
     buf[2] = 0x00; /* STOP */
     buf[3] = 0x01;
+    T500RS_DBG("STOP (const) id_sel=%d (effect=%d)\n", buf[1], state->effect.id);
     return t500rs_send_usb(t500rs, buf, 4);
   }
 
@@ -880,19 +922,19 @@ static int t500rs_stop_effect(void *data, struct tmff2_effect_state *state) {
    * Use EffectID=0 to match device expectations for 0x41.
    */
   buf[0] = 0x41;
-  buf[1] = 0x00; /* Effect ID 0 */
+  buf[1] = t500rs_cmd41_use_effect_id ? state->effect.id : 0x00;
   buf[2] = 0x00; /* STOP command */
   buf[3] = 0x01;
 
   ret = t500rs_send_usb(t500rs, buf, 4);
-  T500RS_DBG("Stop effect (non-constant) returned: %d\n", ret);
+  T500RS_DBG("Stop effect (non-constant) id_sel=%d (effect=%d) ret=%d\n", buf[1], state->effect.id, ret);
   return ret;
 }
 
 /* Update effect - re-upload and update force level if constant force */
-static int t500rs_update_effect(void *data, struct tmff2_effect_state *state) {
+static int t500rs_update_effect(void *data, const struct tmff2_effect_state *state) {
   struct t500rs_device_entry *t500rs = data;
-  struct ff_effect *effect = &state->effect;
+  const struct ff_effect *effect = &state->effect;
 
   if (!t500rs)
     return -ENODEV;
@@ -914,10 +956,16 @@ static int t500rs_update_effect(void *data, struct tmff2_effect_state *state) {
 
     scaled = (level * 127) / 32767;
     signed_level = (s8)scaled;
+    {
+      int clip = t500rs_constant_clip;
+      if (clip < 0) clip = 0; if (clip > 127) clip = 127;
+      if (signed_level > clip) signed_level = (s8)clip;
+      else if (signed_level < -clip) signed_level = (s8)(-clip);
+    }
 
     buf3[0] = 0x03;
     buf3[1] = 0x0e;
-    buf3[2] = 0x00;
+    buf3[2] = effect->id;
     buf3[3] = (u8)signed_level;
     return t500rs_send_usb(t500rs, buf3, 4);
   }
