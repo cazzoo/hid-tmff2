@@ -12,6 +12,10 @@
 #include <linux/usb.h>
 #include <linux/workqueue.h>
 
+#include <linux/kernel.h>
+#include <linux/module.h>
+#include <linux/moduleparam.h>
+
 #include "../hid-tmff2.h"
 
 /* Build-time injected version (from Makefile/Kbuild) */
@@ -39,7 +43,10 @@
 /* Logging verbosity (0=minimal, 1=verbose) */
 static int t500rs_log_level;
 module_param(t500rs_log_level, int, 0644);
-MODULE_PARM_DESC(t500rs_log_level, "Log level: 0=minimal (default), 1=verbose");
+MODULE_PARM_DESC(t500rs_log_level,
+                 "Log level: 0=minimal, 1=verbose, 2=usb-dump TX");
+
+
 
 /* Debug logging helper (requires local variable named 't500rs') */
 #define T500RS_DBG(fmt, ...)                                                   \
@@ -275,12 +282,13 @@ static int t500rs_queue_set_gain(void *data, u16 gain) {
 
 static int t500rs_queue_set_autocenter(void *data, u16 magnitude) {
   struct t500rs_device_entry *t500rs = data;
-  struct t500rs_op op = {};
+  u8 percent;
   if (!t500rs)
     return -ENODEV;
-  op.type = T500_OP_SET_AUTOCENTER;
-  op.value16 = magnitude;
-  return t500rs_queue_op(t500rs, &op);
+  percent = (u8)((magnitude * 100) / 65535);
+  T500RS_DBG("Ignoring FF_AUTOCENTER request from game: %u%% (value=%u)\n",
+             percent, magnitude);
+  return 0;
 }
 
 static int t500rs_queue_set_range(void *data, u16 range) {
@@ -299,6 +307,14 @@ static int t500rs_send_usb(struct t500rs_device_entry *t500rs, const u8 *data,
   int ret, transferred;
   if (!t500rs || !data || len == 0 || len > T500RS_BUFFER_LENGTH)
     return -EINVAL;
+  if (t500rs_log_level > 1) {
+    char hex[3 * T500RS_BUFFER_LENGTH + 1];
+    size_t i, off = 0;
+    for (i = 0; i < len && off + 3 < sizeof(hex); i++)
+      off += scnprintf(hex + off, sizeof(hex) - off, "%02x ", data[i]);
+    hid_info(t500rs->hdev, "USB TX [%zu]: %s\n", len, hex);
+  }
+
   ret = usb_interrupt_msg(t500rs->usbdev,
                           usb_sndintpipe(t500rs->usbdev, t500rs->ep_out),
                           (void *)data, len, &transferred, T500RS_USB_TIMEOUT);
@@ -868,8 +884,7 @@ static int t500rs_set_autocenter(void *data, u16 autocenter) {
   /* Convert from 0-65535 range to 0-100 percentage */
   autocenter_percent = (u8)((autocenter * 100) / 65535);
 
-  T500RS_DBG("Set autocenter: %u%% (value=%u)\n", autocenter_percent,
-             autocenter);
+  T500RS_DBG("Set autocenter: %u%% (value=%u)\n", autocenter_percent, autocenter);
 
   /* Use DMA-safe preallocated buffer */
   buf = t500rs->send_buffer;
