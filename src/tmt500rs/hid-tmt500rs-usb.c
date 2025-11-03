@@ -41,10 +41,10 @@
 #define GAIN_MAX 65535
 
 /* Logging verbosity (0=minimal, 1=verbose) */
-static int t500rs_log_level;
+int t500rs_log_level;
 module_param(t500rs_log_level, int, 0644);
 MODULE_PARM_DESC(t500rs_log_level,
-                 "Log level: 0=minimal, 1=verbose, 2=usb-dump TX, 3=usb-dump UNKNOWN TX only");
+                 "Log level: 0=minimal, 1=verbose, 2=usb-dump TX, 3=usb-dump UNKNOWN only (TX+RX)");
 
 
 
@@ -54,15 +54,32 @@ MODULE_PARM_DESC(t500rs_log_level,
  */
 static inline int t500rs_is_known_tx(const unsigned char *data, size_t len)
 {
-  unsigned char r;
+  unsigned char r, s;
   if (!data || !len)
     return 1;
   r = data[0];
+  s = (len > 1) ? data[1] : 0;
   switch (r) {
-  case 0x01: case 0x02: case 0x03: case 0x04: case 0x05:
-  case 0x40: case 0x41: case 0x42: case 0x43:
+  case 0x01:
+    return len == 15; /* main effect upload */
+  case 0x02:
+    return len == 9 && s == 0x1c; /* envelope */
+  case 0x03:
+    return len == 4 && s == 0x0e && ((len > 2) ? data[2] == 0x00 : 0); /* const force level */
+  case 0x04:
+    return (s == 0x0e) && (len == 8 || len == 9); /* periodic/ramp params */
+  case 0x05:
+    return (len == 11) && (s == 0x0e || s == 0x1c) && ((len > 2) ? data[2] == 0x00 : 0);
+  case 0x40:
+    return (len == 4) && (s == 0x03 || s == 0x04 || s == 0x08 || s == 0x11);
+  case 0x41:
+    return len == 4; /* play/stop/clear */
+  case 0x42:
+    return ((len == 2) && (s == 0x05 || s == 0x04)) || ((len == 15) && s == 0x01);
+  case 0x43:
+    return len == 2; /* global gain */
   case 0x0a:
-    return 1;
+    return (len == 15) && s == 0x04; /* config */
   default:
     return 0;
   }
