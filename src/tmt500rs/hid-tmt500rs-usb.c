@@ -44,9 +44,29 @@
 static int t500rs_log_level;
 module_param(t500rs_log_level, int, 0644);
 MODULE_PARM_DESC(t500rs_log_level,
-                 "Log level: 0=minimal, 1=verbose, 2=usb-dump TX");
+                 "Log level: 0=minimal, 1=verbose, 2=usb-dump TX, 3=usb-dump UNKNOWN TX only");
 
 
+
+/* Helper: classify whether a TX buffer is a known/managed report
+ * Known first bytes (report IDs / opcodes) we intentionally emit:
+ *   0x01,0x02,0x03,0x04,0x05,0x40,0x41,0x42,0x43,0x0a
+ */
+static inline int t500rs_is_known_tx(const unsigned char *data, size_t len)
+{
+  unsigned char r;
+  if (!data || !len)
+    return 1;
+  r = data[0];
+  switch (r) {
+  case 0x01: case 0x02: case 0x03: case 0x04: case 0x05:
+  case 0x40: case 0x41: case 0x42: case 0x43:
+  case 0x0a:
+    return 1;
+  default:
+    return 0;
+  }
+}
 
 /* Debug logging helper (requires local variable named 't500rs') */
 #define T500RS_DBG(fmt, ...)                                                   \
@@ -312,7 +332,12 @@ static int t500rs_send_usb(struct t500rs_device_entry *t500rs, const u8 *data,
     size_t i, off = 0;
     for (i = 0; i < len && off + 3 < sizeof(hex); i++)
       off += scnprintf(hex + off, sizeof(hex) - off, "%02x ", data[i]);
-    hid_info(t500rs->hdev, "USB TX [%zu]: %s\n", len, hex);
+    if (t500rs_log_level == 2) {
+      hid_info(t500rs->hdev, "USB TX [%zu]: %s\n", len, hex);
+    } else if (t500rs_log_level >= 3) {
+      if (!t500rs_is_known_tx(data, len))
+        hid_info(t500rs->hdev, "USB TX UNKNOWN [%zu]: %s\n", len, hex);
+    }
   }
 
   ret = usb_interrupt_msg(t500rs->usbdev,
