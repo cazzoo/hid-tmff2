@@ -1026,3 +1026,83 @@ binary    hex
     ff00.0021 = 0
     ff00.0021 = 0
 ```
+
+
+## T500RS-specific packet notes
+
+These notes summarize packet layouts and quirks observed on T500RS (USB interrupt mode). Values are little-endian unless noted.
+
+- Effect ID semantics (critical):
+  - Report 0x01 “main upload” must use EffectID=0x00 on T500RS; using per-effect IDs breaks constant forces. This matches Windows behavior.
+  - Report 0x41 START/STOP also uses EffectID=0x00.
+  - Some secondary 0x01 uploads with effect->id are tolerated; switch to 0x00 if issues arise.
+
+- Report 0x02 Envelope (9 bytes):
+  - [0]=0x02, [1]=0x1c, [2]=0x00,
+  - [3..4]=attack_length (le16), [5]=attack_level (u8 0..255),
+  - [6..7]=fade_length (le16), [8]=fade_level (u8 0..255)
+
+- Report 0x03 Constant level update (4 bytes):
+  - [0]=0x03, [1]=0x0e, [2]=0x00, [3]=level (s8 −127..127)
+
+- Report 0x04 Periodic parameters (8 bytes):
+  - [0]=0x04, [1]=0x0e, [2]=0x00,
+  - [3]=magnitude (u7 0..127), [4]=offset=0, [5]=phase=0,
+  - [6..7]=period_ms (le16; default 100 if 0)
+
+- Report 0x04 Ramp parameters (9 bytes):
+  - [0]=0x04, [1]=0x0e,
+  - [2..3]=start (le16), [4..5]=current (le16, same as start),
+  - [6..7]=duration_ms (le16), [8]=0x00
+  - Note: Device does not implement a native ramp; this is a simple hold of the start level for duration.
+
+- Report 0x41 Command (4 bytes):
+  - [0]=0x41, [1]=EffectID (=0x00 on T500RS), [2]=command (0x41 START, 0x00 STOP), [3]=0x01
+
+- Report 0x01 Main upload (15 bytes):
+  - [0]=0x01, [1]=EffectID (=0x00 on T500RS), [2]=type (0x00 constant, 0x20..0x24 periodic/ramp)
+  - Remaining bytes reference parameter (0x0e) and envelope (0x1c) subtypes; other fields mirror Windows captures and remain device-specific.
+
+
+### Packet ordering by effect (T500RS)
+
+- Constant (FF_CONSTANT)
+  1) 0x02 Envelope (attack/fade)
+  2) 0x01 Main upload (EffectID=0x00, type=0x00)
+  3) 0x03 Constant level (s8)
+  4) 0x41 START (EffectID=0x00) / 0x41 STOP (0x00)
+
+- Condition (FF_SPRING/FF_DAMPER/FF_FRICTION/FF_INERTIA)
+  1) 0x05 0x0e coefficients (R/L strength, saturation)
+  2) 0x05 0x1c deadband/center
+  3) 0x01 Main upload (device tolerates using effect->id)
+  4) 0x41 START (0x00) / 0x41 STOP (0x00)
+
+- Periodic (FF_SINE/FF_SQUARE/FF_TRIANGLE/FF_SAW_UP/FF_SAW_DOWN)
+  1) 0x02 Envelope
+  2) 0x01 Main upload (EffectID=0x00, type=0x20..0x23)
+  3) 0x04 Periodic params (magnitude, period; default 100ms if 0)
+  4) Optional secondary 0x01 (device tolerates effect->id)
+  5) 0x41 START (0x00) / 0x41 STOP (0x00)
+
+- Ramp (FF_RAMP)
+  1) 0x02 Envelope
+  2) 0x04 Ramp params (start/current, duration)
+  3) 0x01 Main upload (device tolerates effect->id)
+  4) 0x41 START (0x00) / 0x41 STOP (0x00)
+
+Notes:
+- EffectID semantics: 0x01 “main” uploads and 0x41 START/STOP must use EffectID=0x00 on T500RS. Some secondary 0x01 uploads with effect->id are tolerated.
+- Magnitude/level scaling: constant −32767..32767 → s8 −127..127; periodic magnitude 0..32767 → u7 0..127 (saturating).
+- Period=0 defaults to 100 ms.
+- Ramp is effectively a sawtooth-hold emulation; device lacks a native linear ramp.
+
+### Report 0x05 (Condition) quick layout
+- 0x05 0x0e (11 bytes): coefficients/saturation
+  - [0]=0x05, [1]=0x0e, [2]=0x00,
+  - [3]=right_strength, [4]=left_strength, [...]=0,
+  - [9]=right_saturation, [10]=left_saturation
+- 0x05 0x1c (11 bytes): deadband/center
+  - [0]=0x05, [1]=0x1c, [2]=0x00,
+  - [3]=deadband, [4]=center, [...]=0,
+  - [9]=right_saturation, [10]=left_saturation
