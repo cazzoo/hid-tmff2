@@ -27,3 +27,13 @@ SUBSYSTEM=="input", ATTRS{idVendor}=="044f", ATTRS{idProduct}=="b692", RUN+="/us
 # TSPC
 SUBSYSTEM=="input", ATTRS{idVendor}=="044f", ATTRS{idProduct}=="b689", RUN+="/usr/bin/evdev-joystick --evdev %E{DEVNAME} --deadzone 0"
 SUBSYSTEM=="input", ATTRS{idVendor}=="044f", ATTRS{idProduct}=="b689", RUN+="/usr/bin/jscal -s 6,1,1,32767,32767,16384,16384,1,3,448,574,1394469,1394469,1,3,448,574,1394469,1394469,1,3,448,574,1394469,1394469,1,0,0,0,536870912,536870912,1,0,0,0,536870912,536870912 /dev/input/js%n"
+
+
+# T500RS PC mode
+# IMPORTANT FOR PROTON/STEAM GAMES:
+# If you have multiple joystick devices (js0, js1, etc.) that cause conflicts,
+# use the event device directly in Steam launch options:
+#   SDL_JOYSTICK_DEVICE=/dev/input/eventXX %command%
+# Find your event number with: cat /proc/bus/input/devices | grep -A 5 "Thrustmaster"
+# T500RS PC mode: no automatic RUN hooks; driver autoloads via HID id table
+
