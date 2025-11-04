@@ -7,3 +7,6 @@ hid-tmff-new-y := \
 		src/tmtsxw/hid-tmtsxw.o \
 		src/tmtspc/hid-tmtspc.o \
 		src/tmt500rs/hid-tmt500rs.o
+
+# Pass through the T500RS version define from Makefile (original branch style)
+ccflags-y += $(T500RS_VERSION_DEF)
