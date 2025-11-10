@@ -286,12 +286,11 @@ static int t500rs_upload_constant(struct t500rs_device_entry *t500rs,
 
   /*
    * IMPORTANT: T500RS Effect ID (buf[1]) semantics
-   * - Report 0x01 "main effect upload" must use EffectID=0 on this device.
-   *   Using per-effect IDs here caused constant forces to not play in testing.
-   * - Report 0x41 START/STOP also requires EffectID=0.
-   * - Some follow-up 0x01 uploads (e.g., secondary periodic/ramp) are tolerated with
-   *   effect->id but are not required; if problems surface, set those to 0 as well.
-   * This matches behavior observed from the Windows driver.
+   * - All Report 0x01 "main effect upload" messages MUST use EffectID=0x00.
+   *   Using per-effect IDs here breaks playback (e.g., constant force).
+   * - Report 0x41 START/STOP also requires EffectID=0x00, except special
+   *   cases like stopping autocenter by its fixed ID during init.
+   * This matches behavior observed from the Windows driver and on-device tests.
    */
 
   /* Report 0x01 - Main effect upload - MATCH WINDOWS DRIVER EXACTLY! */
@@ -425,14 +424,14 @@ static int t500rs_upload_condition(struct t500rs_device_entry *t500rs,
   if (ret)
     return ret;
 
-  /* NOTE: Condition 0x01 uses effect->id and has been observed to work; revisit if needed. */
+  /* NOTE: On T500RS, Report 0x01 MUST use EffectID=0x00; enforce it here. */
 
   /* Report 0x01 - Main effect upload */
   {
     struct t500rs_r01_main *m = (struct t500rs_r01_main *)buf;
     memset(m, 0, sizeof(*m));
     m->id = 0x01;
-    m->effect_id = effect->id;
+    m->effect_id = 0x00;
     m->type = effect_type;
     m->b3 = 0x40;
     m->b4 = 0x17;
@@ -563,14 +562,14 @@ static int t500rs_upload_periodic(struct t500rs_device_entry *t500rs,
     return ret;
   }
 
-  /* NOTE: Secondary 0x01: device tolerates effect->id here; keep unless issues arise. */
+  /* NOTE: On T500RS, all 0x01 uploads MUST use EffectID=0x00; enforce consistently. */
 
   /* Report 0x01 - Main effect upload */
   {
     struct t500rs_r01_main *m = (struct t500rs_r01_main *)buf;
     memset(m, 0, sizeof(*m));
     m->id = 0x01;
-    m->effect_id = effect->id;
+    m->effect_id = 0x00;
     m->type = effect_type; /* Waveform type */
     m->b3 = 0x40;
     m->b4 = 0x17;
@@ -638,14 +637,14 @@ static int t500rs_upload_ramp(struct t500rs_device_entry *t500rs,
     return ret;
   }
 
-  /* NOTE: Ramp 0x01 uses effect->id and has been observed to work; change to 0 if issues. */
+  /* NOTE: On T500RS, Report 0x01 MUST use EffectID=0x00; enforce it here. */
 
   /* Report 0x01 - Main effect upload */
   {
     struct t500rs_r01_main *m = (struct t500rs_r01_main *)buf;
     memset(m, 0, sizeof(*m));
     m->id = 0x01;
-    m->effect_id = effect->id;
+    m->effect_id = 0x00;
     m->type = 0x24; /* Ramp type (0x24 = sawtooth down / ramp) */
     m->b3 = 0x40;
     m->b4 = duration_ms & 0xff;        /* Duration low byte */
