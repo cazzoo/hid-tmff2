@@ -133,3 +133,70 @@ E) Minor robustness/nits (Low)
 Notes
 - Protocol differences vs. T300RS are expected (USB interrupt vs HID output reports). The proposals avoid any behavior that would violate observed T500RS device expectations (notably EffectID=0 for 0x01/0x41).
 
+
+
+5) Cross-validation with captures (userspace-ff-working/captures)
+
+New evidence-backed findings and refinements after reviewing:
+- captures/COMPARISON_WINDOWS_VS_DRIVER.md
+- captures/PROTOCOL_ANALYSIS_AND_NEXT_STEPS.md
+- captures/T500RS_COMMAND_QUICK_REFERENCE.md
+- captures/NEW_CAPTURES_ANALYSIS.md
+
+A) Upload sequence is incomplete vs Windows (CRITICAL)
+- Description: Windows sends STOP → 0x02 (env, first) → 0x01 (first) → 0x02 (env, second) → params (0x03/0x04/0x05) → 0x01 (second) → START. Our driver: single 0x02, single 0x01, then START (plus params for periodic/ramp), without pre-STOP and without the second 0x02/0x01.
+- Evidence: captures/COMPARISON_WINDOWS_VS_DRIVER.md (Constant section, Steps 1–7); multiple Windows control-panel captures summarized there.
+- Impact: Effects may not be linked correctly or may play inconsistently; likely root cause of “works on Windows, unreliable on Linux”.
+- Priority: CRITICAL
+- Estimated complexity: HIGH (requires reordering across all upload paths and adding the missing packets; ensure ID=0 semantics preserved).
+
+B) Subtype system not implemented (HIGH)
+- Description: Envelope and parameter subtypes increase by 0x1c per effect slot. Report 0x01 byte 9 (param subtype) and byte 11 (envelope subtype) must match the specific subtypes emitted for that effect instance (e.g., 0x1c/0x38/0x54 for env; 0x0e/0x2a/0x46 for params). We currently hardcode 0x0e and 0x1c everywhere.
+- Evidence: captures/COMPARISON_WINDOWS_VS_DRIVER.md (Subtype System Explained); multi-effect example shows 0x1c→0x38→0x54 and 0x0e→0x2a→0x46.
+- Impact: Multi-effect scenarios cannot be represented faithfully; subsequent effects may overwrite each other’s state.
+- Priority: HIGH
+- Estimated complexity: MODERATE (track per-effect indices; plumb through upload paths; update Report 0x01 references).
+
+C) Periodic parameter encoding mismatch: device expects frequency (Hz×100), driver sends period (ms) (HIGH)
+- Description: Captures show command 0x04 uses frequency in Hz×100 (e.g., 10 Hz = 0x03e8). Our code and docs currently treat bytes 6–7 as “period (ms)”.
+- Evidence: captures/T500RS_COMMAND_QUICK_REFERENCE.md (Frequency in Hz×100), PROTOCOL_ANALYSIS_AND_NEXT_STEPS.md §Parameter Encoding; example for 10 Hz uses 0x03e8 not 0x0064.
+- Impact: Wrong oscillation rate for periodic effects; user-perceived frequency substantially off.
+- Priority: HIGH
+- Estimated complexity: MODERATE (convert Linux ff_effect.period [ms] to Hz×100: freq100 = clamp(100000/period_ms); handle bounds/defaults; adjust docs).
+
+D) Report 0x02 second envelope (subtype 0x38 for first effect) required (HIGH)
+- Description: After the first 0x01, Windows sends a second envelope with subtype advanced by +0x1c (0x38 for first effect). Our driver currently sends only 0x1c once.
+- Evidence: captures/COMPARISON_WINDOWS_VS_DRIVER.md (Step 4); subtype pattern table.
+- Impact: Second 0x01 is expected to reference this updated envelope subtype; without it, linkage is incomplete.
+- Priority: HIGH
+- Estimated complexity: MODERATE (emit second 0x02 with computed subtype and update subsequent 0x01 reference byte).
+
+E) STOP (Report 0x41 with command=0x00 arg=0x01) before upload (MEDIUM→HIGH)
+- Description: Windows issues STOP on the target slot prior to upload to clear state. We do not.
+- Evidence: captures/COMPARISON_WINDOWS_VS_DRIVER.md (Step 1);
+- Impact: Stale on-device state may persist across uploads.
+- Priority: HIGH (risk mitigation and parity)
+- Estimated complexity: SIMPLE (prepend 0x41 STOP in upload paths), but ensure no regressions with existing init CLEAR.
+
+F) Report 0x0a and 0x40 init parameters (REFINEMENT)
+- 0x0a: Our driver already sends three 0x0a config packets that match Windows (confirmed by captures/NEW_CAPTURES_ANALYSIS.md). Prior analysis listing 0x0a as “missing” is outdated — confirmed OK by captures.
+- 0x40 0x11 parameters: Our code now uses 0x42 0x7b (changed from 0x55 0xd5). This exactly matches Windows (confirmed by captures). Status: FIXED; confirmed by captures.
+
+G) Documentation corrections (LOW→MEDIUM)
+- docs/FFB_T500RS.md currently states “0x04 periodic: bytes 6–7 period (ms)” and omits the second envelope and pre-STOP steps. Captures show: bytes 6–7 are frequency (Hz×100), and Windows uses STOP + two 0x02 + two 0x01. Recommend updating docs to align with captures.
+- Priority: MEDIUM
+- Estimated complexity: SIMPLE (doc edits only).
+
+Updated prioritization summary (post-captures)
+- Critical/High: (A) upload sequence ordering and missing packets; (B) subtype system; (C) periodic frequency encoding; (D) second envelope; (E) pre-STOP
+- Medium: waveform capability advertisement (existing gap, unaffected), documentation corrections (G)
+- Low: timing semantics doc clarity; constant-upload comment drift; minor robustness
+
+Actionable next steps (non-implementation)
+- Update docs/FFB_T500RS.md to: (1) correct periodic param as frequency (Hz×100); (2) document STOP + dual-envelope + dual-0x01 sequence; (3) add subtype reference bytes mapping.
+- Plan implementation patches (separate PRs):
+  1) Introduce subtype tracking and correct upload order for Constant and Periodic (verify via usbmon against captures) — CRITICAL.
+  2) Add pre-STOP and second envelope + second 0x01 across all types — HIGH.
+  3) Fix periodic parameter conversion (period_ms → freq×100) and bounds — HIGH.
+  4) Add waveform capability bits — MEDIUM.
+- Testing: Reproduce Windows sequences (from captures) and compare Linux usbmon output byte-for-byte.
