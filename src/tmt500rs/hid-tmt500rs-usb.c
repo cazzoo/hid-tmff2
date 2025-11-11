@@ -358,24 +358,56 @@ static int t500rs_upload_constant(struct t500rs_device_entry *t500rs,
     return ret;
   }
 
-  T500RS_DBG("Constant effect %d uploaded (simple sequence)\n", effect->id);
-
-  /* CRITICAL FIX : Always update the force level when uploading.
-   * Game calls stop/upload/play in rapid succession, so the timer might be
-   * stopped when upload is called. We update the force level here so that
-   * when play_effect starts the timer, it will use the correct force value.
-   *
-   * MATCH WINDOWS: Send forces exactly as requested - no amplification!
-   * Windows sends weak forces (4-27 out of 127) and they work fine.
-   */
-  {
-    s8 signed_level;
-    signed_level = t500rs_scale_const_level_s8(level);
-
-    T500RS_DBG("Upload constant: id=%d, level=%d -> %d (0x%02x)\n", effect->id,
-               level, signed_level, (u8)signed_level);
+  /* Report 0x02 - Envelope (second; subtype = first + 0x1c) */
+  t500rs_fill_envelope_u02(buf, &effect->u.constant.envelope, 0x1c);
+  ret = t500rs_send_usb(t500rs, buf, 9);
+  if (ret) {
+    hid_err(t500rs->hdev, "Failed to send Report 0x02 (second): %d\n", ret);
+    return ret;
   }
 
+  /* Report 0x03 - Constant force level (param subtype) */
+  {
+    s8 signed_level = t500rs_scale_const_level_s8(level);
+    struct t500rs_r03_const *r3 = (struct t500rs_r03_const *)buf;
+    r3->id = 0x03;
+    r3->code = 0x0e;
+    r3->zero = 0x00;
+    r3->level = signed_level;
+  }
+  ret = t500rs_send_usb(t500rs, buf, sizeof(struct t500rs_r03_const));
+  if (ret) {
+    hid_err(t500rs->hdev, "Failed to send Report 0x03 (const level): %d\n", ret);
+    return ret;
+  }
+
+  /* Report 0x01 - Main effect upload (second; references second envelope subtype) */
+  {
+    struct t500rs_r01_main *m = (struct t500rs_r01_main *)buf;
+    memset(m, 0, sizeof(*m));
+    m->id = 0x01;
+    m->effect_id = 0x00; /* Device expects Effect ID 0 for 0x01 on T500RS */
+    m->type = 0x00;      /* Constant force type */
+    m->b3 = 0x40;
+    m->b4 = 0xff; /* Windows uses 0xff (was 0x69) */
+    m->b5 = 0xff; /* Windows uses 0xff (was 0x23) */
+    m->b6 = 0x00;
+    m->b7 = 0xff;
+    m->b8 = 0xff;
+    m->b9 = 0x0e; /* Parameter subtype reference (fixed) */
+    m->b10 = 0x00;
+    m->b11 = 0x1c; /* Envelope subtype reference (fixed) */
+    m->b12 = 0x00;
+    m->b13 = 0x00;
+    m->b14 = 0x00;
+  }
+  ret = t500rs_send_usb(t500rs, buf, sizeof(struct t500rs_r01_main));
+  if (ret) {
+    hid_err(t500rs->hdev, "Failed to send Report 0x01 (second): %d\n", ret);
+    return ret;
+  }
+
+  T500RS_DBG("Constant effect %d uploaded (dual 0x02 + dual 0x01 sequence)\n", effect->id);
   return 0;
 }
 
