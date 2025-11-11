@@ -55,7 +55,7 @@ struct t500rs_r04_periodic {
   u8 magnitude;   /* 0..127 */
   u8 offset;      /* 0 */
   u8 phase;       /* 0 */
-  __le16 period;  /* ms */
+  __le16 period;  /* frequency (Hz×100) */
 } __packed;
 
 struct t500rs_r04_ramp {
@@ -534,9 +534,18 @@ static int t500rs_upload_periodic(struct t500rs_device_entry *t500rs,
   /* Magnitude - scale to 0-127 with saturation */
   mag = t500rs_scale_mag_u7(magnitude);
 
-  /* Period (frequency) - default to 100ms = 10 Hz if not set */
+  /* Period (ms) -> device frequency (Hz×100). Default to 100ms = 10 Hz if unset */
   if (period == 0) {
     period = 100;
+  }
+  {
+    u32 freq_hz100 = 100000U / period;
+    if (freq_hz100 < 1U) freq_hz100 = 1U;
+    if (freq_hz100 > 65535U) freq_hz100 = 65535U;
+    T500RS_DBG("Upload %s: id=%d, magnitude=%d (0x%02x), period=%dms -> freq=%u (Hz×100)\n",
+               type_name, effect->id, magnitude, mag, period, (unsigned)freq_hz100);
+    /* Reuse 'period' variable to carry converted frequency to the packet write below */
+    period = (u16)freq_hz100;
   }
 
   /* Pre-upload STOP to clear the slot (Windows parity) */
