@@ -674,7 +674,7 @@ static int t500rs_upload_periodic(struct t500rs_device_entry *t500rs,
 
   /* NOTE: On T500RS, all 0x01 uploads MUST use EffectID=0x00; enforce consistently. */
 
-  /* Report 0x01 - Main effect upload */
+  /* Report 0x01 - Main effect upload (second) */
   {
     struct t500rs_r01_main *m = (struct t500rs_r01_main *)buf;
     memset(m, 0, sizeof(*m));
@@ -742,6 +742,42 @@ static int t500rs_upload_ramp(struct t500rs_device_entry *t500rs,
     return ret;
   }
 
+  /* NOTE: On T500RS, Report 0x01 MUST use EffectID=0x00; enforce it here. */
+
+  /* Report 0x01 - Main effect upload (first) */
+  {
+    struct t500rs_r01_main *m = (struct t500rs_r01_main *)buf;
+    memset(m, 0, sizeof(*m));
+    m->id = 0x01;
+    m->effect_id = 0x00;
+    m->type = 0x24; /* Ramp type (0x24 = sawtooth down / ramp) */
+    m->b3 = 0x40;
+    m->b4 = duration_ms & 0xff;        /* Duration low byte */
+    m->b5 = (duration_ms >> 8) & 0xff; /* Duration high byte */
+    m->b6 = 0x00;
+    m->b7 = 0xff;
+    m->b8 = 0xff;
+    m->b9 = param_sub;
+    m->b10 = 0x00;
+    m->b11 = env_sub_first; /* first envelope subtype */
+    m->b12 = 0x00;
+    m->b13 = 0x00;
+    m->b14 = 0x00;
+  }
+  ret = t500rs_send_usb(t500rs, buf, sizeof(struct t500rs_r01_main));
+  if (ret) {
+    hid_err(t500rs->hdev, "Failed to send Report 0x01 (ramp first): %d\n", ret);
+    return ret;
+  }
+
+  /* Report 0x02 - Envelope (second) */
+  t500rs_fill_envelope_u02(buf, &effect->u.ramp.envelope, env_sub_second);
+  ret = t500rs_send_usb(t500rs, buf, 9);
+  if (ret) {
+    hid_err(t500rs->hdev, "Failed to send Report 0x02 (second): %d\n", ret);
+    return ret;
+  }
+
   /* Report 0x04 - Ramp parameters */
   /* NOTE: T500RS doesn't support native ramp - just holds start level */
   {
@@ -760,9 +796,7 @@ static int t500rs_upload_ramp(struct t500rs_device_entry *t500rs,
     return ret;
   }
 
-  /* NOTE: On T500RS, Report 0x01 MUST use EffectID=0x00; enforce it here. */
-
-  /* Report 0x01 - Main effect upload */
+  /* Report 0x01 - Main effect upload (second) */
   {
     struct t500rs_r01_main *m = (struct t500rs_r01_main *)buf;
     memset(m, 0, sizeof(*m));
@@ -777,18 +811,18 @@ static int t500rs_upload_ramp(struct t500rs_device_entry *t500rs,
     m->b8 = 0xff;
     m->b9 = param_sub;
     m->b10 = 0x00;
-    m->b11 = env_sub_first;
+    m->b11 = env_sub_second; /* second envelope subtype */
     m->b12 = 0x00;
     m->b13 = 0x00;
     m->b14 = 0x00;
   }
   ret = t500rs_send_usb(t500rs, buf, sizeof(struct t500rs_r01_main));
   if (ret) {
-    hid_err(t500rs->hdev, "Failed to send Report 0x01: %d\n", ret);
+    hid_err(t500rs->hdev, "Failed to send Report 0x01 (ramp second): %d\n", ret);
     return ret;
   }
 
-  T500RS_DBG("Ramp effect %d uploaded (simple mode)\n", effect->id);
+  T500RS_DBG("Ramp effect %d uploaded (dual 0x02 + dual 0x01)\n", effect->id);
   return 0;
 }
 
