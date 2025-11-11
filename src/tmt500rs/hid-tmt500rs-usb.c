@@ -207,8 +207,9 @@ static const unsigned long t500rs_params =
 
 /* Supported effects */
 static const signed short t500rs_effects[] = {
-    FF_CONSTANT, FF_SPRING, FF_DAMPER, FF_FRICTION,   FF_INERTIA,
-    FF_PERIODIC, FF_RAMP,   FF_GAIN,   FF_AUTOCENTER, -1};
+    FF_CONSTANT, FF_SPRING, FF_DAMPER, FF_FRICTION, FF_INERTIA,
+    FF_PERIODIC, FF_SINE, FF_TRIANGLE, FF_SQUARE, FF_SAW_UP, FF_SAW_DOWN,
+    FF_RAMP, FF_GAIN, FF_AUTOCENTER, -1};
 
 /* Forward declarations to avoid implicit declarations before worker uses them
  */
