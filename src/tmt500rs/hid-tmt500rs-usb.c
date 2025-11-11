@@ -256,6 +256,27 @@ static int t500rs_send_usb(struct t500rs_device_entry *t500rs, const u8 *data,
   return (transferred == len) ? 0 : -EIO;
 }
 
+/* Send pre-upload STOP (Report 0x41 with effect_id=0, command=0x00, arg=0x01)
+ * Matches Windows behavior of clearing the slot before (re)uploading.
+ */
+static inline int t500rs_send_pre_stop(struct t500rs_device_entry *t500rs)
+{
+  u8 *buf;
+  struct t500rs_r41_cmd *r41;
+  if (!t500rs)
+    return -ENODEV;
+  buf = t500rs->send_buffer;
+  if (!buf)
+    return -ENOMEM;
+  r41 = (struct t500rs_r41_cmd *)buf;
+  r41->id = 0x41;
+  r41->effect_id = 0x00;
+  r41->command = 0x00; /* STOP/CLEAR */
+  r41->arg = 0x01;
+  return t500rs_send_usb(t500rs, buf, sizeof(*r41));
+}
+
+
 /* Upload constant force effect */
 static int t500rs_upload_constant(struct t500rs_device_entry *t500rs,
                                   const struct tmff2_effect_state *state) {
@@ -267,6 +288,19 @@ static int t500rs_upload_constant(struct t500rs_device_entry *t500rs,
   /* Note: Gain is applied in play_effect, not here */
 
   T500RS_DBG("Upload constant: id=%d, level=%d\n", effect->id, level);
+
+
+
+  /* Pre-upload STOP to clear the slot (Windows parity) */
+  ret = t500rs_send_pre_stop(t500rs);
+  if (ret) {
+    hid_err(t500rs->hdev, "Pre-upload STOP failed: %d\n", ret);
+    return ret;
+  }
+
+  /* NO DEADZONE - Send all forces exactly as requested, matching Windows
+   * behavior */
+
 
   /* Report 0x02 - Envelope (attack/fade) */
   t500rs_fill_envelope_u02(buf, &effect->u.constant.envelope);
@@ -387,6 +421,13 @@ static int t500rs_upload_condition(struct t500rs_device_entry *t500rs,
              effect->id, effect_type, effect_gain, right_strength,
              left_strength);
 
+  /* Pre-upload STOP to clear the slot (Windows parity) */
+  ret = t500rs_send_pre_stop(t500rs);
+  if (ret) {
+    hid_err(t500rs->hdev, "Pre-upload STOP failed: %d\n", ret);
+    return ret;
+  }
+
   /* Report 0x05 - Condition parameters (coefficients) */
   memset(buf, 0, 15);
   buf[0] = 0x05;
@@ -501,8 +542,12 @@ static int t500rs_upload_periodic(struct t500rs_device_entry *t500rs,
     period = 100;
   }
 
-  T500RS_DBG("Upload %s: id=%d, magnitude=%d (0x%02x), period=%dms\n",
-             type_name, effect->id, magnitude, mag, period);
+  /* Pre-upload STOP to clear the slot (Windows parity) */
+  ret = t500rs_send_pre_stop(t500rs);
+  if (ret) {
+    hid_err(t500rs->hdev, "Pre-upload STOP failed: %d\n", ret);
+    return ret;
+  }
 
   /* Report 0x02 - Envelope */
   t500rs_fill_envelope_u02(buf, &effect->u.periodic.envelope);
@@ -607,6 +652,13 @@ static int t500rs_upload_ramp(struct t500rs_device_entry *t500rs,
 
   T500RS_DBG("Upload ramp: id=%d, start=%d, end=%d, duration=%dms\n",
              effect->id, start_level, end_level, duration_ms);
+
+  /* Pre-upload STOP to clear the slot (Windows parity) */
+  ret = t500rs_send_pre_stop(t500rs);
+  if (ret) {
+    hid_err(t500rs->hdev, "Pre-upload STOP failed: %d\n", ret);
+    return ret;
+  }
 
   /* Report 0x02 - Envelope */
   t500rs_fill_envelope_u02(buf, &effect->u.ramp.envelope);
