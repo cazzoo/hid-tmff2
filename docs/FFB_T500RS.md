@@ -22,9 +22,9 @@ Report glossary
     - b6 0x00
     - b7 0xff
     - b8 0xff
-    - b9 0x0e (parameter subtype)
+    - b9 param subtype = 0x0e + 0x1c×index
     - b10 0x00
-    - b11 0x1c (envelope subtype)
+    - b11 envelope subtype = 0x1c + 0x1c×index
     - b12 0x00
     - b13 0x00
     - b14 0x00
@@ -41,7 +41,7 @@ Report glossary
   - b0 0x04, b1 0x0e, b2 0x00
   - b3 magnitude u7 (0..127)
   - b4 offset = 0, b5 phase = 0
-  - b6..7 period (le16, ms)
+  - b6..7 frequency (le16, Hz×100)  (e.g., 10 Hz → 0x03e8)
 - 0x04 ramp params (9 bytes)
   - b0 0x04, b1 0x0e
   - b2..3 start (le16), b4..5 cur_val (le16), b6..7 duration (le16), b8 0x00
@@ -56,25 +56,47 @@ Report glossary
 - 0x42 apply/apply‑like, 0x43 gain
 
 Effect upload and play ordering
+
+- Subtype system (applies to 0x01/0x02/0x04/0x05 references)
+  - Envelope subtype base = 0x1c; Parameter subtype base = 0x0e
+  - For effect index n: envelope = 0x1c + 0x1c×n; parameter = 0x0e + 0x1c×n
+  - In 0x01: b9 = parameter subtype; b11 = envelope subtype
+
+- Global (Windows parity)
+  - Precede uploads with 0x41 STOP (command=0x00, arg=0x01), effect_id=0x00, to clear state
+
 - Constant (FF_CONSTANT)
-  1) 0x02 envelope
-  2) 0x01 main (type=0x00, effect_id=0x00)
-  Play: 0x03 level, then 0x41 START (effect_id=0x00)
+  1) 0x41 STOP
+  2) 0x02 envelope (first; subtype = 0x1c + 0x1c×index)
+  3) 0x01 main (first; b9/b11 reference current param/envelope subtypes)
+  4) 0x02 envelope (second; subtype += 0x1c)
+  5) 0x03 level
+  6) 0x01 main (second; update references)
+  Play: 0x41 START (effect_id=0x00)
+
 - Periodic (FF_SINE/FF_SQUARE/FF_TRIANGLE/FF_SAW)
-  1) 0x02 envelope
-  2) 0x01 main (type=0x20..0x24, effect_id=0x00)
-  3) 0x04 periodic params (magnitude/period)
-  4) 0x01 main (type repeated, effect_id=0x00)
+  1) 0x41 STOP
+  2) 0x02 envelope (first)
+  3) 0x01 main (first; type=0x20..0x24, effect_id=0x00)
+  4) 0x02 envelope (second; subtype += 0x1c)
+  5) 0x04 periodic params (magnitude/frequency)
+  6) 0x01 main (second; type repeated)
   Play: 0x41 START (effect_id=0x00)
+
 - Condition (FF_SPRING/FF_DAMPER/FF_FRICTION/FF_INERTIA)
-  1) 0x05 coeff/saturation (0x0e)
-  2) 0x05 deadband/center (0x1c)
-  3) 0x01 main (type reflects subkind, effect_id=0x00)
+  1) 0x41 STOP
+  2) 0x05 coeff/saturation (param subtype = 0x0e + 0x1c×index)
+  3) 0x05 deadband/center (envelope subtype = 0x1c + 0x1c×index)
+  4) 0x01 main (type reflects subkind, effect_id=0x00; b9/b11 reference above)
   Play: 0x41 START (effect_id=0x00)
+
 - Ramp (FF_RAMP)
-  1) 0x02 envelope
-  2) 0x04 ramp params (device behaves like hold of start level with duration)
-  3) 0x01 main (type=0x24, effect_id=0x00)
+  1) 0x41 STOP
+  2) 0x02 envelope (first)
+  3) 0x01 main (first; type=0x24, effect_id=0x00)
+  4) 0x02 envelope (second; subtype += 0x1c)
+  5) 0x04 ramp params (device behaves like hold of start level with duration)
+  6) 0x01 main (second)
   Play: 0x41 START (effect_id=0x00)
 
 Notes
