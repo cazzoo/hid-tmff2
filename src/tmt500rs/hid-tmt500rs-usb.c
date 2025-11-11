@@ -308,11 +308,7 @@ static int t500rs_upload_constant(struct t500rs_device_entry *t500rs,
 
   /* Report 0x02 - Envelope (attack/fade) */
   t500rs_fill_envelope_u02(buf, &effect->u.constant.envelope, env_sub_first);
-  T500RS_DBG("Sending Report 0x02 (envelope): a_len=%u a_lvl=%u f_len=%u f_lvl=%u\n",
-             effect->u.constant.envelope.attack_length,
-             t500rs_scale_env_level(effect->u.constant.envelope.attack_level),
-             effect->u.constant.envelope.fade_length,
-             t500rs_scale_env_level(effect->u.constant.envelope.fade_level));
+
   ret = t500rs_send_usb(t500rs, buf, 9);
   if (ret) {
     hid_err(t500rs->hdev, "Failed to send Report 0x02: %d\n", ret);
@@ -348,7 +344,7 @@ static int t500rs_upload_constant(struct t500rs_device_entry *t500rs,
     m->b13 = 0x00;
     m->b14 = 0x00;
   }
-  T500RS_DBG("Sending Report 0x01 (duration/control)...\n");
+
   ret = t500rs_send_usb(t500rs, buf, sizeof(struct t500rs_r01_main));
   if (ret) {
     hid_err(t500rs->hdev, "Failed to send Report 0x01: %d\n", ret);
