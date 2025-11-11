@@ -162,7 +162,7 @@ static inline u8 t500rs_scale_mag_u7(int magnitude)
  * buf[3..4]=attack_length (le16), buf[5]=attack_level (u8 0..255),
  * buf[6..7]=fade_length (le16),   buf[8]=fade_level (u8 0..255)
  */
-static inline void t500rs_fill_envelope_u02(u8 *buf, const struct ff_envelope *env)
+static inline void t500rs_fill_envelope_u02(u8 *buf, const struct ff_envelope *env, u8 subtype)
 {
   u16 a_len = env ? env->attack_length : 0;
   u16 f_len = env ? env->fade_length : 0;
@@ -172,7 +172,7 @@ static inline void t500rs_fill_envelope_u02(u8 *buf, const struct ff_envelope *e
   struct t500rs_r02_envelope *r = (struct t500rs_r02_envelope *)buf;
   memset(r, 0, sizeof(*r));
   r->id = 0x02;
-  r->subtype = 0x1c;
+  r->subtype = subtype;
   r->zero = 0x00;
   r->attack_len = cpu_to_le16(a_len);
   r->attack_lvl = a_lvl;
@@ -286,6 +286,12 @@ static int t500rs_upload_constant(struct t500rs_device_entry *t500rs,
   int ret;
   int level = effect->u.constant.level;
 
+  /* Subtype indices derived from effect->id to match Windows subtype system */
+  unsigned int idx = (unsigned int)effect->id;
+  u8 param_sub = (u8)(0x0e + (0x1c * idx));
+  u8 env_sub_first = (u8)(0x1c + (0x1c * idx));
+  u8 env_sub_second = (u8)(env_sub_first + 0x1c);
+
   /* Note: Gain is applied in play_effect, not here */
 
   T500RS_DBG("Upload constant: id=%d, level=%d\n", effect->id, level);
@@ -304,7 +310,7 @@ static int t500rs_upload_constant(struct t500rs_device_entry *t500rs,
 
 
   /* Report 0x02 - Envelope (attack/fade) */
-  t500rs_fill_envelope_u02(buf, &effect->u.constant.envelope);
+  t500rs_fill_envelope_u02(buf, &effect->u.constant.envelope, 0x1c);
   T500RS_DBG("Sending Report 0x02 (envelope): a_len=%u a_lvl=%u f_len=%u f_lvl=%u\n",
              effect->u.constant.envelope.attack_length,
              t500rs_scale_env_level(effect->u.constant.envelope.attack_level),
@@ -338,9 +344,9 @@ static int t500rs_upload_constant(struct t500rs_device_entry *t500rs,
     m->b6 = 0x00;
     m->b7 = 0xff;
     m->b8 = 0xff;
-    m->b9 = 0x0e; /* Parameter subtype reference */
+    m->b9 = 0x0e; /* Parameter subtype reference (fixed) */
     m->b10 = 0x00;
-    m->b11 = 0x1c; /* Envelope subtype reference */
+    m->b11 = 0x1c; /* Envelope subtype reference (fixed) */
     m->b12 = 0x00;
     m->b13 = 0x00;
     m->b14 = 0x00;
@@ -382,6 +388,12 @@ static int t500rs_upload_condition(struct t500rs_device_entry *t500rs,
   int ret;
   u8 effect_gain;
   int right_strength, left_strength;
+
+  /* Subtype indices derived from effect->id to match Windows subtype system */
+  unsigned int idx = (unsigned int)effect->id;
+  u8 param_sub = (u8)(0x0e + (0x1c * idx));
+  u8 env_sub_first = (u8)(0x1c + (0x1c * idx));
+  u8 env_sub_second = (u8)(env_sub_first + 0x1c);
 
   /* Determine effect type and select appropriate gain */
   switch (effect->type) {
@@ -432,7 +444,7 @@ static int t500rs_upload_condition(struct t500rs_device_entry *t500rs,
   /* Report 0x05 - Condition parameters (coefficients) */
   memset(buf, 0, 15);
   buf[0] = 0x05;
-  buf[1] = 0x0e;
+  buf[1] = param_sub;
   buf[2] = 0x00;
   buf[3] = (u8)right_strength;
   buf[4] = (u8)left_strength;
@@ -449,7 +461,7 @@ static int t500rs_upload_condition(struct t500rs_device_entry *t500rs,
   /* Report 0x05 - Condition parameters (deadband/center) */
   memset(buf, 0, 15);
   buf[0] = 0x05;
-  buf[1] = 0x1c;
+  buf[1] = env_sub_first;
   buf[2] = 0x00;
   buf[3] = 0x00; /* Deadband */
   buf[4] = 0x00; /* Center */
@@ -478,9 +490,9 @@ static int t500rs_upload_condition(struct t500rs_device_entry *t500rs,
     m->b6 = 0x00;
     m->b7 = 0xff;
     m->b8 = 0xff;
-    m->b9 = 0x0e;
+    m->b9 = param_sub;
     m->b10 = 0x00;
-    m->b11 = 0x1c;
+    m->b11 = env_sub_first;
     m->b12 = 0x00;
     m->b13 = 0x00;
     m->b14 = 0x00;
@@ -537,6 +549,12 @@ static int t500rs_upload_periodic(struct t500rs_device_entry *t500rs,
 
   /* Magnitude - scale to 0-127 with saturation */
   mag = t500rs_scale_mag_u7(magnitude);
+  /* Subtype indices derived from effect->id to match Windows subtype system */
+  unsigned int idx = (unsigned int)effect->id;
+  u8 param_sub = (u8)(0x0e + (0x1c * idx));
+  u8 env_sub_first = (u8)(0x1c + (0x1c * idx));
+  u8 env_sub_second = (u8)(env_sub_first + 0x1c);
+
 
   /* Period (ms) -> device frequency (Hz×100). Default to 100ms = 10 Hz if unset */
   if (period == 0) {
@@ -559,8 +577,8 @@ static int t500rs_upload_periodic(struct t500rs_device_entry *t500rs,
     return ret;
   }
 
-  /* Report 0x02 - Envelope */
-  t500rs_fill_envelope_u02(buf, &effect->u.periodic.envelope);
+  /* Report 0x02 - Envelope (first) */
+  t500rs_fill_envelope_u02(buf, &effect->u.periodic.envelope, env_sub_first);
   ret = t500rs_send_usb(t500rs, buf, 9);
   if (ret) {
     hid_err(t500rs->hdev, "Failed to send Report 0x02: %d\n", ret);
@@ -582,9 +600,9 @@ static int t500rs_upload_periodic(struct t500rs_device_entry *t500rs,
     m->b6 = 0x00;
     m->b7 = 0xff;
     m->b8 = 0xff;
-    m->b9 = 0x0e; /* Parameter subtype reference */
+    m->b9 = param_sub; /* Parameter subtype reference (per-effect) */
     m->b10 = 0x00;
-    m->b11 = 0x1c; /* Envelope subtype reference */
+    m->b11 = env_sub_first; /* Envelope subtype reference (first) */
     m->b12 = 0x00;
     m->b13 = 0x00;
     m->b14 = 0x00;
@@ -601,7 +619,7 @@ static int t500rs_upload_periodic(struct t500rs_device_entry *t500rs,
     struct t500rs_r04_periodic *p = (struct t500rs_r04_periodic *)buf;
     memset(p, 0, sizeof(*p));
     p->id = 0x04;
-    p->code = 0x0e;
+    p->code = param_sub;
     p->zero = 0x00;
     p->magnitude = mag;
     p->offset = 0x00;
@@ -629,9 +647,9 @@ static int t500rs_upload_periodic(struct t500rs_device_entry *t500rs,
     m->b6 = 0x00;
     m->b7 = 0xff;
     m->b8 = 0xff;
-    m->b9 = 0x0e;
+    m->b9 = param_sub;
     m->b10 = 0x00;
-    m->b11 = 0x1c;
+    m->b11 = env_sub_second;
     m->b12 = 0x00;
     m->b13 = 0x00;
     m->b14 = 0x00;
@@ -657,6 +675,12 @@ static int t500rs_upload_ramp(struct t500rs_device_entry *t500rs,
   u16 duration_ms = effect->replay.length;
   u16 start_scaled;
 
+  /* Subtype indices derived from effect->id to match Windows subtype system */
+  unsigned int idx = (unsigned int)effect->id;
+  u8 param_sub = (u8)(0x0e + (0x1c * idx));
+  u8 env_sub_first = (u8)(0x1c + (0x1c * idx));
+  u8 env_sub_second = (u8)(env_sub_first + 0x1c);
+
   /* Scale to 0-255 */
   start_scaled = (abs(start_level) * 0xff) / 32767;
 
@@ -671,7 +695,7 @@ static int t500rs_upload_ramp(struct t500rs_device_entry *t500rs,
   }
 
   /* Report 0x02 - Envelope */
-  t500rs_fill_envelope_u02(buf, &effect->u.ramp.envelope);
+  t500rs_fill_envelope_u02(buf, &effect->u.ramp.envelope, env_sub_first);
   ret = t500rs_send_usb(t500rs, buf, 9);
   if (ret) {
     hid_err(t500rs->hdev, "Failed to send Report 0x02: %d\n", ret);
@@ -684,7 +708,7 @@ static int t500rs_upload_ramp(struct t500rs_device_entry *t500rs,
     struct t500rs_r04_ramp *rr = (struct t500rs_r04_ramp *)buf;
     memset(rr, 0, sizeof(*rr));
     rr->id = 0x04;
-    rr->code = 0x0e;
+    rr->code = param_sub;
     rr->start = cpu_to_le16(start_scaled);
     rr->cur_val = cpu_to_le16(start_scaled);
     rr->duration = cpu_to_le16(duration_ms);
@@ -711,9 +735,9 @@ static int t500rs_upload_ramp(struct t500rs_device_entry *t500rs,
     m->b6 = 0x00;
     m->b7 = 0xff;
     m->b8 = 0xff;
-    m->b9 = 0x0e;
+    m->b9 = param_sub;
     m->b10 = 0x00;
-    m->b11 = 0x1c;
+    m->b11 = env_sub_first;
     m->b12 = 0x00;
     m->b13 = 0x00;
     m->b14 = 0x00;
