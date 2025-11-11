@@ -420,7 +420,7 @@ static int t500rs_upload_condition(struct t500rs_device_entry *t500rs,
   unsigned int idx = (unsigned int)effect->id;
   u8 param_sub = (u8)(0x0e + (0x1c * idx));
   u8 env_sub_first = (u8)(0x1c + (0x1c * idx));
-  u8 env_sub_second = (u8)(env_sub_first + 0x1c);
+
 
   /* Determine effect type and select appropriate gain */
   switch (effect->type) {
