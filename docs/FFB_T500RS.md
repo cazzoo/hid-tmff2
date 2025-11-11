@@ -2,6 +2,17 @@
 
 This page documents the packet formats and ordering used by the T500RS when driven via the USB interrupt endpoint (0x01 OUT). It mirrors the style of docs/FFBEFFECTS.md for other wheels.
 
+
+Quick reference (Windows parity, at-a-glance)
+- EffectID rule: All 0x01 uploads and 0x41 START/STOP use EffectID=0x00
+- Subtypes per effect index n: param = 0x0e + 0x1c×n; envelope = 0x1c + 0x1c×n; second envelope = first + 0x1c
+- Periodic 0x04 uses frequency (Hz×100), not period (ms)
+- Upload sequences (per effect):
+  - Constant: STOP → 0x02 → 0x01 → 0x02 → 0x03 → 0x01 → START
+  - Periodic (sine/square/triangle/saw): STOP → 0x02 → 0x01 → 0x02 → 0x04 → 0x01 → START
+  - Ramp: STOP → 0x02 → 0x01 → 0x02 → 0x04 → 0x01 → START
+  - Condition (spring/damper/friction/inertia): STOP → 0x05(set1) → 0x05(set2) → 0x01 → START
+
 Key rules
 - Little‑endian for 16‑bit fields
 - DMA‑safe buffer length 32 bytes; typical messages are 2, 4, 9 or 15 bytes
