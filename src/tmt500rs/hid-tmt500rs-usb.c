@@ -642,6 +642,14 @@ static int t500rs_upload_periodic(struct t500rs_device_entry *t500rs,
             ret);
     return ret;
   }
+  /* Report 0x02 - Envelope (second) */
+  t500rs_fill_envelope_u02(buf, &effect->u.periodic.envelope, env_sub_second);
+  ret = t500rs_send_usb(t500rs, buf, 9);
+  if (ret) {
+    hid_err(t500rs->hdev, "Failed to send Report 0x02 (second): %d\n", ret);
+    return ret;
+  }
+
 
   /* Report 0x04 - Periodic parameters */
   {
