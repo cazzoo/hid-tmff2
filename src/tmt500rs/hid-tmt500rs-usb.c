@@ -262,10 +262,10 @@ static int t500rs_send_usb(struct t500rs_device_entry *t500rs, const u8 *data,
   return (transferred == len) ? 0 : -EIO;
 }
 
-/* Send pre-upload STOP (Report 0x41 with effect_id=0, command=0x00, arg=0x01)
+/* Send pre-upload STOP (Report 0x41 with effect_id=slot_idx, command=0x00, arg=0x01)
  * Matches Windows behavior of clearing the slot before (re)uploading.
  */
-static inline int t500rs_send_pre_stop(struct t500rs_device_entry *t500rs)
+static inline int t500rs_send_pre_stop(struct t500rs_device_entry *t500rs, u8 slot_idx)
 {
   u8 *buf;
   struct t500rs_r41_cmd *r41;
@@ -276,7 +276,7 @@ static inline int t500rs_send_pre_stop(struct t500rs_device_entry *t500rs)
     return -ENOMEM;
   r41 = (struct t500rs_r41_cmd *)buf;
   r41->id = 0x41;
-  r41->effect_id = 0x00;
+  r41->effect_id = slot_idx;
   r41->command = 0x00; /* STOP/CLEAR */
 
 
@@ -306,7 +306,7 @@ static int t500rs_upload_constant(struct t500rs_device_entry *t500rs,
 
 
   /* Pre-upload STOP to clear the slot (Windows parity) */
-  ret = t500rs_send_pre_stop(t500rs);
+  ret = t500rs_send_pre_stop(t500rs, (u8)idx);
   if (ret) {
     hid_err(t500rs->hdev, "Pre-upload STOP failed: %d\n", ret);
     return ret;
@@ -490,7 +490,7 @@ static int t500rs_upload_condition(struct t500rs_device_entry *t500rs,
              left_strength);
 
   /* Pre-upload STOP to clear the slot (Windows parity) */
-  ret = t500rs_send_pre_stop(t500rs);
+  ret = t500rs_send_pre_stop(t500rs, (u8)idx);
   if (ret) {
     hid_err(t500rs->hdev, "Pre-upload STOP failed: %d\n", ret);
     return ret;
@@ -626,7 +626,7 @@ static int t500rs_upload_periodic(struct t500rs_device_entry *t500rs,
   }
 
   /* Pre-upload STOP to clear the slot (Windows parity) */
-  ret = t500rs_send_pre_stop(t500rs);
+  ret = t500rs_send_pre_stop(t500rs, (u8)idx);
   if (ret) {
     hid_err(t500rs->hdev, "Pre-upload STOP failed: %d\n", ret);
     return ret;
@@ -751,7 +751,7 @@ static int t500rs_upload_ramp(struct t500rs_device_entry *t500rs,
              effect->id, start_level, end_level, duration_ms);
 
   /* Pre-upload STOP to clear the slot (Windows parity) */
-  ret = t500rs_send_pre_stop(t500rs);
+  ret = t500rs_send_pre_stop(t500rs, (u8)idx);
   if (ret) {
     hid_err(t500rs->hdev, "Pre-upload STOP failed: %d\n", ret);
     return ret;
@@ -886,6 +886,9 @@ static int t500rs_play_effect(void *data,
   if (!t500rs)
     return -ENODEV;
 
+  /* Slot index used for START/STOP commands */
+  unsigned int idx = t500rs_sub_index(t500rs, (unsigned int)effect->id);
+
   T500RS_DBG("Play effect: id=%d, type=0x%02x (FF_CONSTANT=0x%02x)\n",
              effect->id, effect->type, FF_CONSTANT);
 
@@ -916,7 +919,7 @@ static int t500rs_play_effect(void *data,
     {
       struct t500rs_r41_cmd *r41 = (struct t500rs_r41_cmd *)buf;
       r41->id = 0x41;
-      r41->effect_id = 0x00;
+      r41->effect_id = (u8)idx;
       r41->command = 0x41;
       r41->arg = 0x01;
     }
@@ -929,12 +932,12 @@ static int t500rs_play_effect(void *data,
   {
     struct t500rs_r41_cmd *r41 = (struct t500rs_r41_cmd *)buf;
     r41->id = 0x41;
-    r41->effect_id = 0x00;
+    r41->effect_id = (u8)idx;
     r41->command = 0x41;
     r41->arg = 0x01;
   }
 
-  T500RS_DBG("Sending START command (EffectID=0) for effect %d\n", effect->id);
+  T500RS_DBG("Sending START (slot=%u) for effect %d\n", (unsigned)idx, effect->id);
   return t500rs_send_usb(t500rs, buf, sizeof(struct t500rs_r41_cmd));
 }
 
@@ -956,6 +959,8 @@ static int t500rs_stop_effect(void *data,
     return -ENOMEM;
   }
 
+  /* Slot index used for STOP commands */
+  unsigned int idx = t500rs_sub_index(t500rs, (unsigned int)state->effect.id);
   T500RS_DBG("Stop effect: id=%d, type=%d\n", state->effect.id,
              state->effect.type);
 
@@ -964,7 +969,7 @@ static int t500rs_stop_effect(void *data,
     {
       struct t500rs_r41_cmd *r41 = (struct t500rs_r41_cmd *)buf;
       r41->id = 0x41;
-      r41->effect_id = 0x00;
+      r41->effect_id = (u8)idx;
       r41->command = 0x00;
       r41->arg = 0x01;
     }
@@ -977,7 +982,7 @@ static int t500rs_stop_effect(void *data,
   {
     struct t500rs_r41_cmd *r41 = (struct t500rs_r41_cmd *)buf;
     r41->id = 0x41;
-    r41->effect_id = 0x00;
+    r41->effect_id = (u8)idx;
     r41->command = 0x00;
     r41->arg = 0x01;
   }
@@ -1356,7 +1361,7 @@ static int t500rs_wheel_init(struct tmff2_device_entry *tmff2, int open_mode) {
     r41->id = 0x41;
     r41->effect_id = 0x00;
     r41->command = 0x00; /* CLEAR */
-    r41->arg = 0x00;
+    r41->arg = 0x01;
   }
   ret = t500rs_send_usb(t500rs, init_buf, sizeof(struct t500rs_r41_cmd));
   if (ret) {
