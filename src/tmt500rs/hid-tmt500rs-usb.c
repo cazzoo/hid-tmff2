@@ -943,35 +943,122 @@ static int t500rs_update_effect(void *data,
                                 const struct tmff2_effect_state *state) {
   struct t500rs_device_entry *t500rs = data;
   const struct ff_effect *effect = &state->effect;
+  u8 *buf;
 
   if (!t500rs)
     return -ENODEV;
 
-  /* Do NOT re-upload here; Windows keeps the effect and only updates force level */
-  /* This avoids redundant USB traffic and state churn */
-  /* Update constant force: send single 0x03 with new level */
-  if (effect->type == FF_CONSTANT) {
-    int level = effect->u.constant.level;
-    s8 signed_level;
-    u8 *buf3;
+  buf = t500rs->send_buffer;
+  if (!buf)
+    return -ENOMEM;
 
-    buf3 = t500rs->send_buffer;
-    if (!buf3)
-      return -ENOMEM;
-
-    signed_level = t500rs_scale_const_level_s8(level);
-
-    {
-      struct t500rs_r03_const *r3 = (struct t500rs_r03_const *)buf3;
+  /* Do NOT re-upload here; Windows keeps the effect and we only update parameters */
+  switch (effect->type) {
+  case FF_CONSTANT: {
+      int level = effect->u.constant.level;
+      s8 signed_level = t500rs_scale_const_level_s8(level);
+      struct t500rs_r03_const *r3 = (struct t500rs_r03_const *)buf;
       r3->id = 0x03;
       r3->code = 0x0e;
       r3->zero = 0x00;
       r3->level = signed_level;
+      return t500rs_send_usb(t500rs, (u8 *)r3, sizeof(*r3));
     }
-    return t500rs_send_usb(t500rs, buf3, sizeof(struct t500rs_r03_const));
-  }
+  case FF_PERIODIC: {
+      u8 mag = t500rs_scale_mag_u7(effect->u.periodic.magnitude);
+      u16 period = effect->u.periodic.period;
+      unsigned int idx = (unsigned int)effect->id;
+      u8 param_sub = (u8)(0x0e + (0x1c * idx));
 
-  return 0;
+      if (period == 0)
+        period = 100;
+      {
+        u32 freq_hz100 = 100000U / period;
+        if (freq_hz100 < 1U) freq_hz100 = 1U;
+        if (freq_hz100 > 65535U) freq_hz100 = 65535U;
+        period = (u16)freq_hz100;
+      }
+
+      {
+        struct t500rs_r04_periodic *p = (struct t500rs_r04_periodic *)buf;
+        memset(p, 0, sizeof(*p));
+        p->id = 0x04;
+        p->code = param_sub;
+        p->zero = 0x00;
+        p->magnitude = mag;
+        p->offset = 0x00;
+        p->phase = 0x00;
+        p->period = cpu_to_le16(period);
+      }
+      return t500rs_send_usb(t500rs, buf, sizeof(struct t500rs_r04_periodic));
+    }
+  case FF_RAMP: {
+      int start_level = effect->u.ramp.start_level;
+      u16 duration_ms = effect->replay.length;
+      unsigned int idx = (unsigned int)effect->id;
+      u8 param_sub = (u8)(0x0e + (0x1c * idx));
+      u16 start_scaled = (abs(start_level) * 0xff) / 32767;
+      struct t500rs_r04_ramp *rr = (struct t500rs_r04_ramp *)buf;
+      memset(rr, 0, sizeof(*rr));
+      rr->id = 0x04;
+      rr->code = param_sub;
+      rr->start = cpu_to_le16(start_scaled);
+      rr->cur_val = cpu_to_le16(start_scaled);
+      rr->duration = cpu_to_le16(duration_ms);
+      rr->zero = 0x00;
+      return t500rs_send_usb(t500rs, buf, sizeof(struct t500rs_r04_ramp));
+    }
+  case FF_SPRING:
+  case FF_DAMPER:
+  case FF_FRICTION:
+  case FF_INERTIA: {
+      unsigned int idx = (unsigned int)effect->id;
+      u8 param_sub = (u8)(0x0e + (0x1c * idx));
+      u8 env_sub_first = (u8)(0x1c + (0x1c * idx));
+      u8 effect_gain;
+      int right_strength = effect->u.condition[0].right_saturation;
+      int left_strength = effect->u.condition[0].left_saturation;
+
+      switch (effect->type) {
+      case FF_SPRING:   effect_gain = spring_level; break;
+      case FF_DAMPER:   effect_gain = damper_level; break;
+      case FF_FRICTION: effect_gain = friction_level; break;
+      case FF_INERTIA:  effect_gain = 100; break;
+      default:          effect_gain = 100; break;
+      }
+
+      right_strength = (right_strength * effect_gain) / 100;
+      left_strength  = (left_strength  * effect_gain) / 100;
+
+      right_strength = (right_strength * 127) / 65535;
+      left_strength  = (left_strength  * 127) / 65535;
+
+      memset(buf, 0, 15);
+      buf[0] = 0x05;
+      buf[1] = param_sub;
+      buf[2] = 0x00;
+      buf[3] = (u8)right_strength;
+      buf[4] = (u8)left_strength;
+      buf[5] = buf[6] = buf[7] = buf[8] = 0x00;
+      buf[9]  = (effect->type == FF_SPRING) ? 0x54 : 0x64;
+      buf[10] = (effect->type == FF_SPRING) ? 0x54 : 0x64;
+      if (t500rs_send_usb(t500rs, buf, 11))
+        return -EIO;
+
+      memset(buf, 0, 15);
+      buf[0] = 0x05;
+      buf[1] = env_sub_first;
+      buf[2] = 0x00;
+      buf[3] = 0x00; /* Deadband */
+      buf[4] = 0x00; /* Center */
+      buf[5] = buf[6] = buf[7] = buf[8] = 0x00;
+      buf[9]  = (effect->type == FF_SPRING) ? 0x46 : 0x64;
+      buf[10] = (effect->type == FF_SPRING) ? 0x54 : 0x64;
+      return t500rs_send_usb(t500rs, buf, 11);
+    }
+  default:
+      return 0;
+  }
 }
 
 /* Set autocenter */

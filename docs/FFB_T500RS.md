@@ -21,6 +21,14 @@ Key rules
   - Report 0x41 START/STOP also uses EffectID = 0x00, except the init‑time STOP for autocenter which targets a fixed ID (15)
   - Using per‑effect IDs with 0x01 breaks playback (constant force fails completely)
 
+Special case — constant force subtypes
+
+- For FF_CONSTANT, the device uses fixed subtypes to link the 0x03 level update:
+  - Report 0x02 subtype = 0x1c
+  - Report 0x01 b9 = 0x0e (parameter), b11 = 0x1c (envelope)
+  - Report 0x03 code = 0x0e
+- Using per‑effect subtypes for constant breaks level updates (no force felt).
+
 Report glossary
 - 0x01 main upload (15 bytes)
   - Layout (unknown bytes kept for completeness):
@@ -109,6 +117,33 @@ Effect upload and play ordering
   5) 0x04 ramp params (device behaves like hold of start level with duration)
   6) 0x01 main (second)
   Play: 0x41 START (effect_id=0x00)
+
+
+Live update behavior (parameter‑only; Windows parity)
+
+- Overview
+  - Parameter updates do not re‑upload effects or send STOP; they modify parameters in place.
+  - This reduces USB traffic and avoids momentary dropouts during gameplay.
+  - 0x01/0x41 still follow the EffectID=0 rule; 0x04/0x05 carry subtypes, not effect IDs.
+
+- Constant (FF_CONSTANT)
+  - Send only 0x03 with new level; code must be 0x0e (fixed linkage to constant path).
+  - No 0x41 STOP and no 0x01 re‑upload for updates.
+
+- Periodic (FF_SINE/FF_SQUARE/FF_TRIANGLE/FF_SAW)
+  - Send only 0x04 with new magnitude and frequency.
+  - Frequency field is Hz×100 (e.g., 10 Hz → 1000); offset/phase remain 0 unless changed.
+  - Use per‑effect param_sub = 0x0e + 0x1c×index.
+
+- Condition (FF_SPRING/FF_DAMPER/FF_FRICTION/FF_INERTIA)
+  - Send 0x05 (coeff/saturation) with param_sub, then 0x05 (deadband/center) with env_sub_first.
+  - Subtypes are the same as in the upload path; spring uses subtype bytes 0x54, others 0x64 for the tail fields.
+  - No 0x01 re‑upload.
+
+- Ramp (FF_RAMP)
+  - Send only 0x04 (start/cur_val/duration, last byte 0x00) using param_sub.
+  - Device behavior approximates ramp via holding/stepping the start value over duration; matching observed Windows behavior.
+
 
 Notes
 - All 0x01 uploads must use EffectID=0x00. This was validated on hardware; using per‑effect IDs causes constant force to fail completely and can break other effects.
