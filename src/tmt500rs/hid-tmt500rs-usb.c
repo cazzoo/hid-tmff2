@@ -108,15 +108,14 @@ static inline int t500rs_is_known_tx(const unsigned char *data, size_t len) {
   case 0x01:
     return len == 15; /* main effect upload */
   case 0x02:
-    return len == 9 && s == 0x1c; /* envelope */
+    return len == 9; /* envelope (subtype varies per slot) */
   case 0x03:
     return len == 4 && s == 0x0e &&
            ((len > 2) ? data[2] == 0x00 : 0); /* const force level */
   case 0x04:
-    return (s == 0x0e) && (len == 8 || len == 9); /* periodic/ramp params */
+    return (len == 8 || len == 9); /* periodic/ramp params (subtype varies) */
   case 0x05:
-    return (len == 11) && (s == 0x0e || s == 0x1c) &&
-           ((len > 2) ? data[2] == 0x00 : 0);
+    return (len == 11); /* condition params (subtype varies) */
   case 0x40:
     return (len == 4) && (s == 0x03 || s == 0x04 || s == 0x08 || s == 0x11);
   case 0x41:
@@ -196,6 +195,10 @@ struct t500rs_device_entry {
   u8 *send_buffer;
   size_t buffer_length;
 
+  /* Subtype slot tracking (Windows-style indices 0..15 mapped per effect ID) */
+  s8 sub_index_map[T500RS_MAX_EFFECTS];
+  u8 sub_index_next;
+
   /* Current wheel range for smooth transitions */
   u16 current_range; /* Current rotation range in degrees */
 };
@@ -215,6 +218,8 @@ static const signed short t500rs_effects[] = {
  */
 static int t500rs_send_usb(struct t500rs_device_entry *t500rs, const u8 *data,
                            size_t len);
+static inline unsigned int t500rs_sub_index(struct t500rs_device_entry *t500rs,
+                                            unsigned int effect_id);
 static int t500rs_set_autocenter(void *data, u16 autocenter);
 static int t500rs_set_range(void *data, u16 range);
 static int t500rs_upload_effect(void *data,
@@ -273,6 +278,8 @@ static inline int t500rs_send_pre_stop(struct t500rs_device_entry *t500rs)
   r41->id = 0x41;
   r41->effect_id = 0x00;
   r41->command = 0x00; /* STOP/CLEAR */
+
+
   r41->arg = 0x01;
   return t500rs_send_usb(t500rs, buf, sizeof(*r41));
 }
@@ -286,8 +293,8 @@ static int t500rs_upload_constant(struct t500rs_device_entry *t500rs,
   int ret;
   int level = effect->u.constant.level;
 
-  /* Subtype indices derived from effect->id to match Windows subtype system */
-  unsigned int idx = (unsigned int)effect->id;
+  /* Subtype indices use per-device slot mapping (0..15), not raw effect->id */
+  unsigned int idx = t500rs_sub_index(t500rs, (unsigned int)effect->id);
   u8 param_sub = (u8)(0x0e + (0x1c * idx));
   u8 env_sub_first = (u8)(0x1c + (0x1c * idx));
   u8 env_sub_second = (u8)(env_sub_first + 0x1c);
@@ -295,6 +302,8 @@ static int t500rs_upload_constant(struct t500rs_device_entry *t500rs,
   /* Note: Gain is applied in play_effect, not here */
 
   T500RS_DBG("Upload constant: id=%d, level=%d\n", effect->id, level);
+
+
 
   /* Pre-upload STOP to clear the slot (Windows parity) */
   ret = t500rs_send_pre_stop(t500rs);
@@ -404,6 +413,27 @@ static int t500rs_upload_constant(struct t500rs_device_entry *t500rs,
   return 0;
 }
 
+/* Map Linux effect->id to a small 0..15 subtype index per device session.
+ * Windows uses a compact "slot" index for parameter/envelope subtypes; do not
+ * use raw effect IDs directly.
+ */
+static inline unsigned int t500rs_sub_index(struct t500rs_device_entry *t500rs,
+                                            unsigned int effect_id)
+{
+  unsigned int idx;
+  if (!t500rs)
+    return 0;
+  if (effect_id < T500RS_MAX_EFFECTS && t500rs->sub_index_map[effect_id] >= 0)
+    return (unsigned int)t500rs->sub_index_map[effect_id];
+
+  idx = t500rs->sub_index_next % T500RS_MAX_EFFECTS;
+  if (effect_id < T500RS_MAX_EFFECTS)
+    t500rs->sub_index_map[effect_id] = (s8)idx;
+  t500rs->sub_index_next = (idx + 1) % T500RS_MAX_EFFECTS;
+  return idx;
+}
+
+
 /* Upload spring/damper/friction effect */
 static int t500rs_upload_condition(struct t500rs_device_entry *t500rs,
                                    const struct tmff2_effect_state *state) {
@@ -414,8 +444,8 @@ static int t500rs_upload_condition(struct t500rs_device_entry *t500rs,
   u8 effect_gain;
   int right_strength, left_strength;
 
-  /* Subtype indices derived from effect->id to match Windows subtype system */
-  unsigned int idx = (unsigned int)effect->id;
+  /* Subtype indices use per-device slot mapping (0..15), not raw effect->id */
+  unsigned int idx = t500rs_sub_index(t500rs, (unsigned int)effect->id);
   u8 param_sub = (u8)(0x0e + (0x1c * idx));
   u8 env_sub_first = (u8)(0x1c + (0x1c * idx));
 
@@ -574,8 +604,8 @@ static int t500rs_upload_periodic(struct t500rs_device_entry *t500rs,
 
   /* Magnitude - scale to 0-127 with saturation */
   mag = t500rs_scale_mag_u7(magnitude);
-  /* Subtype indices derived from effect->id to match Windows subtype system */
-  unsigned int idx = (unsigned int)effect->id;
+  /* Subtype indices use per-device slot mapping (0..15), not raw effect->id */
+  unsigned int idx = t500rs_sub_index(t500rs, (unsigned int)effect->id);
   u8 param_sub = (u8)(0x0e + (0x1c * idx));
   u8 env_sub_first = (u8)(0x1c + (0x1c * idx));
   u8 env_sub_second = (u8)(env_sub_first + 0x1c);
@@ -708,8 +738,8 @@ static int t500rs_upload_ramp(struct t500rs_device_entry *t500rs,
   u16 duration_ms = effect->replay.length;
   u16 start_scaled;
 
-  /* Subtype indices derived from effect->id to match Windows subtype system */
-  unsigned int idx = (unsigned int)effect->id;
+  /* Subtype indices use per-device slot mapping (0..15), not raw effect->id */
+  unsigned int idx = t500rs_sub_index(t500rs, (unsigned int)effect->id);
   u8 param_sub = (u8)(0x0e + (0x1c * idx));
   u8 env_sub_first = (u8)(0x1c + (0x1c * idx));
   u8 env_sub_second = (u8)(env_sub_first + 0x1c);
@@ -1157,7 +1187,7 @@ static int t500rs_wheel_init(struct tmff2_device_entry *tmff2, int open_mode) {
   struct t500rs_device_entry *t500rs;
   struct usb_host_endpoint *ep;
   u8 *init_buf; /* Will use send_buffer for DMA-safe transfers */
-  int ret;
+  int ret, i;
 
   /* Validate input parameters */
   if (!tmff2 || !tmff2->hdev || !tmff2->input_dev) {
@@ -1193,6 +1223,12 @@ static int t500rs_wheel_init(struct tmff2_device_entry *tmff2, int open_mode) {
   }
 
   t500rs->usbdev = interface_to_usbdev(t500rs->usbif);
+
+  /* Initialize subtype slot mapping */
+  for (i = 0; i < T500RS_MAX_EFFECTS; i++)
+    t500rs->sub_index_map[i] = -1;
+  t500rs->sub_index_next = 0;
+
   if (!t500rs->usbdev) {
     hid_err(t500rs->hdev, "Failed to get USB device\n");
     ret = -ENODEV;
