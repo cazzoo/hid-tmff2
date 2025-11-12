@@ -1026,17 +1026,3 @@ binary    hex
     ff00.0021 = 0
     ff00.0021 = 0
 ```
-
-
-
-
-### Report 0x05 (Condition) quick layout
-- 0x05 0x0e (11 bytes): coefficients/saturation
-  - [0]=0x05, [1]=0x0e, [2]=0x00,
-  - [3]=right_strength, [4]=left_strength, [...]=0,
-  - [9]=right_saturation, [10]=left_saturation
-- 0x05 0x1c (11 bytes): deadband/center
-  - [0]=0x05, [1]=0x1c, [2]=0x00,
-  - [3]=deadband, [4]=center, [...]=0,
-  - [9]=right_saturation, [10]=left_saturation
-

@@ -376,12 +376,8 @@ static void tmff2_work_handler(struct work_struct *w)
 		effect_length = state->effect.replay.length;
 		/* If playing with a finite length, stop when (delay + length) elapses */
 		if (test_bit(FF_EFFECT_PLAYING, &state->flags) && effect_length) {
-
-
-
-
-			if ((time_now - state->start_time) >= (effect_delay + effect_length) * state->count) {
-
+			if ((time_now - state->start_time) >= 
+					(effect_delay + effect_length) * state->count) {
 				__clear_bit(FF_EFFECT_PLAYING, &state->flags);
 				__clear_bit(FF_EFFECT_QUEUE_UPDATE, &state->flags);
 				/* Request a STOP in process context */
@@ -412,6 +408,12 @@ static void tmff2_work_handler(struct work_struct *w)
 			__clear_bit(FF_EFFECT_QUEUE_UPDATE, &state->flags);
 		}
 
+		if (test_bit(FF_EFFECT_QUEUE_START, &state->flags)) {
+			__set_bit(FF_EFFECT_QUEUE_START, &actions);
+			__clear_bit(FF_EFFECT_QUEUE_START, &state->flags);
+			/* effect is playing since we're started it right now */
+			__set_bit(FF_EFFECT_PLAYING, &state->flags);
+		}
 
 		if (test_bit(FF_EFFECT_QUEUE_STOP, &state->flags)) {
 			__set_bit(FF_EFFECT_QUEUE_STOP, &actions);
@@ -816,7 +818,6 @@ oom_err:
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(6,12,0)
 static __u8 *tmff2_report_fixup(struct hid_device *hdev, __u8 *rdesc,
-
 		unsigned int *rsize)
 #else
 static const __u8 *tmff2_report_fixup(struct hid_device *hdev, __u8 *rdesc,
@@ -888,13 +889,6 @@ static const struct hid_device_id tmff2_devices[] = {
 
 	{}
 };
-MODULE_DEVICE_TABLE(hid, tmff2_devices);
-static int tmff2_raw_event(struct hid_device *hdev, struct hid_report *report,
-				 __u8 *data, int size)
-{
-	return 0; /* always pass through */
-}
-
 
 static struct hid_driver tmff2_driver = {
 	.name = "tmff2",
@@ -902,7 +896,6 @@ static struct hid_driver tmff2_driver = {
 	.probe = tmff2_probe,
 	.remove = tmff2_remove,
 	.report_fixup = tmff2_report_fixup,
-	.raw_event = tmff2_raw_event,
 };
 module_hid_driver(tmff2_driver);
 
