@@ -376,7 +376,8 @@ static void tmff2_work_handler(struct work_struct *w)
 		effect_length = state->effect.replay.length;
 		/* If playing with a finite length, stop when (delay + length) elapses */
 		if (test_bit(FF_EFFECT_PLAYING, &state->flags) && effect_length) {
-			if ((time_now - state->start_time) >= (effect_delay + effect_length) * state->count) {
+			if ((time_now - state->start_time) >= 
+					(effect_delay + effect_length) * state->count) {
 				__clear_bit(FF_EFFECT_PLAYING, &state->flags);
 				__clear_bit(FF_EFFECT_QUEUE_UPDATE, &state->flags);
 				/* Request a STOP in process context */
@@ -407,6 +408,12 @@ static void tmff2_work_handler(struct work_struct *w)
 			__clear_bit(FF_EFFECT_QUEUE_UPDATE, &state->flags);
 		}
 
+		if (test_bit(FF_EFFECT_QUEUE_START, &state->flags)) {
+			__set_bit(FF_EFFECT_QUEUE_START, &actions);
+			__clear_bit(FF_EFFECT_QUEUE_START, &state->flags);
+			/* effect is playing since we're started it right now */
+			__set_bit(FF_EFFECT_PLAYING, &state->flags);
+		}
 
 		if (test_bit(FF_EFFECT_QUEUE_STOP, &state->flags)) {
 			__set_bit(FF_EFFECT_QUEUE_STOP, &actions);
