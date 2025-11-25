@@ -19,6 +19,7 @@
 
 /* T500RS Constants */
 #define T500RS_MAX_EFFECTS 16
+#define T500RS_MAX_HW_EFFECTS T500RS_MAX_EFFECTS
 #define T500RS_BUFFER_LENGTH 32 /* USB endpoint max packet size */
 #define T500RS_EP_OUT 0x01      /* INTERRUPT OUT endpoint */
 
@@ -28,7 +29,50 @@
 /* Gain scaling */
 #define GAIN_MAX 65535
 
-/* Packet structs (packed) to reduce magic bytes on T500RS protocol */
+/*
+ * Protocol-accurate packet structs (to be wired in by later refactor phases).
+ * These mirror the Windows T500RS USB protocol documentation and are kept
+ * separate from the legacy structs currently used by the upload paths.
+ */
+
+/* 0x01 - Main upload (15 bytes) */
+struct t500rs_pkt_r01_main {
+	u8 id;            /* 0x01 */
+	__le16 effect_id; /* Effect ID (0..15 for now) */
+	__le16 direction; /* 0..35999 in 0.01 degrees */
+	__le16 duration_ms;
+	__le16 delay_ms;
+	__le16 code1; /* packet_code_1 (parameter subtype) */
+	__le16 code2; /* packet_code_2 (envelope/second subtype) */
+	__le16 reserved;  /* always 0x0000 */
+} __packed;
+
+/* 0x04 - Periodic / Ramp parameters (8 bytes) */
+struct t500rs_pkt_r04_periodic_ramp {
+	u8 id;        /* 0x04 */
+	u8 code;      /* from 0x01 code1 (param subtype low byte) */
+	u8 magnitude; /* 0..127 */
+	u8 offset;    /* signed, but stored as u8; mapping TBD */
+	u8 phase;     /* 0..255 */
+	__le16 period_ms; /* period in milliseconds */
+	u8 reserved;      /* 0x00 */
+} __packed;
+
+/* 0x05 - Conditional parameters (11 bytes) */
+struct t500rs_pkt_r05_condition {
+	u8 id;     /* 0x05 */
+	u8 code;   /* from 0x01 code1/code2 (subtype low byte) */
+	__le16 right_coeff;
+	__le16 left_coeff;
+	__le16 deadband;
+	u8 center;
+	u8 right_sat;
+	u8 left_sat;
+} __packed;
+
+/* Packet structs (packed) currently used by the implementation
+ * (will be gradually replaced by the t500rs_pkt_* variants above).
+ */
 struct t500rs_r02_envelope {
   u8 id;      /* 0x02 */
   u8 subtype; /* 0x1c */
@@ -129,6 +173,18 @@ static inline u8 t500rs_scale_mag_u7(int magnitude) {
   return (u8)((magnitude * 127) / 32767);
 }
 
+/* Map logical effect index to parameter/envelope subtypes as per protocol:
+ *  param_sub = 0x000e + 0x001c * idx
+ *  env_sub   = 0x001c + 0x001c * idx
+ * idx is wrapped to the hardware limit of 16 effect slots.
+ */
+static inline void
+t500rs_index_to_subtypes(unsigned int idx, u16 *param_sub, u16 *env_sub) {
+  idx %= T500RS_MAX_HW_EFFECTS;
+  *param_sub = 0x000e + 0x001c * idx;
+  *env_sub = 0x001c + 0x001c * idx;
+}
+
 /* Fill Report 0x02 (envelope) buffer for T500RS: 9 bytes total
  * buf[0]=0x02, buf[1]=0x1c, buf[2]=0x00,
  * buf[3..4]=attack_length (le16), buf[5]=attack_level (u8 0..255),
@@ -156,7 +212,6 @@ t500rs_fill_envelope_u02(u8 *buf, const struct ff_envelope *env, u8 subtype) {
 #define T500RS_DBG(dev, fmt, ...) hid_dbg((dev)->hdev, fmt, ##__VA_ARGS__)
 
 /* T500RS device data */
-#define T500RS_MAX_EFFECTS 16
 struct t500rs_device_entry {
   struct hid_device *hdev;
   struct input_dev *input_dev;
@@ -400,7 +455,7 @@ static int t500rs_upload_condition(struct t500rs_device_entry *t500rs,
   buf[2] = 0x00;
   buf[3] = (u8)right_strength;
   buf[4] = (u8)left_strength;
-  buf[5] = 0x00;I
+  buf[5] = 0x00;
   buf[6] = 0x00;
   buf[7] = 0x00;
   buf[8] = 0x00;
@@ -1167,6 +1222,9 @@ static int t500rs_wheel_init(struct tmff2_device_entry *tmff2, int open_mode) {
   struct usb_host_endpoint *ep;
   u8 *init_buf; /* Will use send_buffer for DMA-safe transfers */
   int ret;
+
+	/* Sanity check protocol main-upload packet size against documentation */
+	BUILD_BUG_ON(sizeof(struct t500rs_pkt_r01_main) != 15);
 
   /* Validate input parameters */
   if (!tmff2 || !tmff2->hdev || !tmff2->input_dev) {
