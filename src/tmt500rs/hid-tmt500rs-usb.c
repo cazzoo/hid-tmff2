@@ -435,8 +435,16 @@ static void t500rs_build_r05_condition(struct t500rs_pkt_r05_condition *p,
     /* Observed values in captures: 0x54 (84), 0x64 (100) */
     p->right_sat = (u8)((c->right_saturation * 255) / 32767);
     p->left_sat = (u8)((c->left_saturation * 255) / 32767);
+  } else if (c) {
+    /*
+     * Second packet (Y-axis): Per Windows captures, the Y-axis packet should
+     * still have saturation values set, but coefficients/deadband/center zeroed.
+     * Example: `05 38 00 00 00 00 00 00 00 54 54` - zeros but saturation 0x54
+     */
+    p->right_sat = (u8)((c->right_saturation * 255) / 32767);
+    p->left_sat = (u8)((c->left_saturation * 255) / 32767);
   }
-  /* Second packet (Y-axis): all zeros except id and code, already set by memset */
+  /* If c is NULL (shouldn't happen normally), leave all zeros */
 }
 
 /*
@@ -814,12 +822,13 @@ static int t500rs_upload_condition(struct t500rs_device_entry *t500rs,
   }
 
   /* Report 0x05 - Y-axis condition parameters (code 0x38)
-   * For single-axis T500RS, Y-axis is zeroed per Windows captures
-   * is_first_packet=false leaves all fields zeroed
+   * For single-axis T500RS, Y-axis coefficients/deadband/center are zeroed,
+   * but saturation values must still be set per Windows captures.
+   * is_first_packet=false zeros coefficients but keeps saturation.
    */
   {
     struct t500rs_pkt_r05_condition *p = (struct t500rs_pkt_r05_condition *)buf;
-    t500rs_build_r05_condition(p, 0x38, NULL, false);
+    t500rs_build_r05_condition(p, 0x38, cond, false);
   }
   ret = t500rs_send_usb(t500rs, buf, sizeof(struct t500rs_pkt_r05_condition));
   if (ret) {
