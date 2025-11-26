@@ -754,60 +754,55 @@ static int t500rs_upload_constant(struct t500rs_device_entry *t500rs,
   return 0;
 }
 
-/* Upload spring/damper/friction effect */
+/*
+ * Upload spring/damper/friction/inertia effect.
+ *
+ * Per Windows captures (T500RS_USB_Protocol_Analysis.md):
+ * - 0x01 packet: direction=0x4000, code1=0x002a, code2=0x0038
+ * - Two 0x05 packets: X-axis (code 0x2a) and Y-axis (code 0x38)
+ * - Saturation values 0x54 (84) for spring, 0x64 (100) for damper/friction
+ */
 static int t500rs_upload_condition(struct t500rs_device_entry *t500rs,
                                    const struct tmff2_effect_state *state) {
   const struct ff_effect *effect = &state->effect;
-  u8 *buf = t500rs->send_buffer; /* Use DMA-safe buffer */
-  u8 effect_type;
+  u8 *buf = t500rs->send_buffer;
   int ret;
   u8 effect_gain;
-  int right_strength, left_strength;
-
-  /* Subtype indices derived from effect->id to match Windows subtype system */
-  unsigned int idx = (unsigned int)effect->id;
-  u8 param_sub = (u8)(0x0e + (0x1c * idx));
-  u8 env_sub_first = (u8)(0x1c + (0x1c * idx));
+  const char *type_name;
+  u16 direction_dev, duration_ms, delay_ms;
+  const struct ff_condition_effect *cond = &effect->u.condition[0];
 
   /* Determine effect type and select appropriate gain */
   switch (effect->type) {
   case FF_SPRING:
-    effect_type = 0x40;
+    type_name = "spring";
     effect_gain = spring_level;
     break;
   case FF_DAMPER:
-    effect_type = 0x41;
+    type_name = "damper";
     effect_gain = damper_level;
     break;
   case FF_FRICTION:
-    effect_type = 0x41;
+    type_name = "friction";
     effect_gain = friction_level;
     break;
   case FF_INERTIA:
-    effect_type = 0x41;
+    type_name = "inertia";
     effect_gain = 100;
     break;
   default:
     return -EINVAL;
   }
 
-  /* Get effect parameters and apply per-effect gain */
-  /* Condition effects use right_saturation and left_saturation (0-65535) */
-  right_strength = effect->u.condition[0].right_saturation;
-  left_strength = effect->u.condition[0].left_saturation;
-
-  /* Apply per-effect level scaling (0-100) */
-  right_strength = (right_strength * effect_gain) / 100;
-  left_strength = (left_strength * effect_gain) / 100;
-
-  /* Scale to device range (0-127) */
-  right_strength = (right_strength * 127) / 65535;
-  left_strength = (left_strength * 127) / 65535;
+  /* Compute protocol parameters */
+  direction_dev = t500rs_scale_direction(effect->direction);
+  duration_ms = effect->replay.length ? effect->replay.length : 0xffff;
+  delay_ms = effect->replay.delay;
 
   T500RS_DBG(t500rs,
-             "Upload condition: id=%d, type=0x%02x, gain=%u%%, R=%d, L=%d\n",
-             effect->id, effect_type, effect_gain, right_strength,
-             left_strength);
+             "Upload %s: id=%d, gain=%u%%, dir=%u, rcoef=%d, lcoef=%d\n",
+             type_name, effect->id, effect_gain, direction_dev,
+             cond->right_coeff, cond->left_coeff);
 
   /* Pre-upload STOP to clear the slot (Windows parity) */
   ret = t500rs_send_pre_stop(t500rs);
@@ -816,65 +811,49 @@ static int t500rs_upload_condition(struct t500rs_device_entry *t500rs,
     return ret;
   }
 
-  /* Report 0x05 - Condition parameters (coefficients) */
-  memset(buf, 0, 11);
-  buf[0] = 0x05;
-  buf[1] = param_sub;
-  buf[2] = 0x00;
-  buf[3] = (u8)right_strength;
-  buf[4] = (u8)left_strength;
-  buf[5] = 0x00;
-  buf[6] = 0x00;
-  buf[7] = 0x00;
-  buf[8] = 0x00;
-  buf[9] = (effect->type == FF_SPRING) ? 0x54 : 0x64;
-  buf[10] = (effect->type == FF_SPRING) ? 0x54 : 0x64;
-  ret = t500rs_send_usb(t500rs, buf, 11);
-  if (ret)
-    return ret;
-
-  /* Report 0x05 - Condition parameters (deadband/center) */
-  memset(buf, 0, 11);
-  buf[0] = 0x05;
-  buf[1] = env_sub_first;
-  buf[2] = 0x00;
-  buf[3] = 0x00; /* Deadband */
-  buf[4] = 0x00; /* Center */
-  buf[5] = 0x00;
-  buf[6] = 0x00;
-  buf[7] = 0x00;
-  buf[8] = 0x00;
-  buf[9] = (effect->type == FF_SPRING) ? 0x46 : 0x64;
-  buf[10] = (effect->type == FF_SPRING) ? 0x54 : 0x64;
-  ret = t500rs_send_usb(t500rs, buf, 11);
-  if (ret)
-    return ret;
-
-  /* NOTE: On T500RS, Report 0x01 MUST use EffectID=0x00; enforce it here. */
-  /* Report 0x01 - Main effect upload */
+  /* Report 0x01 - Main effect upload using protocol-accurate struct
+   * Per Windows captures: code1=0x002a, code2=0x0038
+   */
   {
-    struct t500rs_r01_main *m = (struct t500rs_r01_main *)buf;
-    memset(m, 0, sizeof(*m));
-    m->id = 0x01;
-    m->effect_id = 0x00;
-    m->type = effect_type;
-    m->b3 = 0x40;
-    m->b4 = 0x17;
-    m->b5 = 0x25;
-    m->b6 = 0x00;
-    m->b7 = 0xff;
-    m->b8 = 0xff;
-    m->b9 = param_sub;
-    m->b10 = 0x00;
-    m->b11 = env_sub_first;
-    m->b12 = 0x00;
-    m->b13 = 0x00;
-    m->b14 = 0x00;
+    struct t500rs_pkt_r01_main *m = (struct t500rs_pkt_r01_main *)buf;
+    t500rs_build_r01_main(m, 0, direction_dev, duration_ms, delay_ms,
+                          0x002a, 0x0038);
   }
-  ret = t500rs_send_usb(t500rs, buf, sizeof(struct t500rs_r01_main));
-  if (ret)
+  ret = t500rs_send_usb(t500rs, buf, sizeof(struct t500rs_pkt_r01_main));
+  if (ret) {
+    hid_err(t500rs->hdev, "Failed to send Report 0x01 (condition): %d\n", ret);
     return ret;
+  }
 
+  /* Report 0x05 - X-axis condition parameters (code 0x2a)
+   * is_first_packet=true fills in the condition data
+   */
+  {
+    struct t500rs_pkt_r05_condition *p = (struct t500rs_pkt_r05_condition *)buf;
+    t500rs_build_r05_condition(p, 0x2a, cond, true);
+  }
+  ret = t500rs_send_usb(t500rs, buf, sizeof(struct t500rs_pkt_r05_condition));
+  if (ret) {
+    hid_err(t500rs->hdev, "Failed to send Report 0x05 (X-axis): %d\n", ret);
+    return ret;
+  }
+
+  /* Report 0x05 - Y-axis condition parameters (code 0x38)
+   * For single-axis T500RS, Y-axis is zeroed per Windows captures
+   * is_first_packet=false leaves all fields zeroed
+   */
+  {
+    struct t500rs_pkt_r05_condition *p = (struct t500rs_pkt_r05_condition *)buf;
+    t500rs_build_r05_condition(p, 0x38, NULL, false);
+  }
+  ret = t500rs_send_usb(t500rs, buf, sizeof(struct t500rs_pkt_r05_condition));
+  if (ret) {
+    hid_err(t500rs->hdev, "Failed to send Report 0x05 (Y-axis): %d\n", ret);
+    return ret;
+  }
+
+  T500RS_DBG(t500rs, "%s effect %d uploaded (0x01 + 2x 0x05)\n",
+             type_name, effect->id);
   return 0;
 }
 
@@ -1271,81 +1250,33 @@ static int t500rs_update_effect(void *data,
   case FF_DAMPER:
   case FF_FRICTION:
   case FF_INERTIA: {
-      unsigned int idx = (unsigned int)effect->id;
-      u8 param_sub = (u8)(0x0e + (0x1c * idx));
+      /*
+       * Update conditional effect using protocol-accurate helper.
+       *
+       * Rationale: ACC (and similar) may spam condition updates at low speed with
+       * the exact same parameters. Re-sending 0x05 at high cadence makes T500RS
+       * micro-pulse/rumble. Therefore we compare old vs new and only send when
+       * they differ. We only update X-axis (code 0x2a); Y-axis is always zero
+       * for single-axis T500RS.
+       */
       const struct ff_condition_effect *cond = &effect->u.condition[0];
       const struct ff_condition_effect *cond_old = &old->u.condition[0];
-      u8 effect_gain, effect_gain_old;
-      int right_strength, left_strength;
-      int right_strength_old, left_strength_old;
-      u8 rcoef, lcoef, rcoef_old, lcoef_old;
-      u8 b9, b10, b9_old, b10_old;
 
-      switch (effect->type) {
-      case FF_SPRING:   effect_gain = spring_level; break;
-      case FF_DAMPER:   effect_gain = damper_level; break;
-      case FF_FRICTION: effect_gain = friction_level; break;
-      case FF_INERTIA:  effect_gain = 100; break;
-      default:          effect_gain = 100; break;
-      }
-
-      switch (old->type) {
-      case FF_SPRING:   effect_gain_old = spring_level; break;
-      case FF_DAMPER:   effect_gain_old = damper_level; break;
-      case FF_FRICTION: effect_gain_old = friction_level; break;
-      case FF_INERTIA:  effect_gain_old = 100; break;
-      default:          effect_gain_old = 100; break;
-      }
-
-      right_strength = (cond->right_saturation * effect_gain) / 100;
-      left_strength  = (cond->left_saturation  * effect_gain) / 100;
-      right_strength_old = (cond_old->right_saturation * effect_gain_old) / 100;
-      left_strength_old  = (cond_old->left_saturation  * effect_gain_old) / 100;
-
-      right_strength     = (right_strength     * 127) / 65535;
-      left_strength      = (left_strength      * 127) / 65535;
-      right_strength_old = (right_strength_old * 127) / 65535;
-      left_strength_old  = (left_strength_old  * 127) / 65535;
-
-      rcoef     = (u8)right_strength;
-      lcoef     = (u8)left_strength;
-      rcoef_old = (u8)right_strength_old;
-      lcoef_old = (u8)left_strength_old;
-
-      b9      = (effect->type == FF_SPRING) ? 0x54 : 0x64;
-      b10     = (effect->type == FF_SPRING) ? 0x54 : 0x64;
-      b9_old  = (old->type == FF_SPRING) ? 0x54 : 0x64;
-      b10_old = (old->type == FF_SPRING) ? 0x54 : 0x64;
-
-      /*
-       * Rationale: ACC (and similar) may spam condition updates at low speed with
-       * the exact same parameters. Re-sending 0x05 (sub=0x0e) at high cadence
-       * makes T500RS micro-pulse/rumble. Also, sending 0x05 (sub=0x1c) on update
-       * is unnecessary when deadband/center haven't changed and can exacerbate
-       * the issue. Therefore we derive device coefficients from state->effect and
-       * state->old and only send 0x05 (sub=0x0e) when they differ, skipping
-       * 0x05 (sub=0x1c) entirely on updates.
-       */
-      if (rcoef == rcoef_old &&
-          lcoef == lcoef_old &&
-          b9    == b9_old &&
-          b10   == b10_old)
+      /* Simple change detection: compare raw condition parameters */
+      if (cond->right_coeff == cond_old->right_coeff &&
+          cond->left_coeff == cond_old->left_coeff &&
+          cond->right_saturation == cond_old->right_saturation &&
+          cond->left_saturation == cond_old->left_saturation &&
+          cond->deadband == cond_old->deadband &&
+          cond->center == cond_old->center &&
+          effect->type == old->type)
         return 0;
 
-      memset(buf, 0, 11);
-      buf[0] = 0x05;
-      buf[1] = param_sub;
-      buf[2] = 0x00;
-      buf[3] = rcoef;
-      buf[4] = lcoef;
-      buf[5] = buf[6] = buf[7] = buf[8] = 0x00;
-      buf[9]  = b9;
-      buf[10] = b10;
-      if (t500rs_send_usb(t500rs, buf, 11))
-        return -EIO;
-
-      /* Skip 0x05 (sub=0x1c) on updates by design; see rationale above. */
-      return 0;
+      /* Send updated X-axis 0x05 packet */
+      struct t500rs_pkt_r05_condition *p =
+          (struct t500rs_pkt_r05_condition *)buf;
+      t500rs_build_r05_condition(p, 0x2a, cond, true);
+      return t500rs_send_usb(t500rs, buf, sizeof(*p));
     }
   default:
       return 0;

@@ -60,4 +60,8 @@
     - Code 0x2a for 0x04 packets (same as periodic per Windows captures).
     - Proper direction/duration/delay in 0x01 packet.
   - Wired ramp update to use new helpers.
-- Next steps: wire conditional upload, cleanup old structs.
+  - Wired conditional upload to use new helpers with:
+    - Protocol-accurate 0x01 packet with code1=0x002a, code2=0x0038.
+    - Two 0x05 packets: X-axis (code 0x2a) and Y-axis (code 0x38, zeroed).
+  - Wired conditional update with change detection to avoid micro-pulse/rumble.
+- Next steps: cleanup old structs, remove unused legacy code.

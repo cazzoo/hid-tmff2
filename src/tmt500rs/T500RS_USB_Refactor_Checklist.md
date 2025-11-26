@@ -97,8 +97,8 @@ Legend: `[ ]` = TODO, `[x]` = done.
   - [x] Map center: SDL -32767..+32767 → device 0-255.
   - [x] Map saturation: SDL 0-32767 → device 0-255.
   - [x] Second packet (Y-axis) gets zeros (T500RS is single-axis).
-- [ ] Wire helper into conditional upload path (deferred to wiring phase).
-- [ ] Wire helper into conditional update path (deferred to wiring phase).
+- [x] Wire helper into conditional upload path.
+- [x] Wire helper into conditional update path with change detection.
 
 ---
 
