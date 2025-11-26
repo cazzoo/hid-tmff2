@@ -13,4 +13,8 @@
   - Extended `struct t500rs_device_entry` with `hw_id[]` (logical→hardware mapping) and `hw_id_in_use[]` (slot occupancy).
   - Implemented `t500rs_alloc_hw_id()`, `t500rs_get_hw_id()`, `t500rs_free_hw_id()` helpers.
   - Helpers are not yet wired into upload/play/stop paths (that comes in Phase 10).
-- No functional behavior changes yet; the new structs and helpers are scaffolding for later phases. Next steps: implement Phase 4 (0x01 main upload builder) and Phase 5 (periodic 0x04 with ms period).
+- **Phase 4 – 0x01 main upload builder**:
+  - Implemented `t500rs_build_r01_main()` helper using the protocol-accurate `t500rs_pkt_r01_main` struct.
+  - Key insight from protocol doc: waveform type (sine/triangle/saw) is NOT encoded in 0x01 packet; it's determined at a higher level.
+  - Helper not yet wired into upload paths (legacy `t500rs_r01_main` still in use).
+- No functional behavior changes yet; the new structs and helpers are scaffolding for later phases. Next steps: implement Phase 5 (periodic 0x04 with ms period), then start wiring the new helpers into upload paths.

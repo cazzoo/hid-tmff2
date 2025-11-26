@@ -303,6 +303,41 @@ static void t500rs_free_hw_id(struct t500rs_device_entry *t500rs,
     t500rs->hw_id_in_use[hw_slot] = false;
 }
 
+/*
+ * Build a protocol-accurate 0x01 main upload packet.
+ *
+ * Per the T500RS USB protocol documentation:
+ * - effect_id: 16-bit LE hardware effect slot (0..15 for now)
+ * - direction: 0..35999 in 0.01 degree units
+ * - duration_ms: duration in milliseconds
+ * - delay_ms: delay before effect starts
+ * - code1: parameter subtype (used by 0x03/0x04/0x05)
+ * - code2: envelope subtype (used by 0x02), or second conditional subtype
+ * - reserved: always 0
+ *
+ * Note: the waveform type (sine, triangle, saw, etc.) is NOT encoded in
+ * the 0x01 packet; it's determined at a higher level by SDL2/DirectInput.
+ *
+ * This helper fills a t500rs_pkt_r01_main struct (15 bytes) ready for USB send.
+ */
+static void t500rs_build_r01_main(struct t500rs_pkt_r01_main *p,
+                                  u16 hw_effect_id,
+                                  u16 direction,
+                                  u16 duration_ms,
+                                  u16 delay_ms,
+                                  u16 code1,
+                                  u16 code2) {
+  memset(p, 0, sizeof(*p));
+  p->id = 0x01;
+  p->effect_id = cpu_to_le16(hw_effect_id);
+  p->direction = cpu_to_le16(direction);
+  p->duration_ms = cpu_to_le16(duration_ms);
+  p->delay_ms = cpu_to_le16(delay_ms);
+  p->code1 = cpu_to_le16(code1);
+  p->code2 = cpu_to_le16(code2);
+  p->reserved = 0;
+}
+
 /* Supported parameters */
 static const unsigned long t500rs_params =
     PARAM_SPRING_LEVEL | PARAM_DAMPER_LEVEL | PARAM_FRICTION_LEVEL |

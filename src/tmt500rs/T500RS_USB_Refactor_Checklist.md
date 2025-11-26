@@ -43,15 +43,18 @@ Legend: `[ ]` = TODO, `[x]` = done.
 
 ## Phase 4 – 0x01 main upload builder
 
-- [ ] Implement `t500rs_build_r01_main(struct t500rs_device *td, const struct ff_effect *effect, u16 hw_id, u16 param_sub, u16 env_sub, struct t500rs_pkt_r01_main *p)`:
-  - [ ] Set `p->id = 0x01`.
-  - [ ] `p->effect_id = cpu_to_le16(hw_id);`.
-  - [ ] `p->direction = cpu_to_le16(effect->direction);` (0..35999 in 0.01°).
-  - [ ] `p->duration_ms = cpu_to_le16(effect->replay.length);`.
-  - [ ] `p->delay_ms = cpu_to_le16(effect->replay.delay);`.
-  - [ ] `p->code1 = cpu_to_le16(param_sub);`.
-  - [ ] `p->code2 = cpu_to_le16(env_sub);` (0 if no envelope).
-- [ ] Replace existing `t500rs_r01_main` uses with this builder in all upload functions.
+- [x] Implement `t500rs_build_r01_main(struct t500rs_pkt_r01_main *p, u16 hw_effect_id, u16 direction, u16 duration_ms, u16 delay_ms, u16 code1, u16 code2)`:
+  - [x] Set `p->id = 0x01`.
+  - [x] `p->effect_id = cpu_to_le16(hw_effect_id);`.
+  - [x] `p->direction = cpu_to_le16(direction);` (0..35999 in 0.01°).
+  - [x] `p->duration_ms = cpu_to_le16(duration_ms);`.
+  - [x] `p->delay_ms = cpu_to_le16(delay_ms);`.
+  - [x] `p->code1 = cpu_to_le16(code1);`.
+  - [x] `p->code2 = cpu_to_le16(code2);` (0 if no envelope).
+  - [x] `p->reserved = 0;`.
+- [ ] Replace existing `t500rs_r01_main` uses with this builder in all upload functions (deferred to wiring phase).
+
+**Note:** The waveform type (sine, triangle, saw, etc.) is NOT encoded in the 0x01 packet per Windows captures; it's determined at a higher level by SDL2/DirectInput.
 
 ---
 
