@@ -27,4 +27,10 @@
   - Ramp uses same 0x04 packet as periodic; magnitude/offset encode start/end levels.
   - Note: exact encoding uncertain per protocol doc; Windows captures show identical packets.
   - Helper not yet wired into upload paths.
-- No functional behavior changes yet; the new structs and helpers are scaffolding for later phases. Next steps: implement Phase 7 (conditional 0x05), Phase 8 (constant 0x03), Phase 9 (envelope 0x02).
+- **Phase 7 – Conditional 0x05**:
+  - Implemented `t500rs_build_r05_condition()` helper using `t500rs_pkt_r05_condition` struct.
+  - Conditional effects require TWO 0x05 packets (first for X-axis, second for Y-axis).
+  - T500RS is single-axis, so second packet contains zeros.
+  - Scaling formulas documented but need hardware verification.
+  - Helper not yet wired into upload paths.
+- No functional behavior changes yet; the new structs and helpers are scaffolding for later phases. Next steps: implement Phase 8 (constant 0x03), Phase 9 (envelope 0x02), then start wiring.

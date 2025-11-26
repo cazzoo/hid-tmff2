@@ -448,6 +448,52 @@ static void t500rs_build_r04_ramp(struct t500rs_pkt_r04_periodic_ramp *p,
   p->reserved = 0;
 }
 
+/*
+ * Build a 0x05 conditional effect packet.
+ *
+ * Per the T500RS USB protocol documentation:
+ * - Conditional effects (spring, damper, inertia, friction) require TWO 0x05 packets
+ * - First packet uses code from 0x01 bytes 9-10 (param_sub)
+ * - Second packet uses code from 0x01 bytes 11-12 (env_sub)
+ * - T500RS is single-axis, so second packet typically contains zeros
+ *
+ * Parameter scaling (from protocol doc, needs verification):
+ * - Coefficients: SDL2 0-32767 → device value (scaling TBD, using /256 for now)
+ * - Deadband: SDL2 0-65535 → device value (scaling TBD, using /256 for now)
+ * - Center: SDL2 -32767..+32767 → device 0-255 (using (val + 32767) / 256)
+ * - Saturation: SDL2 0-32767 → device 0-255 (observed: 0x54, 0x64)
+ *
+ * The `is_first_packet` flag determines which code to use and whether to
+ * populate parameters (first packet) or zeros (second packet for Y-axis).
+ */
+static void t500rs_build_r05_condition(struct t500rs_pkt_r05_condition *p,
+                                       u8 code,
+                                       const struct ff_condition_effect *c,
+                                       bool is_first_packet) {
+  memset(p, 0, sizeof(*p));
+  p->id = 0x05;
+  p->code = code;
+
+  if (is_first_packet && c) {
+    /* First packet: X-axis parameters */
+    /* Scale coefficients: SDL 0-32767 → device (using /256 for ~0-127 range) */
+    p->right_coeff = cpu_to_le16((u16)(c->right_coeff / 256));
+    p->left_coeff = cpu_to_le16((u16)(c->left_coeff / 256));
+
+    /* Scale deadband: SDL 0-65535 → device (using /256 for ~0-255 range) */
+    p->deadband = cpu_to_le16((u16)(c->deadband / 256));
+
+    /* Scale center: SDL -32767..+32767 → device 0-255 */
+    p->center = (u8)((c->center + 32767) / 256);
+
+    /* Scale saturation: SDL 0-32767 → device 0-255 */
+    /* Observed values in captures: 0x54 (84), 0x64 (100) */
+    p->right_sat = (u8)((c->right_saturation * 255) / 32767);
+    p->left_sat = (u8)((c->left_saturation * 255) / 32767);
+  }
+  /* Second packet (Y-axis): all zeros except id and code, already set by memset */
+}
+
 /* Supported parameters */
 static const unsigned long t500rs_params =
     PARAM_SPRING_LEVEL | PARAM_DAMPER_LEVEL | PARAM_FRICTION_LEVEL |

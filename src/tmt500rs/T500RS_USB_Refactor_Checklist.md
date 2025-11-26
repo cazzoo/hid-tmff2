@@ -86,15 +86,15 @@ Legend: `[ ]` = TODO, `[x]` = done.
 
 ## Phase 7 – Conditional 0x05
 
-- [ ] Implement `t500rs_build_r05_condition(const struct ff_condition_effect *c, u8 code, bool is_spring_like, struct t500rs_pkt_r05_condition *p)`:
-  - [ ] `id = 0x05; p->code = code;`.
-  - [ ] Map `c->right_saturation/left_saturation` + spring/damper/friction levels into `right_sat`/`left_sat` (0x54/0x64 as in captures).
-  - [ ] Map coefficients/deadband/center from `ff_condition_effect` with linear scaling; document formulas and TODOs where data is incomplete.
-- [ ] In `t500rs_upload_condition`:
-  - [ ] Compute `param_sub/env_sub` from Phase 2.
-  - [ ] Send first 0x05 with `code = (u8)(param_sub & 0xff)`.
-  - [ ] Send second 0x05 with `code = (u8)(env_sub & 0xff)`.
-- [ ] In `t500rs_update_effect` conditional branch, always update by sending both 0x05 packets when parameters change.
+- [x] Implement `t500rs_build_r05_condition(struct t500rs_pkt_r05_condition *p, u8 code, const struct ff_condition_effect *c, bool is_first_packet)`:
+  - [x] `id = 0x05; p->code = code;`.
+  - [x] Map coefficients: SDL 0-32767 → device (using /256).
+  - [x] Map deadband: SDL 0-65535 → device (using /256).
+  - [x] Map center: SDL -32767..+32767 → device 0-255.
+  - [x] Map saturation: SDL 0-32767 → device 0-255.
+  - [x] Second packet (Y-axis) gets zeros (T500RS is single-axis).
+- [ ] Wire helper into conditional upload path (deferred to wiring phase).
+- [ ] Wire helper into conditional update path (deferred to wiring phase).
 
 ---
 
