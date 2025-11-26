@@ -31,12 +31,13 @@ Legend: `[ ]` = TODO, `[x]` = done.
 
 ## Phase 3 – Hardware effect ID management
 
-- [ ] In T500RS device state, add arrays `u16 hw_id[T500RS_MAX_EFFECTS]` and `bool hw_id_used[T500RS_MAX_EFFECTS]`.
-- [ ] Implement `t500rs_alloc_hw_id(struct t500rs_device *td, int logical_id)`:
-  - [ ] If `hw_id[logical_id]` unused, scan for free ID 0..15, assign, mark used.
-- [ ] Implement `t500rs_get_hw_id(struct t500rs_device *td, int logical_id)` to return assigned ID (allocating if needed).
-- [ ] Implement `t500rs_free_hw_id` called from STOP path if you want to recycle.
-- [ ] Replace all hard-coded use of EffectID=0 in T500RS code paths with mapped `hw_id`.
+- [x] In T500RS device state, add arrays `u16 hw_id[T500RS_MAX_EFFECTS]` and `bool hw_id_in_use[T500RS_MAX_HW_EFFECTS]`.
+- [x] Implement `t500rs_alloc_hw_id(struct t500rs_device_entry *t500rs, unsigned int logical_id)`:
+  - [x] If slot already assigned, return existing hw_id.
+  - [x] Otherwise scan for free ID 0..15, assign, mark used.
+- [x] Implement `t500rs_get_hw_id(struct t500rs_device_entry *t500rs, unsigned int logical_id)` to return assigned ID (allocating if needed).
+- [x] Implement `t500rs_free_hw_id(struct t500rs_device_entry *t500rs, unsigned int logical_id)` called from STOP path to recycle slots.
+- [ ] Replace all hard-coded use of EffectID=0 in T500RS code paths with mapped `hw_id` (deferred to Phase 10 START/STOP refactor).
 
 ---
 

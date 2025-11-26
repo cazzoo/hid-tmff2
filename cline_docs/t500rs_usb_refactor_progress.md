@@ -9,5 +9,8 @@
   - Decided to reuse existing `t500rs_r02_envelope` and `t500rs_r03_const` as protocol 0x02 and 0x03 packets.
 - **Phase 2  Subtype / index helpers**:
   - Added `T500RS_MAX_HW_EFFECTS` alias and implemented `t500rs_index_to_subtypes()` using the documented `0x000e/0x001c` arithmetic, wrapping the index modulo 16.
-- No functional behavior changes yet; the new structs and helpers are not wired into upload/update paths. Next steps: implement Phase 3 hardware effect ID management and then start replacing legacy 0x01/0x04/0x05 builders with the new packet types.
-
+- **Phase 3 – Hardware effect ID management**:
+  - Extended `struct t500rs_device_entry` with `hw_id[]` (logical→hardware mapping) and `hw_id_in_use[]` (slot occupancy).
+  - Implemented `t500rs_alloc_hw_id()`, `t500rs_get_hw_id()`, `t500rs_free_hw_id()` helpers.
+  - Helpers are not yet wired into upload/play/stop paths (that comes in Phase 10).
+- No functional behavior changes yet; the new structs and helpers are scaffolding for later phases. Next steps: implement Phase 4 (0x01 main upload builder) and Phase 5 (periodic 0x04 with ms period).

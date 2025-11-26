@@ -225,7 +225,83 @@ struct t500rs_device_entry {
 
   /* Current wheel range for smooth transitions */
   u16 current_range; /* Current rotation range in degrees */
+
+  /*
+   * Hardware effect ID management (Phase 3 of USB refactor).
+   *
+   * T500RS hardware supports up to 16 simultaneous effects with internal
+   * mixing. The Windows driver assigns unique hardware effect IDs (0..15)
+   * for concurrent effects and tracks them per logical effect slot.
+   *
+   * hw_id[logical_id] = hardware effect ID assigned to that logical slot
+   * hw_id_used[hw_slot] = true if that hardware slot is currently in use
+   *
+   * These are wired in by later refactor phases; for now they are populated
+   * but legacy paths continue to use effect_id=0 for all effects.
+   */
+  u16 hw_id[T500RS_MAX_EFFECTS];
+  bool hw_id_in_use[T500RS_MAX_HW_EFFECTS];
 };
+
+/*
+ * Allocate a hardware effect ID for the given logical effect id.
+ * Returns the hardware ID (0..15) on success, or -ENOSPC if all slots are used.
+ */
+static int t500rs_alloc_hw_id(struct t500rs_device_entry *t500rs,
+                              unsigned int logical_id) {
+  unsigned int i;
+  if (logical_id >= T500RS_MAX_EFFECTS)
+    return -EINVAL;
+
+  /* If already assigned, return the existing hw_id */
+  if (t500rs->hw_id_in_use[t500rs->hw_id[logical_id]] &&
+      t500rs->hw_id[logical_id] < T500RS_MAX_HW_EFFECTS) {
+    /* Check if this logical_id truly owns this slot (simple 1:1 for now) */
+    return t500rs->hw_id[logical_id];
+  }
+
+  /* Find a free hardware slot */
+  for (i = 0; i < T500RS_MAX_HW_EFFECTS; i++) {
+    if (!t500rs->hw_id_in_use[i]) {
+      t500rs->hw_id[logical_id] = (u16)i;
+      t500rs->hw_id_in_use[i] = true;
+      return (int)i;
+    }
+  }
+  return -ENOSPC;
+}
+
+/*
+ * Get the hardware effect ID for the given logical effect id.
+ * Allocates a new slot if one is not yet assigned.
+ * Returns the hardware ID (0..15) on success, or negative error.
+ */
+static int t500rs_get_hw_id(struct t500rs_device_entry *t500rs,
+                            unsigned int logical_id) {
+  if (logical_id >= T500RS_MAX_EFFECTS)
+    return -EINVAL;
+
+  /* If not yet allocated, allocate now */
+  if (!t500rs->hw_id_in_use[t500rs->hw_id[logical_id]])
+    return t500rs_alloc_hw_id(t500rs, logical_id);
+
+  return (int)t500rs->hw_id[logical_id];
+}
+
+/*
+ * Free the hardware effect ID for the given logical effect id.
+ * Called from stop_effect path if we want to recycle slots.
+ */
+static void t500rs_free_hw_id(struct t500rs_device_entry *t500rs,
+                              unsigned int logical_id) {
+  u16 hw_slot;
+  if (logical_id >= T500RS_MAX_EFFECTS)
+    return;
+
+  hw_slot = t500rs->hw_id[logical_id];
+  if (hw_slot < T500RS_MAX_HW_EFFECTS)
+    t500rs->hw_id_in_use[hw_slot] = false;
+}
 
 /* Supported parameters */
 static const unsigned long t500rs_params =
