@@ -37,7 +37,7 @@ Legend: `[ ]` = TODO, `[x]` = done.
   - [x] Otherwise scan for free ID 0..15, assign, mark used.
 - [x] Implement `t500rs_get_hw_id(struct t500rs_device_entry *t500rs, unsigned int logical_id)` to return assigned ID (allocating if needed).
 - [x] Implement `t500rs_free_hw_id(struct t500rs_device_entry *t500rs, unsigned int logical_id)` called from STOP path to recycle slots.
-- [ ] Replace all hard-coded use of EffectID=0 in T500RS code paths with mapped `hw_id` (deferred to Phase 10 START/STOP refactor).
+- [x] Replace all hard-coded use of EffectID=0 in T500RS code paths with mapped `hw_id`.
 
 ---
 
@@ -124,11 +124,13 @@ Legend: `[ ]` = TODO, `[x]` = done.
 
 ## Phase 10 – START/STOP 0x41 per effect ID
 
-- [ ] Replace `t500rs_send_pre_stop` global EffectID=0 behavior with per-effect STOP:
-  - [ ] Before re-uploading logical effect N, send STOP for its mapped `hw_id[N]` only.
-- [ ] In `t500rs_play_effect`, use mapped `hw_id` in 0x41 START packet.
-- [ ] In `t500rs_stop_effect`, send 0x41 STOP with same `hw_id`.
-- [ ] Keep special STOP for autocenter ID (e.g., 15) in init only if still required by protocol.
+- [x] Replace `t500rs_send_pre_stop` global EffectID=0 behavior with per-effect STOP:
+  - [x] Added `t500rs_send_stop(hw_id)` and `t500rs_send_start(hw_id)` helpers.
+  - [x] Before re-uploading logical effect N, send STOP for its mapped `hw_id[N]` only.
+- [x] In upload paths, allocate hw_id via `t500rs_alloc_hw_id()` and use in 0x01 packet.
+- [x] In `t500rs_play_effect`, use `t500rs_get_hw_id()` and `t500rs_send_start(hw_id)`.
+- [x] In `t500rs_stop_effect`, use `t500rs_get_hw_id()`, `t500rs_send_stop(hw_id)`, then `t500rs_free_hw_id()`.
+- [x] Keep special STOP for autocenter ID (15) in init (unchanged, still needed per protocol).
 
 ---
 

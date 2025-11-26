@@ -64,9 +64,26 @@
     - Protocol-accurate 0x01 packet with code1=0x002a, code2=0x0038.
     - Two 0x05 packets: X-axis (code 0x2a) and Y-axis (code 0x38, zeroed).
   - Wired conditional update with change detection to avoid micro-pulse/rumble.
+- **Phase 10 – Per-effect START/STOP**:
+  - Replaced global EffectID=0 with per-effect hw_id management.
+  - Added `t500rs_send_stop(hw_id)` and `t500rs_send_start(hw_id)` helpers.
+  - Updated all upload functions (constant, condition, periodic, ramp) to:
+    - Allocate hw_id via `t500rs_alloc_hw_id()` at upload time.
+    - Use allocated hw_id in 0x01 packet effect_id field.
+    - Use hw_id for subtype calculation (param_sub/env_sub).
+    - Send pre-upload STOP with correct hw_id.
+  - Updated `t500rs_play_effect()`:
+    - Get hw_id via `t500rs_get_hw_id()`.
+    - Use hw_id for constant force 0x03 code.
+    - Send START with `t500rs_send_start(hw_id)`.
+  - Updated `t500rs_stop_effect()`:
+    - Get hw_id via `t500rs_get_hw_id()`.
+    - Send STOP with `t500rs_send_stop(hw_id)`.
+    - Free hw_id slot via `t500rs_free_hw_id()` for reuse.
+  - This enables proper multi-effect support (up to 16 concurrent effects).
 - **Phase 14 – Cleanup (partial)**:
   - Removed legacy structs: `t500rs_r01_main`, `t500rs_r02_envelope`, `t500rs_r04_periodic`, `t500rs_r04_ramp`.
   - Removed unused functions: `t500rs_fill_envelope_u02`, `t500rs_scale_env_level`.
+  - Removed `t500rs_send_pre_stop` (replaced by `t500rs_send_stop(hw_id)`).
   - Kept `t500rs_r03_const` and `t500rs_r41_cmd` as they're still in use.
-  - Remaining unused: `t500rs_get_hw_id`, `t500rs_free_hw_id` (scaffolding for multi-effect).
-- Next steps: Phase 10 (per-effect START/STOP), Phase 11 (square wave), Phase 15 (validation).
+- Next steps: Phase 11 (square wave), Phase 13 (verify tmff2 integration), Phase 15 (validation).

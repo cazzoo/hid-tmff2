@@ -575,10 +575,14 @@ static int t500rs_send_usb(struct t500rs_device_entry *t500rs, const u8 *data,
   return (transferred == len) ? 0 : -EIO;
 }
 
-/* Send pre-upload STOP (Report 0x41 with effect_id=0, command=0x00, arg=0x01)
- * Matches Windows behavior of clearing the slot before (re)uploading.
+/*
+ * Send STOP command for a specific hardware effect ID.
+ * Used both for pre-upload clearing and explicit stop.
+ * Per protocol: 0x41 effect_id command arg
+ *   command = 0x00 for STOP, 0x41 for START
  */
-static inline int t500rs_send_pre_stop(struct t500rs_device_entry *t500rs) {
+static inline int t500rs_send_stop(struct t500rs_device_entry *t500rs,
+                                   u8 hw_effect_id) {
   u8 *buf;
   struct t500rs_r41_cmd *r41;
   if (!t500rs)
@@ -588,8 +592,28 @@ static inline int t500rs_send_pre_stop(struct t500rs_device_entry *t500rs) {
     return -ENOMEM;
   r41 = (struct t500rs_r41_cmd *)buf;
   r41->id = 0x41;
-  r41->effect_id = 0x00;
-  r41->command = 0x00; /* STOP/CLEAR */
+  r41->effect_id = hw_effect_id;
+  r41->command = 0x00; /* STOP */
+  r41->arg = 0x01;
+  return t500rs_send_usb(t500rs, buf, sizeof(*r41));
+}
+
+/*
+ * Send START command for a specific hardware effect ID.
+ */
+static inline int t500rs_send_start(struct t500rs_device_entry *t500rs,
+                                    u8 hw_effect_id) {
+  u8 *buf;
+  struct t500rs_r41_cmd *r41;
+  if (!t500rs)
+    return -ENODEV;
+  buf = t500rs->send_buffer;
+  if (!buf)
+    return -ENOMEM;
+  r41 = (struct t500rs_r41_cmd *)buf;
+  r41->id = 0x41;
+  r41->effect_id = hw_effect_id;
+  r41->command = 0x41; /* START */
   r41->arg = 0x01;
   return t500rs_send_usb(t500rs, buf, sizeof(*r41));
 }
@@ -600,6 +624,7 @@ static int t500rs_upload_constant(struct t500rs_device_entry *t500rs,
   const struct ff_effect *effect = &state->effect;
   u8 *buf = t500rs->send_buffer; /* Use DMA-safe buffer */
   int ret;
+  int hw_id;
   int level = effect->u.constant.level;
   u16 direction_dev;
   u16 duration_ms;
@@ -611,20 +636,26 @@ static int t500rs_upload_constant(struct t500rs_device_entry *t500rs,
   T500RS_DBG(t500rs, "Upload constant: id=%d, level=%d, dir=%u\n",
              effect->id, level, effect->direction);
 
+  /* Allocate a hardware effect ID for this logical effect */
+  hw_id = t500rs_alloc_hw_id(t500rs, effect->id);
+  if (hw_id < 0) {
+    hid_err(t500rs->hdev, "Failed to allocate hw_id for effect %d\n",
+            effect->id);
+    return hw_id;
+  }
+
   /* Pre-upload STOP to clear the slot (Windows parity) */
-  ret = t500rs_send_pre_stop(t500rs);
+  ret = t500rs_send_stop(t500rs, (u8)hw_id);
   if (ret) {
     hid_err(t500rs->hdev, "Pre-upload STOP failed: %d\n", ret);
     return ret;
   }
 
-  /* Compute protocol parameters */
+  /* Compute protocol parameters using hw_id for subtype calculation */
   direction_dev = t500rs_scale_direction(effect->direction);
   duration_ms = effect->replay.length ? effect->replay.length : 0xffff; /* 0 = infinite */
   delay_ms = effect->replay.delay;
-
-  /* For constant effects, use fixed subtypes (first effect slot) */
-  t500rs_index_to_subtypes(0, &param_sub, &env_sub);
+  t500rs_index_to_subtypes(hw_id, &param_sub, &env_sub);
 
   /* Report 0x02 - Envelope (attack/fade) using new protocol-accurate struct */
   {
@@ -638,15 +669,10 @@ static int t500rs_upload_constant(struct t500rs_device_entry *t500rs,
     return ret;
   }
 
-  /*
-   * Report 0x01 - Main effect upload using new protocol-accurate struct.
-   *
-   * T500RS currently uses EffectID=0 for all uploads (single-slot mode).
-   * Future: use hw_id management for multi-effect support.
-   */
+  /* Report 0x01 - Main effect upload using protocol-accurate struct with hw_id */
   {
     struct t500rs_pkt_r01_main *m = (struct t500rs_pkt_r01_main *)buf;
-    t500rs_build_r01_main(m, 0, direction_dev, duration_ms, delay_ms,
+    t500rs_build_r01_main(m, (u16)hw_id, direction_dev, duration_ms, delay_ms,
                           param_sub, env_sub);
   }
   ret = t500rs_send_usb(t500rs, buf, sizeof(struct t500rs_pkt_r01_main));
@@ -669,8 +695,8 @@ static int t500rs_upload_constant(struct t500rs_device_entry *t500rs,
   }
 
   T500RS_DBG(t500rs,
-             "Constant effect %d uploaded (0x02 + 0x01 + 0x03 sequence)\n",
-             effect->id);
+             "Constant effect %d uploaded (hw_id=%d, 0x02 + 0x01 + 0x03)\n",
+             effect->id, hw_id);
   return 0;
 }
 
@@ -687,6 +713,7 @@ static int t500rs_upload_condition(struct t500rs_device_entry *t500rs,
   const struct ff_effect *effect = &state->effect;
   u8 *buf = t500rs->send_buffer;
   int ret;
+  int hw_id;
   u8 effect_gain;
   const char *type_name;
   u16 direction_dev, duration_ms, delay_ms;
@@ -714,18 +741,26 @@ static int t500rs_upload_condition(struct t500rs_device_entry *t500rs,
     return -EINVAL;
   }
 
+  /* Allocate a hardware effect ID for this logical effect */
+  hw_id = t500rs_alloc_hw_id(t500rs, effect->id);
+  if (hw_id < 0) {
+    hid_err(t500rs->hdev, "Failed to allocate hw_id for %s effect %d\n",
+            type_name, effect->id);
+    return hw_id;
+  }
+
   /* Compute protocol parameters */
   direction_dev = t500rs_scale_direction(effect->direction);
   duration_ms = effect->replay.length ? effect->replay.length : 0xffff;
   delay_ms = effect->replay.delay;
 
   T500RS_DBG(t500rs,
-             "Upload %s: id=%d, gain=%u%%, dir=%u, rcoef=%d, lcoef=%d\n",
-             type_name, effect->id, effect_gain, direction_dev,
+             "Upload %s: id=%d, hw_id=%d, gain=%u%%, dir=%u, rcoef=%d, lcoef=%d\n",
+             type_name, effect->id, hw_id, effect_gain, direction_dev,
              cond->right_coeff, cond->left_coeff);
 
   /* Pre-upload STOP to clear the slot (Windows parity) */
-  ret = t500rs_send_pre_stop(t500rs);
+  ret = t500rs_send_stop(t500rs, (u8)hw_id);
   if (ret) {
     hid_err(t500rs->hdev, "Pre-upload STOP failed: %d\n", ret);
     return ret;
@@ -736,7 +771,7 @@ static int t500rs_upload_condition(struct t500rs_device_entry *t500rs,
    */
   {
     struct t500rs_pkt_r01_main *m = (struct t500rs_pkt_r01_main *)buf;
-    t500rs_build_r01_main(m, 0, direction_dev, duration_ms, delay_ms,
+    t500rs_build_r01_main(m, (u16)hw_id, direction_dev, duration_ms, delay_ms,
                           0x002a, 0x0038);
   }
   ret = t500rs_send_usb(t500rs, buf, sizeof(struct t500rs_pkt_r01_main));
@@ -796,6 +831,7 @@ static int t500rs_upload_periodic(struct t500rs_device_entry *t500rs,
   const struct ff_effect *effect = &state->effect;
   u8 *buf = t500rs->send_buffer;
   int ret;
+  int hw_id;
   const char *type_name;
   u16 param_sub, env_sub;
   u16 direction_dev, duration_ms, delay_ms;
@@ -827,6 +863,14 @@ static int t500rs_upload_periodic(struct t500rs_device_entry *t500rs,
     return -EINVAL;
   }
 
+  /* Allocate a hardware effect ID for this logical effect */
+  hw_id = t500rs_alloc_hw_id(t500rs, effect->id);
+  if (hw_id < 0) {
+    hid_err(t500rs->hdev, "Failed to allocate hw_id for %s effect %d\n",
+            type_name, effect->id);
+    return hw_id;
+  }
+
   /* Scale parameters using new protocol-accurate helpers */
   mag = t500rs_scale_periodic_magnitude(effect->u.periodic.magnitude);
   phase = t500rs_scale_periodic_phase(effect->u.periodic.phase);
@@ -838,16 +882,16 @@ static int t500rs_upload_periodic(struct t500rs_device_entry *t500rs,
   if (period_ms == 0)
     period_ms = 100; /* Default 100ms if not specified */
 
-  /* Use fixed subtypes for first effect slot (idx=0) */
-  t500rs_index_to_subtypes(0, &param_sub, &env_sub);
+  /* Use hw_id for subtype calculation */
+  t500rs_index_to_subtypes(hw_id, &param_sub, &env_sub);
 
   T500RS_DBG(t500rs,
-             "Upload %s: id=%d, mag=0x%02x, phase=0x%02x, offset=0x%02x, "
+             "Upload %s: id=%d, hw_id=%d, mag=0x%02x, phase=0x%02x, offset=0x%02x, "
              "period=%ums, dir=%u\n",
-             type_name, effect->id, mag, phase, offset, period_ms, direction_dev);
+             type_name, effect->id, hw_id, mag, phase, offset, period_ms, direction_dev);
 
   /* Pre-upload STOP to clear the slot (Windows parity) */
-  ret = t500rs_send_pre_stop(t500rs);
+  ret = t500rs_send_stop(t500rs, (u8)hw_id);
   if (ret) {
     hid_err(t500rs->hdev, "Pre-upload STOP failed: %d\n", ret);
     return ret;
@@ -856,7 +900,7 @@ static int t500rs_upload_periodic(struct t500rs_device_entry *t500rs,
   /* Report 0x01 - Main effect upload using protocol-accurate struct */
   {
     struct t500rs_pkt_r01_main *m = (struct t500rs_pkt_r01_main *)buf;
-    t500rs_build_r01_main(m, 0, direction_dev, duration_ms, delay_ms,
+    t500rs_build_r01_main(m, (u16)hw_id, direction_dev, duration_ms, delay_ms,
                           param_sub, env_sub);
   }
   ret = t500rs_send_usb(t500rs, buf, sizeof(struct t500rs_pkt_r01_main));
@@ -910,25 +954,34 @@ static int t500rs_upload_ramp(struct t500rs_device_entry *t500rs,
   const struct ff_effect *effect = &state->effect;
   u8 *buf = t500rs->send_buffer;
   int ret;
+  int hw_id;
   u16 param_sub, env_sub;
   u16 direction_dev, duration_ms, delay_ms;
   u8 magnitude, offset;
+
+  /* Allocate a hardware effect ID for this logical effect */
+  hw_id = t500rs_alloc_hw_id(t500rs, effect->id);
+  if (hw_id < 0) {
+    hid_err(t500rs->hdev, "Failed to allocate hw_id for ramp effect %d\n",
+            effect->id);
+    return hw_id;
+  }
 
   /* Compute protocol parameters */
   direction_dev = t500rs_scale_direction(effect->direction);
   duration_ms = effect->replay.length ? effect->replay.length : 1000;
   delay_ms = effect->replay.delay;
 
-  /* Use fixed subtypes for first effect slot (idx=0) */
-  t500rs_index_to_subtypes(0, &param_sub, &env_sub);
+  /* Use hw_id for subtype calculation */
+  t500rs_index_to_subtypes(hw_id, &param_sub, &env_sub);
 
   T500RS_DBG(t500rs,
-             "Upload ramp: id=%d, start=%d, end=%d, duration=%ums, dir=%u\n",
-             effect->id, effect->u.ramp.start_level, effect->u.ramp.end_level,
+             "Upload ramp: id=%d, hw_id=%d, start=%d, end=%d, duration=%ums, dir=%u\n",
+             effect->id, hw_id, effect->u.ramp.start_level, effect->u.ramp.end_level,
              duration_ms, direction_dev);
 
   /* Pre-upload STOP to clear the slot (Windows parity) */
-  ret = t500rs_send_pre_stop(t500rs);
+  ret = t500rs_send_stop(t500rs, (u8)hw_id);
   if (ret) {
     hid_err(t500rs->hdev, "Pre-upload STOP failed: %d\n", ret);
     return ret;
@@ -937,7 +990,7 @@ static int t500rs_upload_ramp(struct t500rs_device_entry *t500rs,
   /* Report 0x01 - Main effect upload using protocol-accurate struct */
   {
     struct t500rs_pkt_r01_main *m = (struct t500rs_pkt_r01_main *)buf;
-    t500rs_build_r01_main(m, 0, direction_dev, duration_ms, delay_ms,
+    t500rs_build_r01_main(m, (u16)hw_id, direction_dev, duration_ms, delay_ms,
                           param_sub, env_sub);
   }
   ret = t500rs_send_usb(t500rs, buf, sizeof(struct t500rs_pkt_r01_main));
@@ -1008,29 +1061,47 @@ static int t500rs_upload_effect(void *data,
   }
 }
 
-/* Play effect */
+/*
+ * Play effect - send START command (0x41) for the effect.
+ *
+ * For constant force, also send a level update (0x03) before START.
+ * Uses per-effect hw_id for proper multi-effect support.
+ */
 static int t500rs_play_effect(void *data,
                               const struct tmff2_effect_state *state) {
   struct t500rs_device_entry *t500rs = data;
   const struct ff_effect *effect = &state->effect;
-  u8 *buf = t500rs->send_buffer; /* Use DMA-safe buffer */
+  u8 *buf;
   int ret;
+  int hw_id;
 
   if (!t500rs)
     return -ENODEV;
 
-  T500RS_DBG(t500rs,
-             "Play effect: id=%d, type=0x%02x (FF_CONSTANT=0x%02x)\n",
-             effect->id, effect->type, FF_CONSTANT);
+  buf = t500rs->send_buffer;
+  if (!buf)
+    return -ENOMEM;
 
-  /* For constant force: send one level update (0x03) then START (0x41).
-   * Apply direction before scaling to s8.
-   */
+  /* Get the allocated hw_id for this logical effect */
+  hw_id = t500rs_get_hw_id(t500rs, effect->id);
+  if (hw_id < 0) {
+    hid_err(t500rs->hdev, "No hw_id allocated for effect %d\n", effect->id);
+    return hw_id;
+  }
+
+  T500RS_DBG(t500rs,
+             "Play effect: id=%d, hw_id=%d, type=0x%02x\n",
+             effect->id, hw_id, effect->type);
+
+  /* For constant force: send level update (0x03) then START (0x41) */
   if (effect->type == FF_CONSTANT) {
     int level = effect->u.constant.level;
     u16 direction = effect->direction;
     s8 signed_level;
+    u16 param_sub, env_sub;
+
     signed_level = t500rs_scale_const_with_direction(level, direction);
+    t500rs_index_to_subtypes(hw_id, &param_sub, &env_sub);
 
     T500RS_DBG(t500rs,
                "Constant force: level=%d dir=%u -> %d (0x%02x)\n", level,
@@ -1039,80 +1110,62 @@ static int t500rs_play_effect(void *data,
     /* Send Report 0x03 (force level) */
     {
       struct t500rs_r03_const *r3 = (struct t500rs_r03_const *)buf;
-      r3->id = 0x03;
-      r3->code = 0x0e;
-      r3->zero = 0x00;
-      r3->level = signed_level;
-      ret = t500rs_send_usb(t500rs, (u8 *)r3, sizeof(*r3));
+      t500rs_build_r03_constant(r3, (u8)(param_sub & 0xff), signed_level);
     }
+    ret = t500rs_send_usb(t500rs, buf, sizeof(struct t500rs_r03_const));
     if (ret) {
       hid_err(t500rs->hdev, "Failed to send Report 0x03: %d\n", ret);
       return ret;
     }
   }
 
-  /* Send start command - Report 0x41
-   * T500RS expects EffectID=0 for 0x41 commands as well.
-   */
-  {
-    struct t500rs_r41_cmd *r41 = (struct t500rs_r41_cmd *)buf;
-    r41->id = 0x41;
-    r41->effect_id = 0x00;
-    r41->command = 0x41;
-    r41->arg = 0x01;
-  }
-
-  T500RS_DBG(t500rs,
-             "Sending START command (EffectID=0) for effect %d\n", effect->id);
-  return t500rs_send_usb(t500rs, buf, sizeof(struct t500rs_r41_cmd));
+  /* Send START command with proper hw_id */
+  T500RS_DBG(t500rs, "Sending START command (hw_id=%d) for effect %d\n",
+             hw_id, effect->id);
+  return t500rs_send_start(t500rs, (u8)hw_id);
 }
 
-/* Stop effect */
+/*
+ * Stop effect - send STOP command (0x41) for the effect.
+ *
+ * Uses per-effect hw_id for proper multi-effect support.
+ * Also frees the hardware effect ID slot for reuse.
+ */
 static int t500rs_stop_effect(void *data,
                               const struct tmff2_effect_state *state) {
   struct t500rs_device_entry *t500rs = data;
-  u8 *buf;
   int ret;
+  int hw_id;
 
   if (!t500rs) {
     pr_err("t500rs_stop_effect: t500rs is NULL!\n");
     return -ENODEV;
   }
 
-  buf = t500rs->send_buffer; /* Use DMA-safe buffer */
-  if (!buf) {
+  if (!t500rs->send_buffer) {
     hid_err(t500rs->hdev, "Stop effect: send_buffer is NULL!\n");
     return -ENOMEM;
   }
 
-  T500RS_DBG(t500rs, "Stop effect: id=%d, type=%d\n", state->effect.id,
-             state->effect.type);
-
-  /* For constant force: Windows-style STOP (0x41 00 00 01) */
-  if (state->effect.type == FF_CONSTANT) {
-    {
-      struct t500rs_r41_cmd *r41 = (struct t500rs_r41_cmd *)buf;
-      r41->id = 0x41;
-      r41->effect_id = 0x00;
-      r41->command = 0x00;
-      r41->arg = 0x01;
-    }
-    return t500rs_send_usb(t500rs, buf, sizeof(struct t500rs_r41_cmd));
+  /* Get the allocated hw_id for this logical effect */
+  hw_id = t500rs_get_hw_id(t500rs, state->effect.id);
+  if (hw_id < 0) {
+    /* No hw_id means effect was never uploaded, nothing to stop */
+    T500RS_DBG(t500rs, "Stop effect: no hw_id for effect %d (ok)\n",
+               state->effect.id);
+    return 0;
   }
 
-  /* For other effect types, send stop command - Report 0x41
-   * Use EffectID=0 to match device expectations for 0x41.
-   */
-  {
-    struct t500rs_r41_cmd *r41 = (struct t500rs_r41_cmd *)buf;
-    r41->id = 0x41;
-    r41->effect_id = 0x00;
-    r41->command = 0x00;
-    r41->arg = 0x01;
-  }
+  T500RS_DBG(t500rs, "Stop effect: id=%d, hw_id=%d, type=%d\n",
+             state->effect.id, hw_id, state->effect.type);
 
-  ret = t500rs_send_usb(t500rs, buf, sizeof(struct t500rs_r41_cmd));
-  T500RS_DBG(t500rs, "Stop effect (non-constant) returned: %d\n", ret);
+  /* Send STOP command with proper hw_id */
+  ret = t500rs_send_stop(t500rs, (u8)hw_id);
+
+  /* Free the hardware slot for reuse */
+  t500rs_free_hw_id(t500rs, state->effect.id);
+
+  T500RS_DBG(t500rs, "Stop effect returned: %d\n", ret);
   return ret;
 }
 
