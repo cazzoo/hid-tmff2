@@ -33,4 +33,8 @@
   - T500RS is single-axis, so second packet contains zeros.
   - Scaling formulas documented but need hardware verification.
   - Helper not yet wired into upload paths.
-- No functional behavior changes yet; the new structs and helpers are scaffolding for later phases. Next steps: implement Phase 8 (constant 0x03), Phase 9 (envelope 0x02), then start wiring.
+- **Phase 8 – Constant force 0x03**:
+  - Implemented `t500rs_scale_constant_level()` using protocol formula: `(sdl_level * 255 / 65535) - 127`.
+  - Implemented `t500rs_build_r03_constant()` helper.
+  - Helper not yet wired into upload paths.
+- No functional behavior changes yet; the new structs and helpers are scaffolding for later phases. Next steps: implement Phase 9 (envelope 0x02), then start wiring.

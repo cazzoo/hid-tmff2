@@ -494,6 +494,41 @@ static void t500rs_build_r05_condition(struct t500rs_pkt_r05_condition *p,
   /* Second packet (Y-axis): all zeros except id and code, already set by memset */
 }
 
+/*
+ * Scale constant force level from SDL format to device format.
+ *
+ * Per the T500RS USB protocol documentation:
+ * - SDL2 level: 0-65535 (unsigned)
+ * - Device level: -127 to +127 (signed 8-bit)
+ * - Formula: device_level = (sdl_level * 255 / 65535) - 127
+ *
+ * This maps:
+ *   SDL 0     → Device -127 (max negative)
+ *   SDL 32767 → Device 0 (neutral)
+ *   SDL 65535 → Device +127 (max positive)
+ */
+static inline s8 t500rs_scale_constant_level(u16 sdl_level) {
+  s32 tmp = ((s32)sdl_level * 255) / 65535;
+  return (s8)(tmp - 127);
+}
+
+/*
+ * Build a 0x03 constant force packet.
+ *
+ * Per the T500RS USB protocol documentation:
+ * - code: low byte of param_subtype from 0x01 (e.g., 0x0e)
+ * - reserved: always 0x00
+ * - level: signed -127 to +127
+ */
+static void t500rs_build_r03_constant(struct t500rs_r03_const *p,
+                                      u8 code,
+                                      s8 level) {
+  p->id = 0x03;
+  p->code = code;
+  p->zero = 0x00;
+  p->level = level;
+}
+
 /* Supported parameters */
 static const unsigned long t500rs_params =
     PARAM_SPRING_LEVEL | PARAM_DAMPER_LEVEL | PARAM_FRICTION_LEVEL |

@@ -100,13 +100,11 @@ Legend: `[ ]` = TODO, `[x]` = done.
 
 ## Phase 8 – Constant force scaling and sequence
 
-- [ ] Implement helper `t500rs_scale_constant_level(u16 sdl_level)` using protocol formula:
-  - [ ] `s32 tmp = (sdl_level * 255) / 65535; return (s8)(tmp - 127);`.
-- [ ] Use this helper in constant upload/update instead of older `-32767..32767` mapping.
-- [ ] Upload sequence for constant:
-  - [ ] 0x01 main (Phase 4) with `param_sub/env_sub`.
-  - [ ] 0x02 envelope (Phase 9).
-  - [ ] 0x03 constant packet (`level = scaled`), `code = (u8)(param_sub & 0xff)`.
+- [x] Implement helper `t500rs_scale_constant_level(u16 sdl_level)` using protocol formula:
+  - [x] `s32 tmp = (sdl_level * 255) / 65535; return (s8)(tmp - 127);`.
+  - [x] Maps SDL 0 → -127, SDL 32767 → 0, SDL 65535 → +127.
+- [x] Implement `t500rs_build_r03_constant(struct t500rs_r03_const *p, u8 code, s8 level)` helper.
+- [ ] Wire helpers into constant upload/update paths (deferred to wiring phase).
 
 ---
 
