@@ -83,7 +83,8 @@ Legend: `[ ]` = TODO, `[x]` = done.
   - [x] `period_ms = duration_ms` (ramp duration)
 - [x] Document uncertainty: Windows captures show identical packets for different ramp params.
 - [ ] Delete legacy `t500rs_r04_ramp` struct (deferred to cleanup phase).
-- [ ] Wire helper into ramp upload path (deferred to wiring phase).
+- [x] Wire helper into ramp upload/update paths.
+- [x] Use code 0x2a per Windows captures (same as periodic).
 
 ---
 

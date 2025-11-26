@@ -55,4 +55,9 @@
     - Old code had incorrect 0x01 packet layout interpretation (byte 2 was not "type" but effect_id high byte).
     - Old code sent garbage direction values (0xff40 instead of protocol-valid 0-35999).
     - Old code used wrong code (0x0e) for periodic 0x04 packets instead of 0x2a.
-- Next steps: wire ramp upload, conditional upload, cleanup old structs.
+  - Wired ramp upload to use new helpers with:
+    - Simplified packet sequence (0x01 + 0x02 + 0x04, removed dual 0x01/0x02).
+    - Code 0x2a for 0x04 packets (same as periodic per Windows captures).
+    - Proper direction/duration/delay in 0x01 packet.
+  - Wired ramp update to use new helpers.
+- Next steps: wire conditional upload, cleanup old structs.

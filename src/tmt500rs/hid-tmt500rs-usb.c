@@ -997,29 +997,36 @@ static int t500rs_upload_periodic(struct t500rs_device_entry *t500rs,
   return 0;
 }
 
-/* Upload ramp effect */
+/*
+ * Upload ramp effect.
+ *
+ * Per Windows captures (T500RS_USB_Protocol_Analysis.md):
+ * - Ramp uses same 0x04 packet structure as periodic (code 0x2a)
+ * - Packet sequence: 0x01 + 0x02 + 0x04 + 0x41
+ * - Start/end levels encoded in magnitude/offset fields
+ * - Period field encodes ramp duration
+ */
 static int t500rs_upload_ramp(struct t500rs_device_entry *t500rs,
                               const struct tmff2_effect_state *state) {
   const struct ff_effect *effect = &state->effect;
-  u8 *buf = t500rs->send_buffer; /* Use DMA-safe buffer */
+  u8 *buf = t500rs->send_buffer;
   int ret;
-  int start_level = effect->u.ramp.start_level;
-  int end_level = effect->u.ramp.end_level;
-  u16 duration_ms = effect->replay.length;
-  u16 start_scaled;
+  u16 param_sub, env_sub;
+  u16 direction_dev, duration_ms, delay_ms;
+  u8 magnitude, offset;
 
-  /* Subtype indices derived from effect->id to match Windows subtype system */
-  unsigned int idx = (unsigned int)effect->id;
-  u8 param_sub = (u8)(0x0e + (0x1c * idx));
-  u8 env_sub_first = (u8)(0x1c + (0x1c * idx));
-  u8 env_sub_second = (u8)(env_sub_first + 0x1c);
+  /* Compute protocol parameters */
+  direction_dev = t500rs_scale_direction(effect->direction);
+  duration_ms = effect->replay.length ? effect->replay.length : 1000;
+  delay_ms = effect->replay.delay;
 
-  /* Scale to 0-255 */
-  start_scaled = (abs(start_level) * 0xff) / 32767;
+  /* Use fixed subtypes for first effect slot (idx=0) */
+  t500rs_index_to_subtypes(0, &param_sub, &env_sub);
 
   T500RS_DBG(t500rs,
-             "Upload ramp: id=%d, start=%d, end=%d, duration=%dms\n",
-             effect->id, start_level, end_level, duration_ms);
+             "Upload ramp: id=%d, start=%d, end=%d, duration=%ums, dir=%u\n",
+             effect->id, effect->u.ramp.start_level, effect->u.ramp.end_level,
+             duration_ms, direction_dev);
 
   /* Pre-upload STOP to clear the slot (Windows parity) */
   ret = t500rs_send_pre_stop(t500rs);
@@ -1028,97 +1035,51 @@ static int t500rs_upload_ramp(struct t500rs_device_entry *t500rs,
     return ret;
   }
 
-  /* Report 0x02 - Envelope */
-  t500rs_fill_envelope_u02(buf, &effect->u.ramp.envelope, env_sub_first);
-  ret = t500rs_send_usb(t500rs, buf, 9);
-  if (ret) {
-    hid_err(t500rs->hdev, "Failed to send Report 0x02: %d\n", ret);
-    return ret;
-  }
-
-  /* NOTE: On T500RS, Report 0x01 MUST use EffectID=0x00 */
-  /* Report 0x01 - Main effect upload (first) */
+  /* Report 0x01 - Main effect upload using protocol-accurate struct */
   {
-    struct t500rs_r01_main *m = (struct t500rs_r01_main *)buf;
-    memset(m, 0, sizeof(*m));
-    m->id = 0x01;
-    m->effect_id = 0x00;
-    m->type = 0x24; /* Ramp type (0x24 = sawtooth down / ramp) */
-    m->b3 = 0x40;
-    m->b4 = duration_ms & 0xff;        /* Duration low byte */
-    m->b5 = (duration_ms >> 8) & 0xff; /* Duration high byte */
-    m->b6 = 0x00;
-    m->b7 = 0xff;
-    m->b8 = 0xff;
-    m->b9 = param_sub;
-    m->b10 = 0x00;
-    m->b11 = env_sub_first; /* first envelope subtype */
-    m->b12 = 0x00;
-    m->b13 = 0x00;
-    m->b14 = 0x00;
+    struct t500rs_pkt_r01_main *m = (struct t500rs_pkt_r01_main *)buf;
+    t500rs_build_r01_main(m, 0, direction_dev, duration_ms, delay_ms,
+                          param_sub, env_sub);
   }
-  ret = t500rs_send_usb(t500rs, buf, sizeof(struct t500rs_r01_main));
+  ret = t500rs_send_usb(t500rs, buf, sizeof(struct t500rs_pkt_r01_main));
   if (ret) {
-    hid_err(t500rs->hdev, "Failed to send Report 0x01 (ramp first): %d\n", ret);
+    hid_err(t500rs->hdev, "Failed to send Report 0x01 (ramp): %d\n", ret);
     return ret;
   }
 
-  /* Report 0x02 - Envelope (second) */
-  t500rs_fill_envelope_u02(buf, &effect->u.ramp.envelope, env_sub_second);
-  ret = t500rs_send_usb(t500rs, buf, 9);
-  if (ret) {
-    hid_err(t500rs->hdev, "Failed to send Report 0x02 (second): %d\n", ret);
-    return ret;
-  }
-
-  /* Report 0x04 - Ramp parameters */
-  /* NOTE: T500RS doesn't support native ramp - just holds start level */
+  /* Report 0x02 - Envelope using protocol-accurate struct */
   {
-    struct t500rs_r04_ramp *rr = (struct t500rs_r04_ramp *)buf;
-    memset(rr, 0, sizeof(*rr));
-    rr->id = 0x04;
-    rr->code = param_sub;
-    rr->start = cpu_to_le16(start_scaled);
-    rr->cur_val = cpu_to_le16(start_scaled);
-    rr->duration = cpu_to_le16(duration_ms);
-    rr->zero = 0x00;
+    struct t500rs_pkt_r02_envelope *env = (struct t500rs_pkt_r02_envelope *)buf;
+    t500rs_build_r02_envelope(env, (u8)(env_sub & 0xff),
+                              &effect->u.ramp.envelope);
   }
-  ret = t500rs_send_usb(t500rs, buf, sizeof(struct t500rs_r04_ramp));
+  ret = t500rs_send_usb(t500rs, buf, sizeof(struct t500rs_pkt_r02_envelope));
   if (ret) {
-    hid_err(t500rs->hdev, "Failed to send Report 0x04: %d\n", ret);
+    hid_err(t500rs->hdev, "Failed to send Report 0x02 (ramp): %d\n", ret);
     return ret;
   }
 
-  /* Report 0x01 - Main effect upload (second) */
+  /* Report 0x04 - Ramp parameters using protocol-accurate struct
+   * Use code 0x2a per Windows captures (same as periodic)
+   */
   {
-    struct t500rs_r01_main *m = (struct t500rs_r01_main *)buf;
-    memset(m, 0, sizeof(*m));
-    m->id = 0x01;
-    m->effect_id = 0x00;
-    m->type = 0x24; /* Ramp type (0x24 = sawtooth down / ramp) */
-    m->b3 = 0x40;
-    m->b4 = duration_ms & 0xff;        /* Duration low byte */
-    m->b5 = (duration_ms >> 8) & 0xff; /* Duration high byte */
-    m->b6 = 0x00;
-    m->b7 = 0xff;
-    m->b8 = 0xff;
-    m->b9 = param_sub;
-    m->b10 = 0x00;
-    m->b11 = env_sub_second; /* second envelope subtype */
-    m->b12 = 0x00;
-    m->b13 = 0x00;
-    m->b14 = 0x00;
+    struct t500rs_pkt_r04_periodic_ramp *p =
+        (struct t500rs_pkt_r04_periodic_ramp *)buf;
+    t500rs_build_r04_ramp(p, 0x2a, effect->u.ramp.start_level,
+                          effect->u.ramp.end_level, duration_ms);
+    /* Compute magnitude and offset for debug */
+    magnitude = p->magnitude;
+    offset = p->offset;
   }
-  ret = t500rs_send_usb(t500rs, buf, sizeof(struct t500rs_r01_main));
+  ret = t500rs_send_usb(t500rs, buf, sizeof(struct t500rs_pkt_r04_periodic_ramp));
   if (ret) {
-    hid_err(t500rs->hdev, "Failed to send Report 0x01 (ramp second): %d\n",
-            ret);
+    hid_err(t500rs->hdev, "Failed to send Report 0x04 (ramp): %d\n", ret);
     return ret;
   }
 
   T500RS_DBG(t500rs,
-             "Ramp effect %d uploaded (dual 0x02 + dual 0x01)\n",
-             effect->id);
+             "Ramp effect %d uploaded (mag=0x%02x, offset=0x%02x)\n",
+             effect->id, magnitude, offset);
   return 0;
 }
 
@@ -1298,20 +1259,13 @@ static int t500rs_update_effect(void *data,
       return t500rs_send_usb(t500rs, buf, sizeof(*p));
     }
   case FF_RAMP: {
-      int start_level = effect->u.ramp.start_level;
-      u16 duration_ms = effect->replay.length;
-      unsigned int idx = (unsigned int)effect->id;
-      u8 param_sub = (u8)(0x0e + (0x1c * idx));
-      u16 start_scaled = (abs(start_level) * 0xff) / 32767;
-      struct t500rs_r04_ramp *rr = (struct t500rs_r04_ramp *)buf;
-      memset(rr, 0, sizeof(*rr));
-      rr->id = 0x04;
-      rr->code = param_sub;
-      rr->start = cpu_to_le16(start_scaled);
-      rr->cur_val = cpu_to_le16(start_scaled);
-      rr->duration = cpu_to_le16(duration_ms);
-      rr->zero = 0x00;
-      return t500rs_send_usb(t500rs, buf, sizeof(struct t500rs_r04_ramp));
+      /* Update ramp using protocol-accurate helper */
+      u16 duration_ms = effect->replay.length ? effect->replay.length : 1000;
+      struct t500rs_pkt_r04_periodic_ramp *p =
+          (struct t500rs_pkt_r04_periodic_ramp *)buf;
+      t500rs_build_r04_ramp(p, 0x2a, effect->u.ramp.start_level,
+                            effect->u.ramp.end_level, duration_ms);
+      return t500rs_send_usb(t500rs, buf, sizeof(*p));
     }
   case FF_SPRING:
   case FF_DAMPER:
