@@ -745,6 +745,7 @@ static int t500rs_upload_condition(struct t500rs_device_entry *t500rs,
   u8 effect_gain;
   const char *type_name;
   u16 direction_dev, duration_ms, delay_ms;
+  u16 param_sub, env_sub;
   const struct ff_condition_effect *cond = &effect->u.condition[0];
 
   /* Determine effect type and select appropriate gain */
@@ -781,11 +782,13 @@ static int t500rs_upload_condition(struct t500rs_device_entry *t500rs,
   direction_dev = t500rs_scale_direction(effect->direction);
   duration_ms = effect->replay.length ? effect->replay.length : 0xffff;
   delay_ms = effect->replay.delay;
+  t500rs_index_to_subtypes(hw_id, &param_sub, &env_sub);
 
   T500RS_DBG(t500rs,
-             "Upload %s: id=%d, hw_id=%d, gain=%u%%, dir=%u, rcoef=%d, lcoef=%d\n",
+             "Upload %s: id=%d, hw_id=%d, gain=%u%%, dir=%u, param_sub=0x%04x, "
+             "env_sub=0x%04x, rcoef=%d, lcoef=%d\n",
              type_name, effect->id, hw_id, effect_gain, direction_dev,
-             cond->right_coeff, cond->left_coeff);
+             param_sub, env_sub, cond->right_coeff, cond->left_coeff);
 
   /* Pre-upload STOP to clear the slot (Windows parity) */
   ret = t500rs_send_stop(t500rs, (u8)hw_id);
@@ -795,12 +798,13 @@ static int t500rs_upload_condition(struct t500rs_device_entry *t500rs,
   }
 
   /* Report 0x01 - Main effect upload using protocol-accurate struct
-   * Per Windows captures: code1=0x002a, code2=0x0038
+   * Per Windows captures: code1=param_sub, code2=env_sub (NOT hardcoded!)
+   * These vary per effect index: idx 0 → 0x0e/0x1c, idx 1 → 0x2a/0x38, etc.
    */
   {
     struct t500rs_pkt_r01_main *m = (struct t500rs_pkt_r01_main *)buf;
     t500rs_build_r01_main(m, (u16)hw_id, direction_dev, duration_ms, delay_ms,
-                          0x002a, 0x0038);
+                          param_sub, env_sub);
   }
   ret = t500rs_send_usb(t500rs, buf, sizeof(struct t500rs_pkt_r01_main));
   if (ret) {
@@ -808,12 +812,12 @@ static int t500rs_upload_condition(struct t500rs_device_entry *t500rs,
     return ret;
   }
 
-  /* Report 0x05 - X-axis condition parameters (code 0x2a)
+  /* Report 0x05 - X-axis condition parameters (code = param_sub low byte)
    * is_first_packet=true fills in the condition data
    */
   {
     struct t500rs_pkt_r05_condition *p = (struct t500rs_pkt_r05_condition *)buf;
-    t500rs_build_r05_condition(p, 0x2a, cond, true);
+    t500rs_build_r05_condition(p, (u8)(param_sub & 0xff), cond, true);
   }
   ret = t500rs_send_usb(t500rs, buf, sizeof(struct t500rs_pkt_r05_condition));
   if (ret) {
@@ -821,14 +825,14 @@ static int t500rs_upload_condition(struct t500rs_device_entry *t500rs,
     return ret;
   }
 
-  /* Report 0x05 - Y-axis condition parameters (code 0x38)
+  /* Report 0x05 - Y-axis condition parameters (code = env_sub low byte)
    * For single-axis T500RS, Y-axis coefficients/deadband/center are zeroed,
    * but saturation values must still be set per Windows captures.
    * is_first_packet=false zeros coefficients but keeps saturation.
    */
   {
     struct t500rs_pkt_r05_condition *p = (struct t500rs_pkt_r05_condition *)buf;
-    t500rs_build_r05_condition(p, 0x38, cond, false);
+    t500rs_build_r05_condition(p, (u8)(env_sub & 0xff), cond, false);
   }
   ret = t500rs_send_usb(t500rs, buf, sizeof(struct t500rs_pkt_r05_condition));
   if (ret) {
@@ -1209,6 +1213,7 @@ static int t500rs_update_effect(void *data,
   const struct ff_effect *effect = &state->effect;
   const struct ff_effect *old = &state->old;
   u8 *buf;
+  int hw_id;
 
   if (!t500rs)
     return -ENODEV;
@@ -1217,13 +1222,20 @@ static int t500rs_update_effect(void *data,
   if (!buf)
     return -ENOMEM;
 
+  /* Get the hw_id for this effect (must have been allocated during upload) */
+  hw_id = t500rs_get_hw_id(t500rs, effect->id);
+  if (hw_id < 0) {
+    /* Effect not uploaded yet - skip update */
+    return 0;
+  }
+
   /* Do NOT re-upload here; Windows keeps the effect and we only update parameters */
   switch (effect->type) {
   case FF_CONSTANT: {
       int level = effect->u.constant.level;
       s8 signed_level = t500rs_scale_const_with_direction(level, effect->direction);
       u16 param_sub, env_sub;
-      t500rs_index_to_subtypes(0, &param_sub, &env_sub);
+      t500rs_index_to_subtypes(hw_id, &param_sub, &env_sub);
       struct t500rs_r03_const *r3 = (struct t500rs_r03_const *)buf;
       t500rs_build_r03_constant(r3, (u8)(param_sub & 0xff), signed_level);
       return t500rs_send_usb(t500rs, (u8 *)r3, sizeof(*r3));
@@ -1263,10 +1275,12 @@ static int t500rs_update_effect(void *data,
        * the exact same parameters. Re-sending 0x05 at high cadence makes T500RS
        * micro-pulse/rumble. Therefore we compare old vs new and only send when
        * they differ. We only update X-axis (code 0x2a); Y-axis is always zero
-       * for single-axis T500RS.
+       * for single-axis T500RS.                                                                                                                                                                                                                              
        */
       const struct ff_condition_effect *cond = &effect->u.condition[0];
       const struct ff_condition_effect *cond_old = &old->u.condition[0];
+
+      u16 param_sub, env_sub;
 
       /* Simple change detection: compare raw condition parameters */
       if (cond->right_coeff == cond_old->right_coeff &&
@@ -1278,10 +1292,11 @@ static int t500rs_update_effect(void *data,
           effect->type == old->type)
         return 0;
 
-      /* Send updated X-axis 0x05 packet */
+      /* Send updated X-axis 0x05 packet with proper per-effect code */
+      t500rs_index_to_subtypes(hw_id, &param_sub, &env_sub);
       struct t500rs_pkt_r05_condition *p =
           (struct t500rs_pkt_r05_condition *)buf;
-      t500rs_build_r05_condition(p, 0x2a, cond, true);
+      t500rs_build_r05_condition(p, (u8)(param_sub & 0xff), cond, true);
       return t500rs_send_usb(t500rs, buf, sizeof(*p));
     }
   default:
