@@ -22,4 +22,9 @@
   - Added scaling helpers: `t500rs_scale_periodic_magnitude()`, `t500rs_scale_periodic_phase()`, `t500rs_scale_periodic_offset()`.
   - Key: period is in MILLISECONDS (no Hz×100 conversion per protocol doc and memory note).
   - Helper not yet wired into upload paths (legacy `t500rs_r04_periodic` still in use).
-- No functional behavior changes yet; the new structs and helpers are scaffolding for later phases. Next steps: implement Phase 6 (ramp via 0x04), then start wiring the new helpers into upload paths.
+- **Phase 6 – Ramp via 0x04**:
+  - Implemented `t500rs_build_r04_ramp()` helper reusing `t500rs_pkt_r04_periodic_ramp` struct.
+  - Ramp uses same 0x04 packet as periodic; magnitude/offset encode start/end levels.
+  - Note: exact encoding uncertain per protocol doc; Windows captures show identical packets.
+  - Helper not yet wired into upload paths.
+- No functional behavior changes yet; the new structs and helpers are scaffolding for later phases. Next steps: implement Phase 7 (conditional 0x05), Phase 8 (constant 0x03), Phase 9 (envelope 0x02).

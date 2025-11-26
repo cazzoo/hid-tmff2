@@ -73,11 +73,14 @@ Legend: `[ ]` = TODO, `[x]` = done.
 
 ## Phase 6 – Ramp via 0x04
 
-- [ ] Delete legacy `t500rs_r04_ramp` struct and unused helpers.
-- [ ] For `FF_RAMP`, reuse `t500rs_pkt_r04_periodic_ramp` with:
-  - [ ] `period_ms = effect->replay.length`.
-  - [ ] Map start/end levels to `magnitude`/`offset` (e.g., midpoint + delta scheme) and document TODO if uncertain.
-- [ ] Ensure 0x01 `code1` uses same `param_sub` as 0x04 `code`.
+- [x] Implement `t500rs_build_r04_ramp()` helper reusing `t500rs_pkt_r04_periodic_ramp` struct.
+- [x] Map start/end levels to `magnitude`/`offset`:
+  - [x] `magnitude = avg(abs(start), abs(end)) * 127 / 32767`
+  - [x] `offset = (end - start) / 512` (direction of ramp)
+  - [x] `period_ms = duration_ms` (ramp duration)
+- [x] Document uncertainty: Windows captures show identical packets for different ramp params.
+- [ ] Delete legacy `t500rs_r04_ramp` struct (deferred to cleanup phase).
+- [ ] Wire helper into ramp upload path (deferred to wiring phase).
 
 ---
 

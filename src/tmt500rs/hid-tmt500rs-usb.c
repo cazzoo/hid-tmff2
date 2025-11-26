@@ -406,6 +406,48 @@ static inline s8 t500rs_scale_periodic_offset(s16 sdl_offset) {
   return (s8)(sdl_offset / 256);
 }
 
+/*
+ * Build a 0x04 packet for ramp effects.
+ *
+ * Per the T500RS USB protocol documentation, ramp effects use the same
+ * 0x04 packet structure as periodic effects. The encoding is:
+ * - magnitude: scaled from start/end levels (midpoint or average)
+ * - offset: difference between start and end (direction of ramp)
+ * - phase: typically 0 for ramp
+ * - period_ms: ramp duration in milliseconds
+ *
+ * Note: exact mapping of start/end to magnitude/offset is uncertain;
+ * Windows captures show identical packets for different ramp parameters.
+ * Current implementation uses a simple average for magnitude.
+ */
+static void t500rs_build_r04_ramp(struct t500rs_pkt_r04_periodic_ramp *p,
+                                  u8 code,
+                                  s16 start_level,
+                                  s16 end_level,
+                                  u16 duration_ms) {
+  int avg_level;
+  u8 magnitude;
+  s8 offset;
+
+  memset(p, 0, sizeof(*p));
+
+  /* Compute average magnitude from start/end levels */
+  avg_level = (abs(start_level) + abs(end_level)) / 2;
+  magnitude = (u8)((avg_level * 127) / 32767);
+
+  /* Offset encodes direction: positive = ramping up, negative = ramping down */
+  /* Simple approximation: (end - start) / 512 to fit in s8 range */
+  offset = (s8)((end_level - start_level) / 512);
+
+  p->id = 0x04;
+  p->code = code;
+  p->magnitude = magnitude;
+  p->offset = (u8)offset;
+  p->phase = 0; /* Ramp doesn't use phase */
+  p->period_ms = cpu_to_le16(duration_ms);
+  p->reserved = 0;
+}
+
 /* Supported parameters */
 static const unsigned long t500rs_params =
     PARAM_SPRING_LEVEL | PARAM_DAMPER_LEVEL | PARAM_FRICTION_LEVEL |
