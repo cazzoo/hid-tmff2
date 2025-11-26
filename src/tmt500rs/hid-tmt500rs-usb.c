@@ -529,6 +529,61 @@ static void t500rs_build_r03_constant(struct t500rs_r03_const *p,
   p->level = level;
 }
 
+/*
+ * Protocol-accurate 0x02 envelope packet (9 bytes).
+ *
+ * Note: The existing t500rs_r02_envelope struct has an incorrect layout
+ * (extra zero byte at offset 2). This struct matches the protocol doc.
+ */
+struct t500rs_pkt_r02_envelope {
+  u8 id;              /* 0x02 */
+  u8 subtype;         /* from 0x01 code2 (env_sub low byte) */
+  __le16 attack_len;  /* attack duration in ms */
+  u8 attack_level;    /* 0-255 */
+  __le16 fade_len;    /* fade duration in ms */
+  u8 fade_level;      /* 0-255 */
+  u8 reserved;        /* 0x00 */
+} __packed;
+
+/*
+ * Scale envelope level from SDL format to device format.
+ * SDL: 0-32767
+ * Device: 0-255
+ * Formula: device_level = sdl_level * 255 / 32767
+ */
+static inline u8 t500rs_scale_envelope_level(u16 sdl_level) {
+  if (sdl_level > 32767)
+    sdl_level = 32767;
+  return (u8)((sdl_level * 255) / 32767);
+}
+
+/*
+ * Build a protocol-accurate 0x02 envelope packet.
+ *
+ * Per the T500RS USB protocol documentation:
+ * - subtype: low byte of env_sub from 0x01 (e.g., 0x1c)
+ * - attack_len: attack duration in milliseconds
+ * - attack_level: 0-255 (scaled from SDL 0-32767)
+ * - fade_len: fade duration in milliseconds
+ * - fade_level: 0-255 (scaled from SDL 0-32767)
+ * - reserved: always 0x00
+ */
+static void t500rs_build_r02_envelope(struct t500rs_pkt_r02_envelope *p,
+                                      u8 subtype,
+                                      const struct ff_envelope *env) {
+  memset(p, 0, sizeof(*p));
+  p->id = 0x02;
+  p->subtype = subtype;
+
+  if (env) {
+    p->attack_len = cpu_to_le16(env->attack_length);
+    p->attack_level = t500rs_scale_envelope_level(env->attack_level);
+    p->fade_len = cpu_to_le16(env->fade_length);
+    p->fade_level = t500rs_scale_envelope_level(env->fade_level);
+  }
+  p->reserved = 0x00;
+}
+
 /* Supported parameters */
 static const unsigned long t500rs_params =
     PARAM_SPRING_LEVEL | PARAM_DAMPER_LEVEL | PARAM_FRICTION_LEVEL |

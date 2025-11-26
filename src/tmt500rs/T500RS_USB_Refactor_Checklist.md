@@ -110,9 +110,11 @@ Legend: `[ ]` = TODO, `[x]` = done.
 
 ## Phase 9 – Envelope 0x02
 
-- [ ] Adjust envelope helper to use `struct t500rs_pkt_r02_envelope` and subtype from `env_sub` low byte.
-- [ ] Map SDL/ff envelope fields to attack/fade length and level using doc scaling (0..32767 -> 0..255).
-- [ ] For effects without envelope, set `code2` in 0x01 to 0 and skip 0x02.
+- [x] Add protocol-accurate `struct t500rs_pkt_r02_envelope` (9 bytes, correct layout).
+- [x] Implement `t500rs_scale_envelope_level()`: SDL 0-32767 → device 0-255.
+- [x] Implement `t500rs_build_r02_envelope()` helper using correct struct.
+- [ ] Wire helper into upload paths (deferred to wiring phase).
+- [ ] For effects without envelope, set `code2` in 0x01 to 0 and skip 0x02 (deferred).
 
 ---
 

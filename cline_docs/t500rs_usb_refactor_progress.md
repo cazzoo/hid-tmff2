@@ -37,4 +37,9 @@
   - Implemented `t500rs_scale_constant_level()` using protocol formula: `(sdl_level * 255 / 65535) - 127`.
   - Implemented `t500rs_build_r03_constant()` helper.
   - Helper not yet wired into upload paths.
-- No functional behavior changes yet; the new structs and helpers are scaffolding for later phases. Next steps: implement Phase 9 (envelope 0x02), then start wiring.
+- **Phase 9 – Envelope 0x02**:
+  - Added protocol-accurate `struct t500rs_pkt_r02_envelope` (9 bytes, correct layout).
+  - Note: existing `t500rs_r02_envelope` has incorrect layout (extra zero byte at offset 2).
+  - Implemented `t500rs_scale_envelope_level()` and `t500rs_build_r02_envelope()` helpers.
+  - Helper not yet wired into upload paths.
+- No functional behavior changes yet; all new helpers are scaffolding. Next steps: Phase 10 (wire helpers into upload/play/stop paths).
