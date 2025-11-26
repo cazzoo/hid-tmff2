@@ -338,6 +338,74 @@ static void t500rs_build_r01_main(struct t500rs_pkt_r01_main *p,
   p->reserved = 0;
 }
 
+/*
+ * Build a protocol-accurate 0x04 periodic/ramp packet.
+ *
+ * Per the T500RS USB protocol documentation:
+ * - code: low byte of param_subtype from 0x01 (e.g., 0x2a for periodic, not 0x0e!)
+ * - magnitude: 0..127 (scaled from SDL's 0..32767)
+ * - offset: signed DC offset (scaled from SDL's -32768..32767 to device range)
+ * - phase: 0..255 (256 steps for 360°, scaled from SDL's 0..35999)
+ * - period_ms: period in MILLISECONDS (no Hz×100 conversion!)
+ * - reserved: always 0
+ *
+ * Scaling formulas (from protocol doc):
+ *   device_mag   = sdl_mag * 127 / 32767
+ *   device_phase = (sdl_phase * 256 / 36000) & 0xFF
+ *   device_offset = sdl_offset / 256  (approximate, TBD based on testing)
+ *   period_ms    = direct copy (no frequency conversion)
+ */
+static void t500rs_build_r04_periodic(struct t500rs_pkt_r04_periodic_ramp *p,
+                                      u8 code,
+                                      u8 magnitude,
+                                      s8 offset,
+                                      u8 phase,
+                                      u16 period_ms) {
+  memset(p, 0, sizeof(*p));
+  p->id = 0x04;
+  p->code = code;
+  p->magnitude = magnitude;
+  p->offset = (u8)offset; /* stored as u8, but represents signed value */
+  p->phase = phase;
+  p->period_ms = cpu_to_le16(period_ms);
+  p->reserved = 0;
+}
+
+/*
+ * Scale periodic magnitude from SDL format to device format.
+ * SDL: 0..32767 (unsigned)
+ * Device: 0..127
+ */
+static inline u8 t500rs_scale_periodic_magnitude(int sdl_mag) {
+  if (sdl_mag < 0)
+    sdl_mag = -sdl_mag;
+  if (sdl_mag > 32767)
+    sdl_mag = 32767;
+  return (u8)((sdl_mag * 127) / 32767);
+}
+
+/*
+ * Scale periodic phase from SDL format to device format.
+ * SDL: 0..35999 (0.01 degree units, 0-359.99°)
+ * Device: 0..255 (256 steps for 360°)
+ */
+static inline u8 t500rs_scale_periodic_phase(u16 sdl_phase) {
+  /* Clamp to valid range just in case */
+  if (sdl_phase > 35999)
+    sdl_phase = 35999;
+  return (u8)((sdl_phase * 256) / 36000);
+}
+
+/*
+ * Scale periodic offset from SDL format to device format.
+ * SDL: -32768..32767
+ * Device: signed, stored as s8 (-128..127)
+ * Note: exact mapping TBD based on testing; using simple /256 for now.
+ */
+static inline s8 t500rs_scale_periodic_offset(s16 sdl_offset) {
+  return (s8)(sdl_offset / 256);
+}
+
 /* Supported parameters */
 static const unsigned long t500rs_params =
     PARAM_SPRING_LEVEL | PARAM_DAMPER_LEVEL | PARAM_FRICTION_LEVEL |

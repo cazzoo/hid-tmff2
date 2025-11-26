@@ -17,4 +17,9 @@
   - Implemented `t500rs_build_r01_main()` helper using the protocol-accurate `t500rs_pkt_r01_main` struct.
   - Key insight from protocol doc: waveform type (sine/triangle/saw) is NOT encoded in 0x01 packet; it's determined at a higher level.
   - Helper not yet wired into upload paths (legacy `t500rs_r01_main` still in use).
-- No functional behavior changes yet; the new structs and helpers are scaffolding for later phases. Next steps: implement Phase 5 (periodic 0x04 with ms period), then start wiring the new helpers into upload paths.
+- **Phase 5 – Periodic 0x04 (period in ms)**:
+  - Implemented `t500rs_build_r04_periodic()` helper using `t500rs_pkt_r04_periodic_ramp` struct.
+  - Added scaling helpers: `t500rs_scale_periodic_magnitude()`, `t500rs_scale_periodic_phase()`, `t500rs_scale_periodic_offset()`.
+  - Key: period is in MILLISECONDS (no Hz×100 conversion per protocol doc and memory note).
+  - Helper not yet wired into upload paths (legacy `t500rs_r04_periodic` still in use).
+- No functional behavior changes yet; the new structs and helpers are scaffolding for later phases. Next steps: implement Phase 6 (ramp via 0x04), then start wiring the new helpers into upload paths.

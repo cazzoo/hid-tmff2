@@ -60,15 +60,14 @@ Legend: `[ ]` = TODO, `[x]` = done.
 
 ## Phase 5 – Periodic 0x04 (period in ms)
 
-- [ ] Remove all `Hz*100` period conversions from T500RS periodic upload/update.
-- [ ] In periodic upload, compute `u16 period_ms = effect->u.periodic.period ?: 1;`.
-- [ ] Fill `t500rs_pkt_r04_periodic_ramp`:
-  - [ ] `id = 0x04; code = (u8)(param_sub & 0xff);`.
-  - [ ] `magnitude` from SDL magnitude: `mag = eff->u.periodic.magnitude * 127 / 32767;`.
-  - [ ] `offset` from `eff->u.periodic.offset` (initially can be 0 if unsure).
-  - [ ] `phase` from `eff->u.periodic.phase`: `(phase * 256 / 36000) & 0xff`.
-  - [ ] `period_ms = cpu_to_le16(period_ms); reserved = 0;`.
-- [ ] Update periodic update path to rebuild and resend same 0x04 layout.
+- [x] Implement `t500rs_build_r04_periodic()` helper using `t500rs_pkt_r04_periodic_ramp` struct.
+- [x] Implement scaling helpers:
+  - [x] `t500rs_scale_periodic_magnitude()`: SDL 0..32767 → Device 0..127
+  - [x] `t500rs_scale_periodic_phase()`: SDL 0..35999 → Device 0..255
+  - [x] `t500rs_scale_periodic_offset()`: SDL -32768..32767 → Device -128..127
+- [x] Document that period is in MILLISECONDS (no Hz×100 conversion).
+- [ ] Remove all `Hz*100` period conversions from T500RS periodic upload/update (deferred to wiring phase).
+- [ ] Wire the new helper into periodic upload/update paths (deferred to wiring phase).
 
 ---
 
