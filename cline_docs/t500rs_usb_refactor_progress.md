@@ -86,4 +86,16 @@
   - Removed unused functions: `t500rs_fill_envelope_u02`, `t500rs_scale_env_level`.
   - Removed `t500rs_send_pre_stop` (replaced by `t500rs_send_stop(hw_id)`).
   - Kept `t500rs_r03_const` and `t500rs_r41_cmd` as they're still in use.
-- Next steps: Phase 11 (square wave), Phase 13 (verify tmff2 integration), Phase 15 (validation).
+- **Phase 11 – Square Wave Handling**:
+  - Removed `FF_SQUARE` from `t500rs_effects[]` supported waveforms.
+  - Per Windows captures, waveform type is NOT encoded in USB packets.
+  - Square wave upload now returns -EINVAL; applications must use alternative effects.
+- **Phase 13 – Verify tmff2 Integration**:
+  - Confirmed: T500RS only provides upload/update/play/stop callbacks.
+  - All scheduling, timing, delay, and state management handled by `tmff2_work_handler`.
+  - No duplicate timing logic in T500RS code.
+- **Phase 14 – Cleanup (complete)**:
+  - Updated file header with protocol summary and documentation reference.
+  - Added rationale comments for FF_SQUARE removal, waveform handling.
+  - All legacy code removed; new protocol-accurate helpers in place.
+- Next steps: Phase 15 (validation testing with SDL2/fftest).

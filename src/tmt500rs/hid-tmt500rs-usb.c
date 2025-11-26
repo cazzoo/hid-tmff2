@@ -2,8 +2,19 @@
 /*
  * Force feedback support for Thrustmaster T500RS
  *
- * USB INTERRUPT implementation
- * Uses endpoint 0x01 OUT for all communication
+ * USB INTERRUPT implementation using endpoint 0x01 OUT for all communication.
+ *
+ * Protocol documentation: captures/T500RS_USB_Protocol_Analysis.md
+ *
+ * Key protocol details:
+ * - 0x01 packet: Main upload (15 bytes) - effect_id, direction, duration, delay, code1/2
+ * - 0x02 packet: Envelope (9 bytes) - attack/fade levels and times
+ * - 0x03 packet: Constant force level (4 bytes)
+ * - 0x04 packet: Periodic/Ramp parameters (8 bytes) - code 0x2a, period in ms
+ * - 0x05 packet: Conditional parameters (11 bytes) - two packets per effect (X/Y)
+ * - 0x41 packet: START/STOP command (4 bytes) - per-effect hw_id
+ *
+ * Hardware supports 16 concurrent effects with internal mixing.
  */
 
 #include <linux/hid.h>
@@ -523,11 +534,20 @@ static const unsigned long t500rs_params =
     PARAM_SPRING_LEVEL | PARAM_DAMPER_LEVEL | PARAM_FRICTION_LEVEL |
     PARAM_GAIN | PARAM_RANGE;
 
-/* Supported effects */
+/*
+ * Supported effects.
+ *
+ * NOTE: FF_SQUARE is intentionally OMITTED. Per Windows USB captures, the
+ * T500RS protocol does not encode waveform type in USB packets. Windows/SDL2
+ * may emulate square waves in software, but the device hardware appears to
+ * only support the base waveforms. Rather than silently map to sine (which
+ * would feel wrong to users), we reject FF_SQUARE and let applications fall
+ * back to alternative effects.
+ */
 static const signed short t500rs_effects[] = {
     FF_CONSTANT, FF_SPRING, FF_DAMPER,   FF_FRICTION,   FF_INERTIA,
-    FF_PERIODIC, FF_SINE,   FF_TRIANGLE, FF_SQUARE,     FF_SAW_UP,
-    FF_SAW_DOWN, FF_RAMP,   FF_GAIN,     FF_AUTOCENTER, -1};
+    FF_PERIODIC, FF_SINE,   FF_TRIANGLE, FF_SAW_UP,     FF_SAW_DOWN,
+    FF_RAMP,     FF_GAIN,   FF_AUTOCENTER, -1};
 
 /* Forward declarations to avoid implicit declarations before worker uses them
  */
@@ -838,13 +858,16 @@ static int t500rs_upload_periodic(struct t500rs_device_entry *t500rs,
   u16 period_ms;
   u8 mag, phase, offset;
 
-  /* Determine waveform name for debug (waveform NOT encoded in packets!) */
+  /*
+   * Determine waveform name for debug.
+   *
+   * Per Windows captures (T500RS_USB_Protocol_Analysis.md), the waveform type
+   * is NOT encoded in USB packets - it appears to be determined by SDL2/DirectInput
+   * at a higher level. We only support the waveforms observed in captures.
+   *
+   * FF_SQUARE is rejected because it's not in our supported effects list.
+   */
   switch (effect->u.periodic.waveform) {
-  case FF_SQUARE:
-    type_name = "square";
-    /* NOTE: T500RS may not support square wave per protocol analysis */
-    hid_warn(t500rs->hdev, "Square wave may not be supported by T500RS\n");
-    break;
   case FF_TRIANGLE:
     type_name = "triangle";
     break;
@@ -858,7 +881,8 @@ static int t500rs_upload_periodic(struct t500rs_device_entry *t500rs,
     type_name = "sawtooth_down";
     break;
   default:
-    hid_err(t500rs->hdev, "Unknown periodic waveform: %d\n",
+    /* FF_SQUARE and other unsupported waveforms */
+    hid_err(t500rs->hdev, "Unsupported periodic waveform: %d\n",
             effect->u.periodic.waveform);
     return -EINVAL;
   }

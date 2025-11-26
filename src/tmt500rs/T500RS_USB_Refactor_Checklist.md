@@ -136,8 +136,10 @@ Legend: `[ ]` = TODO, `[x]` = done.
 
 ## Phase 11 – Square wave handling
 
-- [ ] Remove `FF_SQUARE` from T500RS supported periodic waveforms, or explicitly map it to a supported waveform with a big comment.
-- [ ] Ensure no 0x04 packets are generated uniquely for square; either reject or emulate.
+- [x] Remove `FF_SQUARE` from T500RS supported periodic waveforms.
+  - Removed from `t500rs_effects[]` array with comment explaining rationale.
+  - Protocol doesn't encode waveform type; Windows may emulate in software.
+- [x] Ensure no 0x04 packets are generated for square; reject with -EINVAL.
 
 ---
 
@@ -150,9 +152,13 @@ Legend: `[ ]` = TODO, `[x]` = done.
 
 ## Phase 13 – Reuse tmff2 base logic
 
-- [ ] Verify that all scheduling, timing, and state handling still go through `tmff2_work_handler` and `tmff2->states`.
-- [ ] Ensure T500RS code only handles packet building + USB interrupt send; no duplicate timing logic.
+- [x] Verify that all scheduling, timing, and state handling still go through `tmff2_work_handler` and `tmff2->states`.
+  - Confirmed: T500RS only provides `upload_effect`, `update_effect`, `play_effect`, `stop_effect` callbacks.
+  - tmff2 base driver handles work queue, timing, delay, state flags, effect lifetime.
+- [x] Ensure T500RS code only handles packet building + USB interrupt send; no duplicate timing logic.
+  - Confirmed: All T500RS functions are packet builders + `t500rs_send_usb()` calls.
 - [ ] Consider moving any generic scaling helpers into a shared header if other wheels can reuse them.
+  - Deferred: Current scaling helpers are T500RS-specific (direction 0-35999, etc).
 
 ---
 
@@ -160,9 +166,14 @@ Legend: `[ ]` = TODO, `[x]` = done.
 
 - [x] Remove dead structs/functions (old ramp, legacy subtype hacks, unused fields).
   - [x] Removed `t500rs_r01_main`, `t500rs_r02_envelope`, `t500rs_r04_periodic`, `t500rs_r04_ramp`.
-  - [x] Removed `t500rs_fill_envelope_u02`, `t500rs_scale_env_level`.
-- [ ] Factor repeated 0x01/0x02/0x03/0x04/0x05 send sequences into small helpers where it improves clarity.
-- [ ] Update comments to reference `captures/T500RS_USB_Protocol_Analysis.md` and explain key protocol decisions.
+  - [x] Removed `t500rs_fill_envelope_u02`, `t500rs_scale_env_level`, `t500rs_send_pre_stop`.
+- [x] Factor repeated 0x01/0x02/0x03/0x04/0x05 send sequences into small helpers where it improves clarity.
+  - Created: `t500rs_build_r01_main()`, `t500rs_build_r02_envelope()`, `t500rs_build_r03_constant()`,
+    `t500rs_build_r04_periodic()`, `t500rs_build_r05_conditional()`.
+  - Created: `t500rs_send_start()`, `t500rs_send_stop()` for 0x41 commands.
+- [x] Update comments to reference `captures/T500RS_USB_Protocol_Analysis.md` and explain key protocol decisions.
+  - Updated file header with protocol summary.
+  - Added rationale comments for FF_SQUARE removal, waveform handling, etc.
 
 ---
 
