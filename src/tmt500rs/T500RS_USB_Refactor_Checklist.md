@@ -141,8 +141,8 @@ Legend: `[ ]` = TODO, `[x]` = done.
 
 ## Phase 12 – Remove Hz*100 remnants
 
-- [ ] Search `hid-tmt500rs-usb.c` for `Hz`, `freq`, `100000/` etc. and delete or convert to ms semantics.
-- [ ] Confirm periodic upload/update only use ms period.
+- [x] Search `hid-tmt500rs-usb.c` for `Hz`, `freq`, `100000/` etc. and delete or convert to ms semantics.
+- [x] Confirm periodic upload/update only use ms period.
 
 ---
 
@@ -156,7 +156,9 @@ Legend: `[ ]` = TODO, `[x]` = done.
 
 ## Phase 14 – Cleanup and simplification
 
-- [ ] Remove dead structs/functions (old ramp, legacy subtype hacks, unused fields).
+- [x] Remove dead structs/functions (old ramp, legacy subtype hacks, unused fields).
+  - [x] Removed `t500rs_r01_main`, `t500rs_r02_envelope`, `t500rs_r04_periodic`, `t500rs_r04_ramp`.
+  - [x] Removed `t500rs_fill_envelope_u02`, `t500rs_scale_env_level`.
 - [ ] Factor repeated 0x01/0x02/0x03/0x04/0x05 send sequences into small helpers where it improves clarity.
 - [ ] Update comments to reference `captures/T500RS_USB_Protocol_Analysis.md` and explain key protocol decisions.
 

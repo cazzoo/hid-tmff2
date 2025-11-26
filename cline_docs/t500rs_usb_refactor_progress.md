@@ -64,4 +64,9 @@
     - Protocol-accurate 0x01 packet with code1=0x002a, code2=0x0038.
     - Two 0x05 packets: X-axis (code 0x2a) and Y-axis (code 0x38, zeroed).
   - Wired conditional update with change detection to avoid micro-pulse/rumble.
-- Next steps: cleanup old structs, remove unused legacy code.
+- **Phase 14 – Cleanup (partial)**:
+  - Removed legacy structs: `t500rs_r01_main`, `t500rs_r02_envelope`, `t500rs_r04_periodic`, `t500rs_r04_ramp`.
+  - Removed unused functions: `t500rs_fill_envelope_u02`, `t500rs_scale_env_level`.
+  - Kept `t500rs_r03_const` and `t500rs_r41_cmd` as they're still in use.
+  - Remaining unused: `t500rs_get_hw_id`, `t500rs_free_hw_id` (scaffolding for multi-effect).
+- Next steps: Phase 10 (per-effect START/STOP), Phase 11 (square wave), Phase 15 (validation).

@@ -70,43 +70,12 @@ struct t500rs_pkt_r05_condition {
 	u8 left_sat;
 } __packed;
 
-/* Packet structs (packed) currently used by the implementation
- * (will be gradually replaced by the t500rs_pkt_* variants above).
- */
-struct t500rs_r02_envelope {
-  u8 id;      /* 0x02 */
-  u8 subtype; /* 0x1c */
-  u8 zero;    /* 0x00 */
-  __le16 attack_len;
-  u8 attack_lvl; /* 0..255 */
-  __le16 fade_len;
-  u8 fade_lvl; /* 0..255 */
-} __packed;
-
+/* Packet structs still in use */
 struct t500rs_r03_const {
   u8 id;    /* 0x03 */
   u8 code;  /* 0x0e */
   u8 zero;  /* 0x00 */
   s8 level; /* -127..127 */
-} __packed;
-
-struct t500rs_r04_periodic {
-  u8 id;         /* 0x04 */
-  u8 code;       /* 0x0e */
-  u8 zero;       /* 0x00 */
-  u8 magnitude;  /* 0..127 */
-  u8 offset;     /* 0 */
-  u8 phase;      /* 0 */
-  __le16 period; /* frequency (Hz*100) */
-} __packed;
-
-struct t500rs_r04_ramp {
-  u8 id;   /* 0x04 */
-  u8 code; /* 0x0e */
-  __le16 start;
-  __le16 cur_val;  /* same as start */
-  __le16 duration; /* ms */
-  u8 zero;         /* 0 */
 } __packed;
 
 struct t500rs_r41_cmd {
@@ -115,32 +84,6 @@ struct t500rs_r41_cmd {
   u8 command;   /* 0x41 START, 0x00 STOP, 0x00 clear in init */
   u8 arg;       /* 0x01 */
 } __packed;
-
-/* Generic 0x01 main upload (15 bytes) — keep fields generic while unknown) */
-struct t500rs_r01_main {
-  u8 id;        /* 0x01 */
-  u8 effect_id; /* see ID semantics note */
-  u8 type;      /* 0x00 constant, 0x20..0x24 periodic/ramp */
-  u8 b3;
-  u8 b4;
-  u8 b5;
-  u8 b6;
-  u8 b7;
-  u8 b8;
-  u8 b9;
-  u8 b10;
-  u8 b11;
-  u8 b12;
-  u8 b13;
-  u8 b14;
-} __packed;
-
-/* Scale envelope level (0..32767) to device 8-bit (0..255) */
-static inline u8 t500rs_scale_env_level(u16 level) {
-  if (level > 32767)
-    level = 32767;
-  return (u8)((level * 255) / 32767);
-}
 
 /* Scale constant level (-32767..32767) to signed 8-bit (-127..127) */
 static inline s8 t500rs_scale_const_level_s8(int level) {
@@ -183,29 +126,6 @@ t500rs_index_to_subtypes(unsigned int idx, u16 *param_sub, u16 *env_sub) {
   idx %= T500RS_MAX_HW_EFFECTS;
   *param_sub = 0x000e + 0x001c * idx;
   *env_sub = 0x001c + 0x001c * idx;
-}
-
-/* Fill Report 0x02 (envelope) buffer for T500RS: 9 bytes total
- * buf[0]=0x02, buf[1]=0x1c, buf[2]=0x00,
- * buf[3..4]=attack_length (le16), buf[5]=attack_level (u8 0..255),
- * buf[6..7]=fade_length (le16),   buf[8]=fade_level (u8 0..255)
- */
-static inline void
-t500rs_fill_envelope_u02(u8 *buf, const struct ff_envelope *env, u8 subtype) {
-  u16 a_len = env ? env->attack_length : 0;
-  u16 f_len = env ? env->fade_length : 0;
-  u8 a_lvl = env ? t500rs_scale_env_level(env->attack_level) : 0;
-  u8 f_lvl = env ? t500rs_scale_env_level(env->fade_level) : 0;
-
-  struct t500rs_r02_envelope *r = (struct t500rs_r02_envelope *)buf;
-  memset(r, 0, sizeof(*r));
-  r->id = 0x02;
-  r->subtype = subtype;
-  r->zero = 0x00;
-  r->attack_len = cpu_to_le16(a_len);
-  r->attack_lvl = a_lvl;
-  r->fade_len = cpu_to_le16(f_len);
-  r->fade_lvl = f_lvl;
 }
 
 /* Debug logging helper: pass struct t500rs_device_entry * explicitly */
