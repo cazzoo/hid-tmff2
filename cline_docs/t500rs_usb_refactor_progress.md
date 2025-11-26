@@ -42,4 +42,17 @@
   - Note: existing `t500rs_r02_envelope` has incorrect layout (extra zero byte at offset 2).
   - Implemented `t500rs_scale_envelope_level()` and `t500rs_build_r02_envelope()` helpers.
   - Helper not yet wired into upload paths.
-- No functional behavior changes yet; all new helpers are scaffolding. Next steps: Phase 10 (wire helpers into upload/play/stop paths).
+- **Phase 10 – Wiring (partial)**:
+  - Added `t500rs_scale_direction()` helper: Linux 0-65535 → device 0-35999.
+  - Wired constant force upload to use protocol-accurate helpers and proper direction/duration/delay.
+  - Wired constant force update to use new helpers.
+  - Wired periodic upload to use new helpers with:
+    - Period in MILLISECONDS (removed Hz×100 conversion).
+    - Code 0x2a for 0x04 packets (NOT 0x0e as before - matched to Windows captures).
+    - Simplified packet sequence (0x01 + 0x02 + 0x04 + 0x41, removed dual 0x01/0x02).
+  - Wired periodic update to use new helpers.
+  - **KEY FIXES**:
+    - Old code had incorrect 0x01 packet layout interpretation (byte 2 was not "type" but effect_id high byte).
+    - Old code sent garbage direction values (0xff40 instead of protocol-valid 0-35999).
+    - Old code used wrong code (0x0e) for periodic 0x04 packets instead of 0x2a.
+- Next steps: wire ramp upload, conditional upload, cleanup old structs.

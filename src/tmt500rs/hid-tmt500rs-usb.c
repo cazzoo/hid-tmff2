@@ -304,11 +304,25 @@ static void t500rs_free_hw_id(struct t500rs_device_entry *t500rs,
 }
 
 /*
+ * Scale direction from Linux ff_effect format to T500RS protocol format.
+ *
+ * Linux ff_effect.direction: 0-65535 (0 = forward, 16384 = right, 32768 = back, 49152 = left)
+ * T500RS protocol: 0-35999 in 0.01 degree units (0 = 0°, 9000 = 90°, 18000 = 180°, etc.)
+ *
+ * Conversion: device_dir = (linux_dir * 36000) / 65536
+ * This maps 0-65535 → 0-35999 (approximately, since 65535 → 35999.45)
+ */
+static inline u16 t500rs_scale_direction(u16 linux_dir) {
+  /* Use 32-bit arithmetic to avoid overflow */
+  return (u16)(((u32)linux_dir * 36000) / 65536);
+}
+
+/*
  * Build a protocol-accurate 0x01 main upload packet.
  *
  * Per the T500RS USB protocol documentation:
  * - effect_id: 16-bit LE hardware effect slot (0..15 for now)
- * - direction: 0..35999 in 0.01 degree units
+ * - direction: 0..35999 in 0.01 degree units (already scaled, use t500rs_scale_direction)
  * - duration_ms: duration in milliseconds
  * - delay_ms: delay before effect starts
  * - code1: parameter subtype (used by 0x03/0x04/0x05)
@@ -667,9 +681,15 @@ static int t500rs_upload_constant(struct t500rs_device_entry *t500rs,
   u8 *buf = t500rs->send_buffer; /* Use DMA-safe buffer */
   int ret;
   int level = effect->u.constant.level;
+  u16 direction_dev;
+  u16 duration_ms;
+  u16 delay_ms;
+  u16 param_sub, env_sub;
+  s8 signed_level;
 
   /* Note: Gain is applied in play_effect, not here */
-  T500RS_DBG(t500rs, "Upload constant: id=%d, level=%d\n", effect->id, level);
+  T500RS_DBG(t500rs, "Upload constant: id=%d, level=%d, dir=%u\n",
+             effect->id, level, effect->direction);
 
   /* Pre-upload STOP to clear the slot (Windows parity) */
   ret = t500rs_send_pre_stop(t500rs);
@@ -678,57 +698,48 @@ static int t500rs_upload_constant(struct t500rs_device_entry *t500rs,
     return ret;
   }
 
-  /* Report 0x02 - Envelope (attack/fade) */
-  t500rs_fill_envelope_u02(buf, &effect->u.constant.envelope, 0x1c);
-  ret = t500rs_send_usb(t500rs, buf, 9);
+  /* Compute protocol parameters */
+  direction_dev = t500rs_scale_direction(effect->direction);
+  duration_ms = effect->replay.length ? effect->replay.length : 0xffff; /* 0 = infinite */
+  delay_ms = effect->replay.delay;
+
+  /* For constant effects, use fixed subtypes (first effect slot) */
+  t500rs_index_to_subtypes(0, &param_sub, &env_sub);
+
+  /* Report 0x02 - Envelope (attack/fade) using new protocol-accurate struct */
+  {
+    struct t500rs_pkt_r02_envelope *env = (struct t500rs_pkt_r02_envelope *)buf;
+    t500rs_build_r02_envelope(env, (u8)(env_sub & 0xff),
+                              &effect->u.constant.envelope);
+  }
+  ret = t500rs_send_usb(t500rs, buf, sizeof(struct t500rs_pkt_r02_envelope));
   if (ret) {
     hid_err(t500rs->hdev, "Failed to send Report 0x02: %d\n", ret);
     return ret;
   }
 
   /*
-   * IMPORTANT: T500RS Effect ID (buf[1]) semantics
-   * - All Report 0x01 "main effect upload" messages MUST use EffectID=0x00.
-   *   Using per-effect IDs here breaks playback (e.g., constant force).
-   * - Report 0x41 START/STOP also requires EffectID=0x00, except special
-   *   cases like stopping autocenter by its fixed ID during init.
-   * This matches behavior observed from the Windows driver and on-device tests.
+   * Report 0x01 - Main effect upload using new protocol-accurate struct.
+   *
+   * T500RS currently uses EffectID=0 for all uploads (single-slot mode).
+   * Future: use hw_id management for multi-effect support.
    */
-  /* Report 0x01 - Main effect upload (constant, fixed subtypes) */
   {
-    struct t500rs_r01_main *m = (struct t500rs_r01_main *)buf;
-    memset(m, 0, sizeof(*m));
-    m->id = 0x01;
-    m->effect_id = 0x00; /* Device expects Effect ID 0 for 0x01 on T500RS */
-    m->type = 0x00;      /* Constant force type */
-    m->b3 = 0x40;
-    m->b4 = 0xff; /* Windows uses 0xff */
-    m->b5 = 0xff; /* Windows uses 0xff */
-    m->b6 = 0x00;
-    m->b7 = 0xff;
-    m->b8 = 0xff;
-    m->b9 = 0x0e; /* Parameter subtype reference (fixed) */
-    m->b10 = 0x00;
-    m->b11 = 0x1c; /* Envelope subtype reference (fixed) */
-    m->b12 = 0x00;
-    m->b13 = 0x00;
-    m->b14 = 0x00;
+    struct t500rs_pkt_r01_main *m = (struct t500rs_pkt_r01_main *)buf;
+    t500rs_build_r01_main(m, 0, direction_dev, duration_ms, delay_ms,
+                          param_sub, env_sub);
   }
-
-  ret = t500rs_send_usb(t500rs, buf, sizeof(struct t500rs_r01_main));
+  ret = t500rs_send_usb(t500rs, buf, sizeof(struct t500rs_pkt_r01_main));
   if (ret) {
     hid_err(t500rs->hdev, "Failed to send Report 0x01: %d\n", ret);
     return ret;
   }
 
-  /* Report 0x03 - Constant force level (param subtype, honours direction) */
+  /* Report 0x03 - Constant force level */
+  signed_level = t500rs_scale_const_with_direction(level, effect->direction);
   {
-    s8 signed_level = t500rs_scale_const_with_direction(level, effect->direction);
     struct t500rs_r03_const *r3 = (struct t500rs_r03_const *)buf;
-    r3->id = 0x03;
-    r3->code = 0x0e;
-    r3->zero = 0x00;
-    r3->level = signed_level;
+    t500rs_build_r03_constant(r3, (u8)(param_sub & 0xff), signed_level);
   }
   ret = t500rs_send_usb(t500rs, buf, sizeof(struct t500rs_r03_const));
   if (ret) {
@@ -867,38 +878,48 @@ static int t500rs_upload_condition(struct t500rs_device_entry *t500rs,
   return 0;
 }
 
-/* Upload periodic effect (sine, square, triangle, saw) */
+/*
+ * Upload periodic effect (sine, square, triangle, saw).
+ *
+ * Per Windows captures (T500RS_USB_Protocol_Analysis.md):
+ * - Waveform type is NOT encoded in USB packets; determined by SDL2/DirectInput
+ * - 0x01 packet: direction, duration, delay, code1=0x000e, code2=0x001c
+ * - 0x02 packet: envelope with subtype 0x1c
+ * - 0x04 packet: code=0x2a (NOT 0x0e!), magnitude, offset, phase, period_ms
+ * - Period is in MILLISECONDS (no Hz×100 conversion)
+ *
+ * NOTE: The current implementation only sends the simplified packet sequence
+ * observed in Windows captures. The dual-0x01/0x02 sequence in the old code
+ * may have been incorrect and is removed.
+ */
 static int t500rs_upload_periodic(struct t500rs_device_entry *t500rs,
                                   const struct tmff2_effect_state *state) {
   const struct ff_effect *effect = &state->effect;
-  u8 *buf = t500rs->send_buffer; /* Use DMA-safe buffer */
+  u8 *buf = t500rs->send_buffer;
   int ret;
-  u8 effect_type;
   const char *type_name;
-  int magnitude = effect->u.periodic.magnitude;
-  u16 period = effect->u.periodic.period;
-  u8 mag;
+  u16 param_sub, env_sub;
+  u16 direction_dev, duration_ms, delay_ms;
+  u16 period_ms;
+  u8 mag, phase, offset;
 
-  /* Determine waveform type */
+  /* Determine waveform name for debug (waveform NOT encoded in packets!) */
   switch (effect->u.periodic.waveform) {
   case FF_SQUARE:
-    effect_type = 0x20;
     type_name = "square";
+    /* NOTE: T500RS may not support square wave per protocol analysis */
+    hid_warn(t500rs->hdev, "Square wave may not be supported by T500RS\n");
     break;
   case FF_TRIANGLE:
-    effect_type = 0x21;
     type_name = "triangle";
     break;
   case FF_SINE:
-    effect_type = 0x22;
     type_name = "sine";
     break;
   case FF_SAW_UP:
-    effect_type = 0x23;
     type_name = "sawtooth_up";
     break;
   case FF_SAW_DOWN:
-    effect_type = 0x24;
     type_name = "sawtooth_down";
     break;
   default:
@@ -907,32 +928,24 @@ static int t500rs_upload_periodic(struct t500rs_device_entry *t500rs,
     return -EINVAL;
   }
 
-  /* Magnitude - scale to 0-127 with saturation */
-  mag = t500rs_scale_mag_u7(magnitude);
-  /* Subtype indices derived from effect->id to match Windows subtype system */
-  unsigned int idx = (unsigned int)effect->id;
-  u8 param_sub = (u8)(0x0e + (0x1c * idx));
-  u8 env_sub_first = (u8)(0x1c + (0x1c * idx));
-  u8 env_sub_second = (u8)(env_sub_first + 0x1c);
+  /* Scale parameters using new protocol-accurate helpers */
+  mag = t500rs_scale_periodic_magnitude(effect->u.periodic.magnitude);
+  phase = t500rs_scale_periodic_phase(effect->u.periodic.phase);
+  offset = t500rs_scale_periodic_offset(effect->u.periodic.offset);
+  direction_dev = t500rs_scale_direction(effect->direction);
+  duration_ms = effect->replay.length ? effect->replay.length : 0xffff;
+  delay_ms = effect->replay.delay;
+  period_ms = effect->u.periodic.period;
+  if (period_ms == 0)
+    period_ms = 100; /* Default 100ms if not specified */
 
-  /* Period (ms) -> device frequency (Hz*100). Default to 100ms = 10 Hz if set to 0 */
-  if (period == 0) {
-    period = 100;
-  }
-  {
-    u32 freq_hz100 = 100000U / period;
-    if (freq_hz100 < 1U)
-      freq_hz100 = 1U;
-    if (freq_hz100 > 65535U)
-      freq_hz100 = 65535U;
-    T500RS_DBG(t500rs,
-               "Upload %s: id=%d, magnitude=%d (0x%02x), period=%dms -> "
-               "freq=%u (Hz*100)\n",
-               type_name, effect->id, magnitude, mag, period,
-               (unsigned)freq_hz100);
-    /* Reuse 'period' variable to carry converted frequency to the packet write below */
-    period = (u16)freq_hz100;
-  }
+  /* Use fixed subtypes for first effect slot (idx=0) */
+  t500rs_index_to_subtypes(0, &param_sub, &env_sub);
+
+  T500RS_DBG(t500rs,
+             "Upload %s: id=%d, mag=0x%02x, phase=0x%02x, offset=0x%02x, "
+             "period=%ums, dir=%u\n",
+             type_name, effect->id, mag, phase, offset, period_ms, direction_dev);
 
   /* Pre-upload STOP to clear the slot (Windows parity) */
   ret = t500rs_send_pre_stop(t500rs);
@@ -941,95 +954,46 @@ static int t500rs_upload_periodic(struct t500rs_device_entry *t500rs,
     return ret;
   }
 
-  /* Report 0x02 - Envelope (first) */
-  t500rs_fill_envelope_u02(buf, &effect->u.periodic.envelope, env_sub_first);
-  ret = t500rs_send_usb(t500rs, buf, 9);
-  if (ret) {
-    hid_err(t500rs->hdev, "Failed to send Report 0x02: %d\n", ret);
-    return ret;
-  }
-
-  /* NOTE: Device requires EffectID=0 for 0x01 uploads; see ID semantics above. */
-  /* Report 0x01 - Main effect upload for periodic (set waveform/type) */
+  /* Report 0x01 - Main effect upload using protocol-accurate struct */
   {
-    struct t500rs_r01_main *m = (struct t500rs_r01_main *)buf;
-    memset(m, 0, sizeof(*m));
-    m->id = 0x01;
-    m->effect_id = 0x00;   /* Effect ID 0 required for T500RS 0x01 reports */
-    m->type = effect_type; /* Waveform type (0x20..0x24) */
-    m->b3 = 0x40;
-    m->b4 = 0xff;
-    m->b5 = 0xff;
-    m->b6 = 0x00;
-    m->b7 = 0xff;
-    m->b8 = 0xff;
-    m->b9 = param_sub; /* Parameter subtype reference (per-effect) */
-    m->b10 = 0x00;
-    m->b11 = env_sub_first; /* Envelope subtype reference (first) */
-    m->b12 = 0x00;
-    m->b13 = 0x00;
-    m->b14 = 0x00;
+    struct t500rs_pkt_r01_main *m = (struct t500rs_pkt_r01_main *)buf;
+    t500rs_build_r01_main(m, 0, direction_dev, duration_ms, delay_ms,
+                          param_sub, env_sub);
   }
-  ret = t500rs_send_usb(t500rs, buf, sizeof(struct t500rs_r01_main));
+  ret = t500rs_send_usb(t500rs, buf, sizeof(struct t500rs_pkt_r01_main));
   if (ret) {
-    hid_err(t500rs->hdev, "Failed to send Report 0x01 (periodic main): %d\n",
-            ret);
-    return ret;
-  }
-  /* Report 0x02 - Envelope (second) */
-  t500rs_fill_envelope_u02(buf, &effect->u.periodic.envelope, env_sub_second);
-  ret = t500rs_send_usb(t500rs, buf, 9);
-  if (ret) {
-    hid_err(t500rs->hdev, "Failed to send Report 0x02 (second): %d\n", ret);
+    hid_err(t500rs->hdev, "Failed to send Report 0x01 (periodic): %d\n", ret);
     return ret;
   }
 
-  /* Report 0x04 - Periodic parameters */
+  /* Report 0x02 - Envelope using protocol-accurate struct */
   {
-    struct t500rs_r04_periodic *p = (struct t500rs_r04_periodic *)buf;
-    memset(p, 0, sizeof(*p));
-    p->id = 0x04;
-    p->code = param_sub;
-    p->zero = 0x00;
-    p->magnitude = mag;
-    p->offset = 0x00;
-    p->phase = 0x00;
-    p->period = cpu_to_le16(period);
+    struct t500rs_pkt_r02_envelope *env = (struct t500rs_pkt_r02_envelope *)buf;
+    t500rs_build_r02_envelope(env, (u8)(env_sub & 0xff),
+                              &effect->u.periodic.envelope);
   }
-  ret = t500rs_send_usb(t500rs, buf, sizeof(struct t500rs_r04_periodic));
+  ret = t500rs_send_usb(t500rs, buf, sizeof(struct t500rs_pkt_r02_envelope));
   if (ret) {
-    hid_err(t500rs->hdev, "Failed to send Report 0x04: %d\n", ret);
+    hid_err(t500rs->hdev, "Failed to send Report 0x02 (periodic): %d\n", ret);
     return ret;
   }
 
-  /* NOTE: On T500RS, all 0x01 uploads MUST use EffectID=0x00 */
-  /* Report 0x01 - Main effect upload (second) */
+  /* Report 0x04 - Periodic parameters using protocol-accurate struct
+   * IMPORTANT: Use code 0x2a (NOT 0x0e) per Windows captures!
+   */
   {
-    struct t500rs_r01_main *m = (struct t500rs_r01_main *)buf;
-    memset(m, 0, sizeof(*m));
-    m->id = 0x01;
-    m->effect_id = 0x00;
-    m->type = effect_type; /* Waveform type */
-    m->b3 = 0x40;
-    m->b4 = 0x17;
-    m->b5 = 0x25;
-    m->b6 = 0x00;
-    m->b7 = 0xff;
-    m->b8 = 0xff;
-    m->b9 = param_sub;
-    m->b10 = 0x00;
-    m->b11 = env_sub_second;
-    m->b12 = 0x00;
-    m->b13 = 0x00;
-    m->b14 = 0x00;
+    struct t500rs_pkt_r04_periodic_ramp *p =
+        (struct t500rs_pkt_r04_periodic_ramp *)buf;
+    t500rs_build_r04_periodic(p, 0x2a, mag, offset, phase, period_ms);
   }
-  ret = t500rs_send_usb(t500rs, buf, sizeof(struct t500rs_r01_main));
+  ret = t500rs_send_usb(t500rs, buf, sizeof(struct t500rs_pkt_r04_periodic_ramp));
   if (ret) {
-    hid_err(t500rs->hdev, "Failed to send Report 0x01: %d\n", ret);
+    hid_err(t500rs->hdev, "Failed to send Report 0x04 (periodic): %d\n", ret);
     return ret;
   }
 
-  T500RS_DBG(t500rs, "%s effect %d uploaded\n", type_name, effect->id);
+  T500RS_DBG(t500rs, "%s effect %d uploaded (0x01 + 0x02 + 0x04)\n",
+             type_name, effect->id);
   return 0;
 }
 
@@ -1311,42 +1275,27 @@ static int t500rs_update_effect(void *data,
   switch (effect->type) {
   case FF_CONSTANT: {
       int level = effect->u.constant.level;
-      u16 direction = effect->direction;
-      s8 signed_level = t500rs_scale_const_with_direction(level, direction);
+      s8 signed_level = t500rs_scale_const_with_direction(level, effect->direction);
+      u16 param_sub, env_sub;
+      t500rs_index_to_subtypes(0, &param_sub, &env_sub);
       struct t500rs_r03_const *r3 = (struct t500rs_r03_const *)buf;
-      r3->id = 0x03;
-      r3->code = 0x0e;
-      r3->zero = 0x00;
-      r3->level = signed_level;
+      t500rs_build_r03_constant(r3, (u8)(param_sub & 0xff), signed_level);
       return t500rs_send_usb(t500rs, (u8 *)r3, sizeof(*r3));
     }
   case FF_PERIODIC: {
-      u8 mag = t500rs_scale_mag_u7(effect->u.periodic.magnitude);
-      u16 period = effect->u.periodic.period;
-      unsigned int idx = (unsigned int)effect->id;
-      u8 param_sub = (u8)(0x0e + (0x1c * idx));
+      /* Update periodic using protocol-accurate helpers and ms period */
+      u8 mag = t500rs_scale_periodic_magnitude(effect->u.periodic.magnitude);
+      u8 phase = t500rs_scale_periodic_phase(effect->u.periodic.phase);
+      u8 offset = t500rs_scale_periodic_offset(effect->u.periodic.offset);
+      u16 period_ms = effect->u.periodic.period;
+      if (period_ms == 0)
+        period_ms = 100;
 
-      if (period == 0)
-        period = 100;
-      {
-        u32 freq_hz100 = 100000U / period;
-        if (freq_hz100 < 1U) freq_hz100 = 1U;
-        if (freq_hz100 > 65535U) freq_hz100 = 65535U;
-        period = (u16)freq_hz100;
-      }
-
-      {
-        struct t500rs_r04_periodic *p = (struct t500rs_r04_periodic *)buf;
-        memset(p, 0, sizeof(*p));
-        p->id = 0x04;
-        p->code = param_sub;
-        p->zero = 0x00;
-        p->magnitude = mag;
-        p->offset = 0x00;
-        p->phase = 0x00;
-        p->period = cpu_to_le16(period);
-      }
-      return t500rs_send_usb(t500rs, buf, sizeof(struct t500rs_r04_periodic));
+      /* Use code 0x2a per Windows captures (NOT 0x0e!) */
+      struct t500rs_pkt_r04_periodic_ramp *p =
+          (struct t500rs_pkt_r04_periodic_ramp *)buf;
+      t500rs_build_r04_periodic(p, 0x2a, mag, offset, phase, period_ms);
+      return t500rs_send_usb(t500rs, buf, sizeof(*p));
     }
   case FF_RAMP: {
       int start_level = effect->u.ramp.start_level;

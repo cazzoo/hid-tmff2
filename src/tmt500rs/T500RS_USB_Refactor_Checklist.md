@@ -52,7 +52,9 @@ Legend: `[ ]` = TODO, `[x]` = done.
   - [x] `p->code1 = cpu_to_le16(code1);`.
   - [x] `p->code2 = cpu_to_le16(code2);` (0 if no envelope).
   - [x] `p->reserved = 0;`.
-- [ ] Replace existing `t500rs_r01_main` uses with this builder in all upload functions (deferred to wiring phase).
+- [x] Add `t500rs_scale_direction()` helper: Linux 0-65535 → device 0-35999.
+- [x] Wire builder into constant upload path.
+- [x] Wire builder into periodic upload path.
 
 **Note:** The waveform type (sine, triangle, saw, etc.) is NOT encoded in the 0x01 packet per Windows captures; it's determined at a higher level by SDL2/DirectInput.
 
@@ -66,8 +68,9 @@ Legend: `[ ]` = TODO, `[x]` = done.
   - [x] `t500rs_scale_periodic_phase()`: SDL 0..35999 → Device 0..255
   - [x] `t500rs_scale_periodic_offset()`: SDL -32768..32767 → Device -128..127
 - [x] Document that period is in MILLISECONDS (no Hz×100 conversion).
-- [ ] Remove all `Hz*100` period conversions from T500RS periodic upload/update (deferred to wiring phase).
-- [ ] Wire the new helper into periodic upload/update paths (deferred to wiring phase).
+- [x] Remove all `Hz*100` period conversions from T500RS periodic upload/update.
+- [x] Wire the new helper into periodic upload/update paths.
+- [x] Use code 0x2a (NOT 0x0e) per Windows captures.
 
 ---
 
@@ -104,7 +107,7 @@ Legend: `[ ]` = TODO, `[x]` = done.
   - [x] `s32 tmp = (sdl_level * 255) / 65535; return (s8)(tmp - 127);`.
   - [x] Maps SDL 0 → -127, SDL 32767 → 0, SDL 65535 → +127.
 - [x] Implement `t500rs_build_r03_constant(struct t500rs_r03_const *p, u8 code, s8 level)` helper.
-- [ ] Wire helpers into constant upload/update paths (deferred to wiring phase).
+- [x] Wire helpers into constant upload/update paths.
 
 ---
 
@@ -113,7 +116,7 @@ Legend: `[ ]` = TODO, `[x]` = done.
 - [x] Add protocol-accurate `struct t500rs_pkt_r02_envelope` (9 bytes, correct layout).
 - [x] Implement `t500rs_scale_envelope_level()`: SDL 0-32767 → device 0-255.
 - [x] Implement `t500rs_build_r02_envelope()` helper using correct struct.
-- [ ] Wire helper into upload paths (deferred to wiring phase).
+- [x] Wire helper into constant and periodic upload paths.
 - [ ] For effects without envelope, set `code2` in 0x01 to 0 and skip 0x02 (deferred).
 
 ---
