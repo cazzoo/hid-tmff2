@@ -46,16 +46,38 @@
  * separate from the legacy structs currently used by the upload paths.
  */
 
-/* 0x01 - Main upload (15 bytes) */
+/* 0x01 - Main upload (15 bytes)
+ *
+ * Per Windows captures (analysis.json):
+ * - Constant: 01 00 00 40 d0 07 00 00 00 0e 00 1c 00 00 00
+ * - Sine:     01 00 22 40 d0 07 00 00 00 2a 00 38 00 00 00
+ * - Spring:   01 00 40 40 d0 07 00 00 00 2a 00 38 00 00 00
+ *
+ * Structure:
+ * - b0: packet_type = 0x01
+ * - b1: effect_id (always 0x00 on T500RS)
+ * - b2: effect_type (0x00=const, 0x22=sine, 0x40=all conditionals)
+ * - b3: control (always 0x40)
+ * - b4-b5: duration_ms (LE)
+ * - b6-b7: delay_ms (LE)
+ * - b8: reserved (0x00)
+ * - b9-b10: code1/param_subtype (LE)
+ * - b11-b12: code2/env_subtype (LE)
+ * - b13-b14: reserved (0x00)
+ *
+ * NOTE: Direction is NOT in this packet!
+ */
 struct t500rs_pkt_r01_main {
-	u8 id;            /* 0x01 */
-	__le16 effect_id; /* Effect ID (0..15 for now) */
-	__le16 direction; /* 0..35999 in 0.01 degrees */
-	__le16 duration_ms;
-	__le16 delay_ms;
-	__le16 code1; /* packet_code_1 (parameter subtype) */
-	__le16 code2; /* packet_code_2 (envelope/second subtype) */
-	__le16 reserved;  /* always 0x0000 */
+	u8 id;             /* b0: 0x01 */
+	u8 effect_id;      /* b1: always 0x00 on T500RS */
+	u8 effect_type;    /* b2: 0x00=const, 0x22=sine, 0x40=all conditionals */
+	u8 control;        /* b3: always 0x40 */
+	__le16 duration_ms;/* b4-b5: duration in ms */
+	__le16 delay_ms;   /* b6-b7: delay in ms */
+	u8 reserved1;      /* b8: 0x00 */
+	__le16 code1;      /* b9-b10: param subtype (0x000e, 0x002a, etc.) */
+	__le16 code2;      /* b11-b12: env subtype (0x001c, 0x0038, etc.) */
+	__le16 reserved2;  /* b13-b14: 0x0000 */
 } __packed;
 
 /* 0x04 - Periodic / Ramp parameters (8 bytes) */
@@ -258,29 +280,35 @@ static inline u16 t500rs_scale_direction(u16 linux_dir) {
  * - delay_ms: delay before effect starts
  * - code1: parameter subtype (used by 0x03/0x04/0x05)
  * - code2: envelope subtype (used by 0x02), or second conditional subtype
- * - reserved: always 0
  *
- * Note: the waveform type (sine, triangle, saw, etc.) is NOT encoded in
- * the 0x01 packet; it's determined at a higher level by SDL2/DirectInput.
+ * Per Windows captures, effect_type values are:
+ * - 0x00 = Constant
+ * - 0x22 = Sine
+ * - 0x21 = Triangle (inferred)
+ * - 0x23 = Sawtooth Up (inferred)
+ * - 0x24 = Sawtooth Down / Ramp (inferred)
+ * - 0x40 = Spring
+ * - 0x41 = Damper/Friction/Inertia
  *
- * This helper fills a t500rs_pkt_r01_main struct (15 bytes) ready for USB send.
+ * NOTE: Direction is NOT in the 0x01 packet on T500RS!
  */
 static void t500rs_build_r01_main(struct t500rs_pkt_r01_main *p,
-                                  u16 hw_effect_id,
-                                  u16 direction,
+                                  u8 effect_type,
                                   u16 duration_ms,
                                   u16 delay_ms,
                                   u16 code1,
                                   u16 code2) {
   memset(p, 0, sizeof(*p));
   p->id = 0x01;
-  p->effect_id = cpu_to_le16(hw_effect_id);
-  p->direction = cpu_to_le16(direction);
+  p->effect_id = 0x00;           /* Always 0x00 on T500RS */
+  p->effect_type = effect_type;  /* 0x00=const, 0x22=sine, 0x40=spring, etc. */
+  p->control = 0x40;             /* Always 0x40 per Windows captures */
   p->duration_ms = cpu_to_le16(duration_ms);
   p->delay_ms = cpu_to_le16(delay_ms);
+  p->reserved1 = 0;
   p->code1 = cpu_to_le16(code1);
   p->code2 = cpu_to_le16(code2);
-  p->reserved = 0;
+  p->reserved2 = 0;
 }
 
 /*
@@ -415,36 +443,42 @@ static void t500rs_build_r05_condition(struct t500rs_pkt_r05_condition *p,
                                        u8 code,
                                        const struct ff_condition_effect *c,
                                        bool is_first_packet) {
+  u8 right_sat, left_sat;
+
   memset(p, 0, sizeof(*p));
   p->id = 0x05;
   p->code = code;
 
-  if (is_first_packet && c) {
-    /* First packet: X-axis parameters */
-    /* Scale coefficients: SDL 0-32767 → device (using /256 for ~0-127 range) */
-    p->right_coeff = cpu_to_le16((u16)(c->right_coeff / 256));
-    p->left_coeff = cpu_to_le16((u16)(c->left_coeff / 256));
+  if (!c)
+    return;
 
-    /* Scale deadband: SDL 0-65535 → device (using /256 for ~0-255 range) */
-    p->deadband = cpu_to_le16((u16)(c->deadband / 256));
+  /*
+   * Scale saturation: SDL 0-65535 → device 0-100 (0x64)
+   * Per Windows captures, observed values are 0x54 (84) and 0x64 (100).
+   * The device appears to reject values > 100, so we clamp.
+   */
+  right_sat = (u8)((c->right_saturation * 100) / 65535);
+  if (right_sat > 100)
+    right_sat = 100;
+  left_sat = (u8)((c->left_saturation * 100) / 65535);
+  if (left_sat > 100)
+    left_sat = 100;
 
-    /* Scale center: SDL -32767..+32767 → device 0-255 */
-    p->center = (u8)((c->center + 32767) / 256);
+  /*
+   * WORKAROUND: Per Windows captures, BOTH X-axis and Y-axis packets have
+   * zeroed coefficients/deadband/center. Only saturation is set.
+   * Examples from Windows:
+   *   X-axis: 05 2a 00 00 00 00 00 00 00 54 54
+   *   Y-axis: 05 38 00 00 00 00 00 00 00 54 54
+   *
+   * Sending non-zero coefficients may confuse the device firmware.
+   * For now, send zeros for all parameters except saturation.
+   */
+  p->right_sat = right_sat;
+  p->left_sat = left_sat;
 
-    /* Scale saturation: SDL 0-32767 → device 0-255 */
-    /* Observed values in captures: 0x54 (84), 0x64 (100) */
-    p->right_sat = (u8)((c->right_saturation * 255) / 32767);
-    p->left_sat = (u8)((c->left_saturation * 255) / 32767);
-  } else if (c) {
-    /*
-     * Second packet (Y-axis): Per Windows captures, the Y-axis packet should
-     * still have saturation values set, but coefficients/deadband/center zeroed.
-     * Example: `05 38 00 00 00 00 00 00 00 54 54` - zeros but saturation 0x54
-     */
-    p->right_sat = (u8)((c->right_saturation * 255) / 32767);
-    p->left_sat = (u8)((c->left_saturation * 255) / 32767);
-  }
-  /* If c is NULL (shouldn't happen normally), leave all zeros */
+  /* Coefficients, deadband, center are intentionally left as zeros */
+  (void)is_first_packet; /* Unused for now - both packets get zeros */
 }
 
 /*
@@ -697,11 +731,12 @@ static int t500rs_upload_constant(struct t500rs_device_entry *t500rs,
     return ret;
   }
 
-  /* Report 0x01 - Main effect upload using protocol-accurate struct with hw_id */
+  /* Report 0x01 - Main effect upload
+   * Per Windows captures: effect_type=0x00 for constant
+   */
   {
     struct t500rs_pkt_r01_main *m = (struct t500rs_pkt_r01_main *)buf;
-    t500rs_build_r01_main(m, (u16)hw_id, direction_dev, duration_ms, delay_ms,
-                          param_sub, env_sub);
+    t500rs_build_r01_main(m, 0x00, duration_ms, delay_ms, param_sub, env_sub);
   }
   ret = t500rs_send_usb(t500rs, buf, sizeof(struct t500rs_pkt_r01_main));
   if (ret) {
@@ -782,7 +817,12 @@ static int t500rs_upload_condition(struct t500rs_device_entry *t500rs,
   direction_dev = t500rs_scale_direction(effect->direction);
   duration_ms = effect->replay.length ? effect->replay.length : 0xffff;
   delay_ms = effect->replay.delay;
-  t500rs_index_to_subtypes(hw_id, &param_sub, &env_sub);
+
+  /* Per Windows captures, conditionals use FIXED codes 0x2a/0x38
+   * (NOT index-based like constant/periodic effects!)
+   */
+  param_sub = 0x002a;
+  env_sub = 0x0038;
 
   T500RS_DBG(t500rs,
              "Upload %s: id=%d, hw_id=%d, gain=%u%%, dir=%u, param_sub=0x%04x, "
@@ -797,20 +837,15 @@ static int t500rs_upload_condition(struct t500rs_device_entry *t500rs,
     return ret;
   }
 
-  /* Report 0x01 - Main effect upload using protocol-accurate struct
-   * Per Windows captures: code1=param_sub, code2=env_sub (NOT hardcoded!)
-   * These vary per effect index: idx 0 → 0x0e/0x1c, idx 1 → 0x2a/0x38, etc.
+  /*
+   * CRITICAL: Windows sends packets in this order for conditionals:
+   *   1. 0x05 X-axis parameters
+   *   2. 0x05 Y-axis parameters
+   *   3. 0x01 Main effect descriptor
+   *   4. 0x41 START
+   *
+   * This is DIFFERENT from constant/periodic which send 0x01 first!
    */
-  {
-    struct t500rs_pkt_r01_main *m = (struct t500rs_pkt_r01_main *)buf;
-    t500rs_build_r01_main(m, (u16)hw_id, direction_dev, duration_ms, delay_ms,
-                          param_sub, env_sub);
-  }
-  ret = t500rs_send_usb(t500rs, buf, sizeof(struct t500rs_pkt_r01_main));
-  if (ret) {
-    hid_err(t500rs->hdev, "Failed to send Report 0x01 (condition): %d\n", ret);
-    return ret;
-  }
 
   /* Report 0x05 - X-axis condition parameters (code = param_sub low byte)
    * is_first_packet=true fills in the condition data
@@ -818,6 +853,9 @@ static int t500rs_upload_condition(struct t500rs_device_entry *t500rs,
   {
     struct t500rs_pkt_r05_condition *p = (struct t500rs_pkt_r05_condition *)buf;
     t500rs_build_r05_condition(p, (u8)(param_sub & 0xff), cond, true);
+    hid_info(t500rs->hdev, "0x05 X-axis: %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x\n",
+             buf[0], buf[1], buf[2], buf[3], buf[4], buf[5],
+             buf[6], buf[7], buf[8], buf[9], buf[10]);
   }
   ret = t500rs_send_usb(t500rs, buf, sizeof(struct t500rs_pkt_r05_condition));
   if (ret) {
@@ -833,6 +871,9 @@ static int t500rs_upload_condition(struct t500rs_device_entry *t500rs,
   {
     struct t500rs_pkt_r05_condition *p = (struct t500rs_pkt_r05_condition *)buf;
     t500rs_build_r05_condition(p, (u8)(env_sub & 0xff), cond, false);
+    hid_info(t500rs->hdev, "0x05 Y-axis: %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x\n",
+             buf[0], buf[1], buf[2], buf[3], buf[4], buf[5],
+             buf[6], buf[7], buf[8], buf[9], buf[10]);
   }
   ret = t500rs_send_usb(t500rs, buf, sizeof(struct t500rs_pkt_r05_condition));
   if (ret) {
@@ -840,7 +881,26 @@ static int t500rs_upload_condition(struct t500rs_device_entry *t500rs,
     return ret;
   }
 
-  T500RS_DBG(t500rs, "%s effect %d uploaded (0x01 + 2x 0x05)\n",
+  /* Report 0x01 - Main effect upload (AFTER 0x05 packets for conditionals!)
+   * Per Windows captures: ALL conditional effects use effect_type=0x40
+   * (Spring: 01 00 40 40..., Damper: 01 00 40 40...)
+   * Codes are fixed at 0x002a/0x0038 for all conditionals.
+   */
+  {
+    u8 effect_type = 0x40;  /* All conditionals use 0x40 per Windows captures */
+    struct t500rs_pkt_r01_main *m = (struct t500rs_pkt_r01_main *)buf;
+    t500rs_build_r01_main(m, effect_type, duration_ms, delay_ms, param_sub, env_sub);
+    hid_info(t500rs->hdev, "0x01 cond: %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x\n",
+             buf[0], buf[1], buf[2], buf[3], buf[4], buf[5], buf[6],
+             buf[7], buf[8], buf[9], buf[10], buf[11], buf[12], buf[13], buf[14]);
+  }
+  ret = t500rs_send_usb(t500rs, buf, sizeof(struct t500rs_pkt_r01_main));
+  if (ret) {
+    hid_err(t500rs->hdev, "Failed to send Report 0x01 (condition): %d\n", ret);
+    return ret;
+  }
+
+  T500RS_DBG(t500rs, "%s effect %d uploaded (2x 0x05 + 0x01)\n",
              type_name, effect->id);
   return 0;
 }
@@ -866,32 +926,42 @@ static int t500rs_upload_periodic(struct t500rs_device_entry *t500rs,
   int ret;
   int hw_id;
   const char *type_name;
+  u8 effect_type;
   u16 param_sub, env_sub;
   u16 direction_dev, duration_ms, delay_ms;
   u16 period_ms;
   u8 mag, phase, offset;
 
   /*
-   * Determine waveform name for debug.
+   * Determine waveform name and effect_type for 0x01 packet.
    *
-   * Per Windows captures (T500RS_USB_Protocol_Analysis.md), the waveform type
-   * is NOT encoded in USB packets - it appears to be determined by SDL2/DirectInput
-   * at a higher level. We only support the waveforms observed in captures.
+   * Per Windows captures, waveform type IS encoded in the 0x01 packet's
+   * effect_type field (byte 2). We only support the waveforms observed in captures.
    *
    * FF_SQUARE is rejected because it's not in our supported effects list.
+   *
+   * Per Windows captures, effect_type values for periodic:
+   * - 0x21 = Triangle (inferred from protocol pattern)
+   * - 0x22 = Sine (confirmed from analysis.json)
+   * - 0x23 = Sawtooth Up (inferred)
+   * - 0x24 = Sawtooth Down (inferred)
    */
   switch (effect->u.periodic.waveform) {
   case FF_TRIANGLE:
     type_name = "triangle";
+    effect_type = 0x21;
     break;
   case FF_SINE:
     type_name = "sine";
+    effect_type = 0x22;
     break;
   case FF_SAW_UP:
     type_name = "sawtooth_up";
+    effect_type = 0x23;
     break;
   case FF_SAW_DOWN:
     type_name = "sawtooth_down";
+    effect_type = 0x24;
     break;
   default:
     /* FF_SQUARE and other unsupported waveforms */
@@ -934,11 +1004,10 @@ static int t500rs_upload_periodic(struct t500rs_device_entry *t500rs,
     return ret;
   }
 
-  /* Report 0x01 - Main effect upload using protocol-accurate struct */
+  /* Report 0x01 - Main effect upload */
   {
     struct t500rs_pkt_r01_main *m = (struct t500rs_pkt_r01_main *)buf;
-    t500rs_build_r01_main(m, (u16)hw_id, direction_dev, duration_ms, delay_ms,
-                          param_sub, env_sub);
+    t500rs_build_r01_main(m, effect_type, duration_ms, delay_ms, param_sub, env_sub);
   }
   ret = t500rs_send_usb(t500rs, buf, sizeof(struct t500rs_pkt_r01_main));
   if (ret) {
@@ -1024,11 +1093,12 @@ static int t500rs_upload_ramp(struct t500rs_device_entry *t500rs,
     return ret;
   }
 
-  /* Report 0x01 - Main effect upload using protocol-accurate struct */
+  /* Report 0x01 - Main effect upload
+   * Per Windows captures: effect_type=0x24 for ramp (sawtooth down)
+   */
   {
     struct t500rs_pkt_r01_main *m = (struct t500rs_pkt_r01_main *)buf;
-    t500rs_build_r01_main(m, (u16)hw_id, direction_dev, duration_ms, delay_ms,
-                          param_sub, env_sub);
+    t500rs_build_r01_main(m, 0x24, duration_ms, delay_ms, param_sub, env_sub);
   }
   ret = t500rs_send_usb(t500rs, buf, sizeof(struct t500rs_pkt_r01_main));
   if (ret) {
