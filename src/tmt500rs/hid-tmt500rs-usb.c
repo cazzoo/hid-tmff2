@@ -81,14 +81,27 @@ struct t500rs_pkt_r01_main {
 } __packed;
 
 /* 0x04 - Periodic / Ramp parameters (8 bytes) */
+/* 0x04 packet byte order per Windows USB captures:
+ * Example: 04 2a 00 06 00 3f 0a 00 (sine, mag=6, phase=63, period=10ms)
+ *   b0=0x04 id
+ *   b1=0x2a code
+ *   b2=0x00 reserved1 (always zero in captures)
+ *   b3=0x06 magnitude
+ *   b4=0x00 offset
+ *   b5=0x3f phase
+ *   b6-b7=0x000a period (little-endian)
+ *
+ * NOTE: The protocol doc had the wrong byte order. This struct matches
+ * actual Windows USB captures where period is at bytes 6-7, not 5-6.
+ */
 struct t500rs_pkt_r04_periodic_ramp {
-	u8 id;        /* 0x04 */
-	u8 code;      /* from 0x01 code1 (param subtype low byte) */
-	u8 magnitude; /* 0..127 */
-	u8 offset;    /* signed, but stored as u8; mapping TBD */
-	u8 phase;     /* 0..255 */
-	__le16 period_ms; /* period in milliseconds */
-	u8 reserved;      /* 0x00 */
+	u8 id;            /* b0: 0x04 */
+	u8 code;          /* b1: subtype code (0x2a for periodic/ramp) */
+	u8 reserved1;     /* b2: always 0x00 */
+	u8 magnitude;     /* b3: 0..127 magnitude */
+	u8 offset;        /* b4: signed -127..+127 offset */
+	u8 phase;         /* b5: 0..255 phase (0-360 degrees) */
+	__le16 period_ms; /* b6-b7: period in milliseconds */
 } __packed;
 
 /* 0x05 - Conditional parameters (11 bytes) */
@@ -187,37 +200,55 @@ struct t500rs_device_entry {
    * for concurrent effects and tracks them per logical effect slot.
    *
    * hw_id[logical_id] = hardware effect ID assigned to that logical slot
-   * hw_id_used[hw_slot] = true if that hardware slot is currently in use
+   * hw_id_in_use[hw_slot] = true if that hardware slot is currently in use
+   * hw_id_owner[hw_slot] = logical_id that owns this hw slot (valid only if in_use)
    *
    * These are wired in by later refactor phases; for now they are populated
    * but legacy paths continue to use effect_id=0 for all effects.
    */
   u16 hw_id[T500RS_MAX_EFFECTS];
   bool hw_id_in_use[T500RS_MAX_HW_EFFECTS];
+  u16 hw_id_owner[T500RS_MAX_HW_EFFECTS]; /* Which logical_id owns each hw slot */
 };
 
 /*
  * Allocate a hardware effect ID for the given logical effect id.
+ *
+ * Per Windows USB captures, the T500RS device has specific expectations:
+ * - Index 0 (subtypes 0x0e/0x1c) is ONLY valid for constant effects (0x03 packets)
+ * - Indices 1+ (subtypes 0x2a/0x38, etc.) are valid for all effect types
+ * - Periodic/ramp effects (0x04 packets) sent with index 0 subtypes cause EPROTO
+ *
+ * The skip_index_zero parameter should be true for periodic, ramp, and conditional
+ * effects to avoid the firmware rejecting the upload.
+ *
  * Returns the hardware ID (0..15) on success, or -ENOSPC if all slots are used.
  */
 static int t500rs_alloc_hw_id(struct t500rs_device_entry *t500rs,
-                              unsigned int logical_id) {
+                              unsigned int logical_id,
+                              bool skip_index_zero) {
   unsigned int i;
+  unsigned int start_idx = skip_index_zero ? 1 : 0;
+  unsigned int current_hw_id;
+
   if (logical_id >= T500RS_MAX_EFFECTS)
     return -EINVAL;
 
-  /* If already assigned, return the existing hw_id */
-  if (t500rs->hw_id_in_use[t500rs->hw_id[logical_id]] &&
-      t500rs->hw_id[logical_id] < T500RS_MAX_HW_EFFECTS) {
-    /* Check if this logical_id truly owns this slot (simple 1:1 for now) */
-    return t500rs->hw_id[logical_id];
+  /* Check if this logical_id already owns a hw slot */
+  current_hw_id = t500rs->hw_id[logical_id];
+  if (current_hw_id < T500RS_MAX_HW_EFFECTS &&
+      t500rs->hw_id_in_use[current_hw_id] &&
+      t500rs->hw_id_owner[current_hw_id] == logical_id) {
+    /* This logical_id already owns this slot */
+    return (int)current_hw_id;
   }
 
-  /* Find a free hardware slot */
-  for (i = 0; i < T500RS_MAX_HW_EFFECTS; i++) {
+  /* Find a free hardware slot, starting from start_idx */
+  for (i = start_idx; i < T500RS_MAX_HW_EFFECTS; i++) {
     if (!t500rs->hw_id_in_use[i]) {
       t500rs->hw_id[logical_id] = (u16)i;
       t500rs->hw_id_in_use[i] = true;
+      t500rs->hw_id_owner[i] = (u16)logical_id;
       return (int)i;
     }
   }
@@ -234,9 +265,13 @@ static int t500rs_get_hw_id(struct t500rs_device_entry *t500rs,
   if (logical_id >= T500RS_MAX_EFFECTS)
     return -EINVAL;
 
-  /* If not yet allocated, allocate now */
+  /* If not yet allocated, allocate now.
+   * Note: This wrapper doesn't know the effect type, so it defaults to
+   * skip_index_zero=true for safety. Direct callers should use
+   * t500rs_alloc_hw_id() with the appropriate skip_index_zero value.
+   */
   if (!t500rs->hw_id_in_use[t500rs->hw_id[logical_id]])
-    return t500rs_alloc_hw_id(t500rs, logical_id);
+    return t500rs_alloc_hw_id(t500rs, logical_id, true);
 
   return (int)t500rs->hw_id[logical_id];
 }
@@ -252,8 +287,11 @@ static void t500rs_free_hw_id(struct t500rs_device_entry *t500rs,
     return;
 
   hw_slot = t500rs->hw_id[logical_id];
-  if (hw_slot < T500RS_MAX_HW_EFFECTS)
+  if (hw_slot < T500RS_MAX_HW_EFFECTS &&
+      t500rs->hw_id_owner[hw_slot] == logical_id) {
     t500rs->hw_id_in_use[hw_slot] = false;
+    t500rs->hw_id_owner[hw_slot] = 0xFFFF; /* Mark as unowned */
+  }
 }
 
 /*
@@ -334,14 +372,17 @@ static void t500rs_build_r04_periodic(struct t500rs_pkt_r04_periodic_ramp *p,
                                       s8 offset,
                                       u8 phase,
                                       u16 period_ms) {
+  /* Byte order per Windows USB captures (example: 04 2a 00 06 00 3f 0a 00):
+   *   b0=0x04, b1=code, b2=reserved1, b3=mag, b4=offset, b5=phase, b6-b7=period
+   */
   memset(p, 0, sizeof(*p));
-  p->id = 0x04;
-  p->code = code;
-  p->magnitude = magnitude;
-  p->offset = (u8)offset; /* stored as u8, but represents signed value */
-  p->phase = phase;
-  p->period_ms = cpu_to_le16(period_ms);
-  p->reserved = 0;
+  p->id = 0x04;              /* b0 */
+  p->code = code;            /* b1 */
+  p->reserved1 = 0;          /* b2: always 0x00 */
+  p->magnitude = magnitude;  /* b3 */
+  p->offset = (u8)offset;    /* b4 */
+  p->phase = phase;          /* b5 */
+  p->period_ms = cpu_to_le16(period_ms); /* b6-b7 */
 }
 
 /*
@@ -412,13 +453,14 @@ static void t500rs_build_r04_ramp(struct t500rs_pkt_r04_periodic_ramp *p,
   /* Simple approximation: (end - start) / 512 to fit in s8 range */
   offset = (s8)((end_level - start_level) / 512);
 
-  p->id = 0x04;
-  p->code = code;
-  p->magnitude = magnitude;
-  p->offset = (u8)offset;
-  p->phase = 0; /* Ramp doesn't use phase */
-  p->period_ms = cpu_to_le16(duration_ms);
-  p->reserved = 0;
+  /* Byte order per Windows USB captures: b0=id, b1=code, b2=reserved1, b3=mag, b4=offset, b5=phase, b6-b7=period */
+  p->id = 0x04;              /* b0 */
+  p->code = code;            /* b1 */
+  p->reserved1 = 0;          /* b2: always 0x00 */
+  p->magnitude = magnitude;  /* b3 */
+  p->offset = (u8)offset;    /* b4 */
+  p->phase = 0;              /* b5: Ramp doesn't use phase */
+  p->period_ms = cpu_to_le16(duration_ms);  /* b6-b7 */
 }
 
 /*
@@ -698,8 +740,10 @@ static int t500rs_upload_constant(struct t500rs_device_entry *t500rs,
   T500RS_DBG(t500rs, "Upload constant: id=%d, level=%d, dir=%u\n",
              effect->id, level, effect->direction);
 
-  /* Allocate a hardware effect ID for this logical effect */
-  hw_id = t500rs_alloc_hw_id(t500rs, effect->id);
+  /* Allocate a hardware effect ID for this logical effect.
+   * Constant effects CAN use index 0 (subtypes 0x0e/0x1c) per Windows captures.
+   */
+  hw_id = t500rs_alloc_hw_id(t500rs, effect->id, false);
   if (hw_id < 0) {
     hid_err(t500rs->hdev, "Failed to allocate hw_id for effect %d\n",
             effect->id);
@@ -719,32 +763,31 @@ static int t500rs_upload_constant(struct t500rs_device_entry *t500rs,
   delay_ms = effect->replay.delay;
   t500rs_index_to_subtypes(hw_id, &param_sub, &env_sub);
 
-  /* Report 0x02 - Envelope (attack/fade) using new protocol-accurate struct */
+  /*
+   * CRITICAL: Windows sends packets in this order for constant effects:
+   *   1. 0x02 Envelope parameters
+   *   2. 0x03 Constant force level
+   *   3. 0x01 Main effect descriptor
+   *   4. 0x41 START
+   */
+
+  /* Report 0x02 - Envelope (FIRST per Windows captures)
+   *
+   * NOTE: Windows driver always sends zeros for envelope on constant effects.
+   * This appears to be a firmware limitation - envelope is not supported
+   * for constant effects on T500RS hardware.
+   */
   {
     struct t500rs_pkt_r02_envelope *env = (struct t500rs_pkt_r02_envelope *)buf;
-    t500rs_build_r02_envelope(env, (u8)(env_sub & 0xff),
-                              &effect->u.constant.envelope);
+    t500rs_build_r02_envelope(env, (u8)(env_sub & 0xff), NULL);
   }
   ret = t500rs_send_usb(t500rs, buf, sizeof(struct t500rs_pkt_r02_envelope));
   if (ret) {
-    hid_err(t500rs->hdev, "Failed to send Report 0x02: %d\n", ret);
+    hid_err(t500rs->hdev, "Failed to send Report 0x02 (const): %d\n", ret);
     return ret;
   }
 
-  /* Report 0x01 - Main effect upload
-   * Per Windows captures: effect_type=0x00 for constant
-   */
-  {
-    struct t500rs_pkt_r01_main *m = (struct t500rs_pkt_r01_main *)buf;
-    t500rs_build_r01_main(m, 0x00, duration_ms, delay_ms, param_sub, env_sub);
-  }
-  ret = t500rs_send_usb(t500rs, buf, sizeof(struct t500rs_pkt_r01_main));
-  if (ret) {
-    hid_err(t500rs->hdev, "Failed to send Report 0x01: %d\n", ret);
-    return ret;
-  }
-
-  /* Report 0x03 - Constant force level */
+  /* Report 0x03 - Constant force level (SECOND per Windows captures) */
   signed_level = t500rs_scale_const_with_direction(level, effect->direction);
   {
     struct t500rs_r03_const *r3 = (struct t500rs_r03_const *)buf;
@@ -757,8 +800,21 @@ static int t500rs_upload_constant(struct t500rs_device_entry *t500rs,
     return ret;
   }
 
+  /* Report 0x01 - Main effect descriptor (THIRD per Windows captures)
+   * Per Windows captures: effect_type=0x00 for constant
+   */
+  {
+    struct t500rs_pkt_r01_main *m = (struct t500rs_pkt_r01_main *)buf;
+    t500rs_build_r01_main(m, 0x00, duration_ms, delay_ms, param_sub, env_sub);
+  }
+  ret = t500rs_send_usb(t500rs, buf, sizeof(struct t500rs_pkt_r01_main));
+  if (ret) {
+    hid_err(t500rs->hdev, "Failed to send Report 0x01: %d\n", ret);
+    return ret;
+  }
+
   T500RS_DBG(t500rs,
-             "Constant effect %d uploaded (hw_id=%d, 0x02 + 0x01 + 0x03)\n",
+             "Constant effect %d uploaded (hw_id=%d, 0x02 + 0x03 + 0x01)\n",
              effect->id, hw_id);
   return 0;
 }
@@ -805,24 +861,23 @@ static int t500rs_upload_condition(struct t500rs_device_entry *t500rs,
     return -EINVAL;
   }
 
-  /* Allocate a hardware effect ID for this logical effect */
-  hw_id = t500rs_alloc_hw_id(t500rs, effect->id);
+  /* Allocate a hardware effect ID for this logical effect.
+   * Conditional effects MUST skip index 0 - the device rejects 0x05 packets
+   * with index 0 subtypes (EPROTO). Per Windows captures, all conditional
+   * effects use index 1+ (subtypes 0x2a/0x38 or higher).
+   */
+  hw_id = t500rs_alloc_hw_id(t500rs, effect->id, true);
   if (hw_id < 0) {
     hid_err(t500rs->hdev, "Failed to allocate hw_id for %s effect %d\n",
             type_name, effect->id);
     return hw_id;
   }
 
-  /* Compute protocol parameters */
+  /* Per Windows captures, conditional effects use index-based subtypes */
   direction_dev = t500rs_scale_direction(effect->direction);
   duration_ms = effect->replay.length ? effect->replay.length : 0xffff;
   delay_ms = effect->replay.delay;
-
-  /* Per Windows captures, conditionals use FIXED codes 0x2a/0x38
-   * (NOT index-based like constant/periodic effects!)
-   */
-  param_sub = 0x002a;
-  env_sub = 0x0038;
+  t500rs_index_to_subtypes(hw_id, &param_sub, &env_sub);
 
   T500RS_DBG(t500rs,
              "Upload %s: id=%d, hw_id=%d, gain=%u%%, dir=%u, param_sub=0x%04x, "
@@ -853,9 +908,6 @@ static int t500rs_upload_condition(struct t500rs_device_entry *t500rs,
   {
     struct t500rs_pkt_r05_condition *p = (struct t500rs_pkt_r05_condition *)buf;
     t500rs_build_r05_condition(p, (u8)(param_sub & 0xff), cond, true);
-    hid_info(t500rs->hdev, "0x05 X-axis: %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x\n",
-             buf[0], buf[1], buf[2], buf[3], buf[4], buf[5],
-             buf[6], buf[7], buf[8], buf[9], buf[10]);
   }
   ret = t500rs_send_usb(t500rs, buf, sizeof(struct t500rs_pkt_r05_condition));
   if (ret) {
@@ -871,9 +923,6 @@ static int t500rs_upload_condition(struct t500rs_device_entry *t500rs,
   {
     struct t500rs_pkt_r05_condition *p = (struct t500rs_pkt_r05_condition *)buf;
     t500rs_build_r05_condition(p, (u8)(env_sub & 0xff), cond, false);
-    hid_info(t500rs->hdev, "0x05 Y-axis: %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x\n",
-             buf[0], buf[1], buf[2], buf[3], buf[4], buf[5],
-             buf[6], buf[7], buf[8], buf[9], buf[10]);
   }
   ret = t500rs_send_usb(t500rs, buf, sizeof(struct t500rs_pkt_r05_condition));
   if (ret) {
@@ -884,15 +933,11 @@ static int t500rs_upload_condition(struct t500rs_device_entry *t500rs,
   /* Report 0x01 - Main effect upload (AFTER 0x05 packets for conditionals!)
    * Per Windows captures: ALL conditional effects use effect_type=0x40
    * (Spring: 01 00 40 40..., Damper: 01 00 40 40...)
-   * Codes are fixed at 0x002a/0x0038 for all conditionals.
    */
   {
     u8 effect_type = 0x40;  /* All conditionals use 0x40 per Windows captures */
     struct t500rs_pkt_r01_main *m = (struct t500rs_pkt_r01_main *)buf;
     t500rs_build_r01_main(m, effect_type, duration_ms, delay_ms, param_sub, env_sub);
-    hid_info(t500rs->hdev, "0x01 cond: %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x\n",
-             buf[0], buf[1], buf[2], buf[3], buf[4], buf[5], buf[6],
-             buf[7], buf[8], buf[9], buf[10], buf[11], buf[12], buf[13], buf[14]);
   }
   ret = t500rs_send_usb(t500rs, buf, sizeof(struct t500rs_pkt_r01_main));
   if (ret) {
@@ -970,8 +1015,12 @@ static int t500rs_upload_periodic(struct t500rs_device_entry *t500rs,
     return -EINVAL;
   }
 
-  /* Allocate a hardware effect ID for this logical effect */
-  hw_id = t500rs_alloc_hw_id(t500rs, effect->id);
+  /* Allocate a hardware effect ID for this logical effect.
+   * Periodic effects MUST skip index 0 - the device rejects 0x04 packets
+   * with index 0 subtypes (EPROTO). Per Windows captures, all periodic
+   * effects use index 1+ (subtypes 0x2a/0x38 or higher).
+   */
+  hw_id = t500rs_alloc_hw_id(t500rs, effect->id, true);
   if (hw_id < 0) {
     hid_err(t500rs->hdev, "Failed to allocate hw_id for %s effect %d\n",
             type_name, effect->id);
@@ -989,7 +1038,9 @@ static int t500rs_upload_periodic(struct t500rs_device_entry *t500rs,
   if (period_ms == 0)
     period_ms = 100; /* Default 100ms if not specified */
 
-  /* Use hw_id for subtype calculation */
+  /* Use index-based subtypes like all other effect types.
+   * The device uses these subtypes to associate parameter packets with effect slots.
+   */
   t500rs_index_to_subtypes(hw_id, &param_sub, &env_sub);
 
   T500RS_DBG(t500rs,
@@ -1000,11 +1051,59 @@ static int t500rs_upload_periodic(struct t500rs_device_entry *t500rs,
   /* Pre-upload STOP to clear the slot (Windows parity) */
   ret = t500rs_send_stop(t500rs, (u8)hw_id);
   if (ret) {
-    hid_err(t500rs->hdev, "Pre-upload STOP failed: %d\n", ret);
+    hid_warn(t500rs->hdev, "Pre-upload STOP for periodic failed: %d (continuing)\n", ret);
+    /* Don't fail - the slot might already be empty */
+  }
+
+  /* Pre-upload: Send 0x42 status/sync commands like Windows does */
+  buf[0] = 0x42;
+  buf[1] = 0x05;
+  t500rs_send_usb(t500rs, buf, 2); /* Ignore errors - these are optional sync */
+
+  buf[0] = 0x42;
+  buf[1] = 0x04;
+  t500rs_send_usb(t500rs, buf, 2);
+
+  /*
+   * CRITICAL: Windows sends packets in this order for periodic effects:
+   *   1. 0x02 Envelope parameters
+   *   2. 0x04 Periodic parameters
+   *   3. 0x01 Main effect descriptor
+   *   4. 0x41 START
+   *
+   * This is DIFFERENT from sending 0x01 first!
+   */
+
+  /* Report 0x02 - Envelope (FIRST per Windows captures)
+   *
+   * NOTE: Windows driver always sends zeros for envelope on periodic effects.
+   * Non-zero envelope values cause EPROTO on subsequent 0x04 packet.
+   * This appears to be a firmware limitation - envelope is not supported
+   * for periodic effects on T500RS hardware.
+   */
+  {
+    struct t500rs_pkt_r02_envelope *env = (struct t500rs_pkt_r02_envelope *)buf;
+    t500rs_build_r02_envelope(env, (u8)(env_sub & 0xff), NULL);
+  }
+  ret = t500rs_send_usb(t500rs, buf, sizeof(struct t500rs_pkt_r02_envelope));
+  if (ret) {
+    hid_err(t500rs->hdev, "Failed to send Report 0x02 (periodic): %d\n", ret);
     return ret;
   }
 
-  /* Report 0x01 - Main effect upload */
+  /* Report 0x04 - Periodic parameters (SECOND per Windows captures) */
+  {
+    struct t500rs_pkt_r04_periodic_ramp *p =
+        (struct t500rs_pkt_r04_periodic_ramp *)buf;
+    t500rs_build_r04_periodic(p, (u8)(param_sub & 0xff), mag, offset, phase, period_ms);
+  }
+  ret = t500rs_send_usb(t500rs, buf, sizeof(struct t500rs_pkt_r04_periodic_ramp));
+  if (ret) {
+    hid_err(t500rs->hdev, "Failed to send Report 0x04 (periodic): %d\n", ret);
+    return ret;
+  }
+
+  /* Report 0x01 - Main effect descriptor (THIRD per Windows captures) */
   {
     struct t500rs_pkt_r01_main *m = (struct t500rs_pkt_r01_main *)buf;
     t500rs_build_r01_main(m, effect_type, duration_ms, delay_ms, param_sub, env_sub);
@@ -1015,33 +1114,7 @@ static int t500rs_upload_periodic(struct t500rs_device_entry *t500rs,
     return ret;
   }
 
-  /* Report 0x02 - Envelope using protocol-accurate struct */
-  {
-    struct t500rs_pkt_r02_envelope *env = (struct t500rs_pkt_r02_envelope *)buf;
-    t500rs_build_r02_envelope(env, (u8)(env_sub & 0xff),
-                              &effect->u.periodic.envelope);
-  }
-  ret = t500rs_send_usb(t500rs, buf, sizeof(struct t500rs_pkt_r02_envelope));
-  if (ret) {
-    hid_err(t500rs->hdev, "Failed to send Report 0x02 (periodic): %d\n", ret);
-    return ret;
-  }
-
-  /* Report 0x04 - Periodic parameters using protocol-accurate struct
-   * IMPORTANT: Use code 0x2a (NOT 0x0e) per Windows captures!
-   */
-  {
-    struct t500rs_pkt_r04_periodic_ramp *p =
-        (struct t500rs_pkt_r04_periodic_ramp *)buf;
-    t500rs_build_r04_periodic(p, 0x2a, mag, offset, phase, period_ms);
-  }
-  ret = t500rs_send_usb(t500rs, buf, sizeof(struct t500rs_pkt_r04_periodic_ramp));
-  if (ret) {
-    hid_err(t500rs->hdev, "Failed to send Report 0x04 (periodic): %d\n", ret);
-    return ret;
-  }
-
-  T500RS_DBG(t500rs, "%s effect %d uploaded (0x01 + 0x02 + 0x04)\n",
+  T500RS_DBG(t500rs, "%s effect %d uploaded (0x02 + 0x04 + 0x01)\n",
              type_name, effect->id);
   return 0;
 }
@@ -1065,20 +1138,22 @@ static int t500rs_upload_ramp(struct t500rs_device_entry *t500rs,
   u16 direction_dev, duration_ms, delay_ms;
   u8 magnitude, offset;
 
-  /* Allocate a hardware effect ID for this logical effect */
-  hw_id = t500rs_alloc_hw_id(t500rs, effect->id);
+  /* Allocate a hardware effect ID for this logical effect.
+   * Ramp effects MUST skip index 0 - the device rejects 0x04 packets
+   * with index 0 subtypes (EPROTO). Per Windows captures, all ramp
+   * effects use index 1+ (subtypes 0x2a/0x38 or higher).
+   */
+  hw_id = t500rs_alloc_hw_id(t500rs, effect->id, true);
   if (hw_id < 0) {
     hid_err(t500rs->hdev, "Failed to allocate hw_id for ramp effect %d\n",
             effect->id);
     return hw_id;
   }
 
-  /* Compute protocol parameters */
+  /* Use index-based subtypes for ramp effects */
   direction_dev = t500rs_scale_direction(effect->direction);
   duration_ms = effect->replay.length ? effect->replay.length : 1000;
   delay_ms = effect->replay.delay;
-
-  /* Use hw_id for subtype calculation */
   t500rs_index_to_subtypes(hw_id, &param_sub, &env_sub);
 
   T500RS_DBG(t500rs,
@@ -1093,20 +1168,15 @@ static int t500rs_upload_ramp(struct t500rs_device_entry *t500rs,
     return ret;
   }
 
-  /* Report 0x01 - Main effect upload
-   * Per Windows captures: effect_type=0x24 for ramp (sawtooth down)
+  /*
+   * CRITICAL: Windows sends packets in this order for ramp effects:
+   *   1. 0x02 Envelope parameters
+   *   2. 0x04 Ramp parameters
+   *   3. 0x01 Main effect descriptor
+   *   4. 0x41 START
    */
-  {
-    struct t500rs_pkt_r01_main *m = (struct t500rs_pkt_r01_main *)buf;
-    t500rs_build_r01_main(m, 0x24, duration_ms, delay_ms, param_sub, env_sub);
-  }
-  ret = t500rs_send_usb(t500rs, buf, sizeof(struct t500rs_pkt_r01_main));
-  if (ret) {
-    hid_err(t500rs->hdev, "Failed to send Report 0x01 (ramp): %d\n", ret);
-    return ret;
-  }
 
-  /* Report 0x02 - Envelope using protocol-accurate struct */
+  /* Report 0x02 - Envelope (FIRST per Windows captures) */
   {
     struct t500rs_pkt_r02_envelope *env = (struct t500rs_pkt_r02_envelope *)buf;
     t500rs_build_r02_envelope(env, (u8)(env_sub & 0xff),
@@ -1118,19 +1188,30 @@ static int t500rs_upload_ramp(struct t500rs_device_entry *t500rs,
     return ret;
   }
 
-  /* Report 0x04 - Ramp parameters using protocol-accurate struct
-   * Use code 0x2a per Windows captures (same as periodic)
-   */
+  /* Report 0x04 - Ramp parameters (SECOND per Windows captures) */
   {
     struct t500rs_pkt_r04_periodic_ramp *p =
         (struct t500rs_pkt_r04_periodic_ramp *)buf;
-    t500rs_build_r04_ramp(p, 0x2a, effect->u.ramp.start_level,
+    t500rs_build_r04_ramp(p, (u8)(param_sub & 0xff), effect->u.ramp.start_level,
                           effect->u.ramp.end_level, duration_ms);
     /* Compute magnitude and offset for debug */
     magnitude = p->magnitude;
     offset = p->offset;
   }
   ret = t500rs_send_usb(t500rs, buf, sizeof(struct t500rs_pkt_r04_periodic_ramp));
+  if (ret) {
+    hid_err(t500rs->hdev, "Failed to send Report 0x04 (ramp): %d\n", ret);
+    return ret;
+  }
+
+  /* Report 0x01 - Main effect descriptor (THIRD per Windows captures)
+   * Per Windows captures: effect_type=0x24 for ramp (sawtooth down)
+   */
+  {
+    struct t500rs_pkt_r01_main *m = (struct t500rs_pkt_r01_main *)buf;
+    t500rs_build_r01_main(m, 0x24, duration_ms, delay_ms, param_sub, env_sub);
+  }
+  ret = t500rs_send_usb(t500rs, buf, sizeof(struct t500rs_pkt_r01_main));
   if (ret) {
     hid_err(t500rs->hdev, "Failed to send Report 0x04 (ramp): %d\n", ret);
     return ret;
@@ -1316,21 +1397,26 @@ static int t500rs_update_effect(void *data,
       u8 phase = t500rs_scale_periodic_phase(effect->u.periodic.phase);
       u8 offset = t500rs_scale_periodic_offset(effect->u.periodic.offset);
       u16 period_ms = effect->u.periodic.period;
+      u16 param_sub, env_sub;
       if (period_ms == 0)
         period_ms = 100;
 
-      /* Use code 0x2a per Windows captures (NOT 0x0e!) */
+      /* Use index-based subtype for the 0x04 packet code */
+      t500rs_index_to_subtypes(hw_id, &param_sub, &env_sub);
       struct t500rs_pkt_r04_periodic_ramp *p =
           (struct t500rs_pkt_r04_periodic_ramp *)buf;
-      t500rs_build_r04_periodic(p, 0x2a, mag, offset, phase, period_ms);
+      t500rs_build_r04_periodic(p, (u8)(param_sub & 0xff), mag, offset, phase, period_ms);
       return t500rs_send_usb(t500rs, buf, sizeof(*p));
     }
   case FF_RAMP: {
       /* Update ramp using protocol-accurate helper */
       u16 duration_ms = effect->replay.length ? effect->replay.length : 1000;
+      u16 param_sub, env_sub;
+      /* Use index-based subtype for the 0x04 packet code */
+      t500rs_index_to_subtypes(hw_id, &param_sub, &env_sub);
       struct t500rs_pkt_r04_periodic_ramp *p =
           (struct t500rs_pkt_r04_periodic_ramp *)buf;
-      t500rs_build_r04_ramp(p, 0x2a, effect->u.ramp.start_level,
+      t500rs_build_r04_ramp(p, (u8)(param_sub & 0xff), effect->u.ramp.start_level,
                             effect->u.ramp.end_level, duration_ms);
       return t500rs_send_usb(t500rs, buf, sizeof(*p));
     }
@@ -1571,6 +1657,13 @@ static int t500rs_wheel_init(struct tmff2_device_entry *tmff2, int open_mode) {
   /* Initialize current range to default (900°) */
   t500rs->current_range = 900;
 
+  /* Initialize hw_id_owner to "unowned" state */
+  {
+    int i;
+    for (i = 0; i < T500RS_MAX_HW_EFFECTS; i++)
+      t500rs->hw_id_owner[i] = 0xFFFF;
+  }
+
   /* Store device data in tmff2 */
   tmff2->data = t500rs;
 
@@ -1579,17 +1672,32 @@ static int t500rs_wheel_init(struct tmff2_device_entry *tmff2, int open_mode) {
 
   T500RS_DBG(t500rs, "Sending initialization sequence...\n");
 
-  /* Report 0x42 - Apply/init (2 bytes)
-   * Minimal "initialize/apply" command observed as 0x42 0x05 in Windows
-   * captures. Send once at startup to bring the base into a known state
-   * before FFB uploads.
+  /* Report 0x42 - Init/status commands (2 bytes each)
+   * Windows sends these at startup: 0x42 0x04, 0x42 0x05, 0x42 0x00
+   * These appear to initialize the FFB subsystem state.
    */
+  memset(init_buf, 0, 2);
+  init_buf[0] = 0x42;
+  init_buf[1] = 0x04;
+  ret = t500rs_send_usb(t500rs, init_buf, 2);
+  if (ret) {
+    hid_warn(t500rs->hdev, "Init command 0x42 0x04 failed: %d\n", ret);
+  }
+
   memset(init_buf, 0, 2);
   init_buf[0] = 0x42;
   init_buf[1] = 0x05;
   ret = t500rs_send_usb(t500rs, init_buf, 2);
   if (ret) {
-    hid_warn(t500rs->hdev, "Init command 1 (0x42 0x05) failed: %d\n", ret);
+    hid_warn(t500rs->hdev, "Init command 0x42 0x05 failed: %d\n", ret);
+  }
+
+  memset(init_buf, 0, 2);
+  init_buf[0] = 0x42;
+  init_buf[1] = 0x00;
+  ret = t500rs_send_usb(t500rs, init_buf, 2);
+  if (ret) {
+    hid_warn(t500rs->hdev, "Init command 0x42 0x00 failed: %d\n", ret);
   }
 
   /* Report 0x40 - Enable FFB (4 bytes)
