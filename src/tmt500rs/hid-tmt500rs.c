@@ -835,6 +835,25 @@ static int t500rs_upload_condition(struct t500rs_device_entry *t500rs,
   u16 param_sub, env_sub;
   const struct ff_condition_effect *cond = &effect->u.condition[0];
 
+  /*
+   * TEMPORARY DIAGNOSTIC PATH (DiRT Rally 2.0 / AMS2 investigation)
+   * -----------------------------------------------------------------
+   * We suspect conditional effects (spring/damper/friction/inertia)
+   * may be interfering with FFB behavior in some titles. To isolate
+   * the issue we provide an option to disable all conditional uploads
+   * at the driver level while keeping constant and ramp effects
+   * functional.
+   *
+   * For now this is hard-wired to "disabled" for debugging. When
+   * active, we return success without sending any HID packets so that
+   * games continue without hard failures, but the wheel will not have
+   * hardware conditional effects present.
+   */
+  hid_info(t500rs->hdev,
+           "T500RS: CONDITIONAL upload for effect %d temporarily disabled (diagnostic)",
+           effect->id);
+  return 0;
+
   /* Determine effect type and select appropriate gain */
   switch (effect->type) {
   case FF_SPRING:
@@ -1420,6 +1439,27 @@ static int t500rs_update_effect(void *data,
     return -ENOMEM;
 
   hid_info(t500rs->hdev, "FFB: update_effect id=%d type=%d\n", effect->id, effect->type);
+
+  /*
+   * TEMPORARY DIAGNOSTIC PATH (DiRT Rally 2.0 / AMS2 investigation)
+   * -----------------------------------------------------------------
+   * To isolate whether conditional effects are responsible for
+   * missing FFB in some titles, we short-circuit updates for these
+   * types so that only constant, periodic and ramp updates reach
+   * the hardware.
+   */
+  switch (effect->type) {
+  case FF_SPRING:
+  case FF_DAMPER:
+  case FF_FRICTION:
+  case FF_INERTIA:
+    hid_info(t500rs->hdev,
+             "T500RS: update for conditional effect %d temporarily disabled (diagnostic)",
+             effect->id);
+    return 0;
+  default:
+    break;
+  }
 
   /* Get the hw_id for this effect (must have been allocated during upload) */
   hw_id = t500rs_get_hw_id(t500rs, effect->id);
