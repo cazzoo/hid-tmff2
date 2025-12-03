@@ -214,34 +214,46 @@ struct t500rs_device_entry {
  * Returns the hardware ID (0..15) on success, or -ENOSPC if all slots are used.
  */
 static int t500rs_alloc_hw_id(struct t500rs_device_entry *t500rs,
-                              unsigned int logical_id,
-                              bool skip_index_zero) {
-  unsigned int i;
-  unsigned int start_idx = skip_index_zero ? 1 : 0;
-  unsigned int current_hw_id;
+                               unsigned int logical_id,
+                               bool skip_index_zero) {
+   unsigned int i;
+   unsigned int start_idx = skip_index_zero ? 1 : 0;
+   unsigned int current_hw_id;
 
-  if (logical_id >= T500RS_MAX_EFFECTS)
-    return -EINVAL;
+   if (logical_id >= T500RS_MAX_EFFECTS)
+     return -EINVAL;
 
-  /* Check if this logical_id already owns a hw slot */
-  current_hw_id = t500rs->hw_id[logical_id];
-  if (current_hw_id < T500RS_MAX_HW_EFFECTS &&
-      t500rs->hw_id_in_use[current_hw_id] &&
-      t500rs->hw_id_owner[current_hw_id] == logical_id) {
-    /* This logical_id already owns this slot */
-    return (int)current_hw_id;
-  }
+   /* Check if this logical_id already owns a hw slot */
+   current_hw_id = t500rs->hw_id[logical_id];
+   if (current_hw_id < T500RS_MAX_HW_EFFECTS &&
+       t500rs->hw_id_in_use[current_hw_id] &&
+       t500rs->hw_id_owner[current_hw_id] == logical_id) {
+     /* This logical_id already owns this slot */
+     return (int)current_hw_id;
+   }
 
-  /* Find a free hardware slot, starting from start_idx */
-  for (i = start_idx; i < T500RS_MAX_HW_EFFECTS; i++) {
-    if (!t500rs->hw_id_in_use[i]) {
-      t500rs->hw_id[logical_id] = (u16)i;
-      t500rs->hw_id_in_use[i] = true;
-      t500rs->hw_id_owner[i] = (u16)logical_id;
-      return (int)i;
-    }
-  }
-  return -ENOSPC;
+   /* Find a free hardware slot, starting from start_idx */
+   for (i = start_idx; i < T500RS_MAX_HW_EFFECTS; i++) {
+     if (!t500rs->hw_id_in_use[i]) {
+       /* Additional validation: ensure we don't conflict with constant effects
+        * if we're allocating a non-constant effect to slot 0 */
+       if (i == 0 && skip_index_zero) {
+         /* This should never happen due to start_idx, but be safe */
+         continue;
+       }
+
+       t500rs->hw_id[logical_id] = (u16)i;
+       t500rs->hw_id_in_use[i] = true;
+       t500rs->hw_id_owner[i] = (u16)logical_id;
+
+       hid_info(t500rs->hdev, "T500RS: Allocated hw_id=%d for logical_id=%d (skip_zero=%d)\n",
+                i, logical_id, skip_index_zero);
+       return (int)i;
+     }
+   }
+
+   hid_err(t500rs->hdev, "No available hardware slots for effect %d\n", logical_id);
+   return -ENOSPC;
 }
 
 /*
@@ -270,17 +282,38 @@ static int t500rs_get_hw_id(struct t500rs_device_entry *t500rs,
  * Called from stop_effect path if we want to recycle slots.
  */
 static void t500rs_free_hw_id(struct t500rs_device_entry *t500rs,
-                              unsigned int logical_id) {
-  u16 hw_slot;
-  if (logical_id >= T500RS_MAX_EFFECTS)
-    return;
+                               unsigned int logical_id) {
+   u16 hw_slot;
+   if (logical_id >= T500RS_MAX_EFFECTS)
+     return;
 
-  hw_slot = t500rs->hw_id[logical_id];
-  if (hw_slot < T500RS_MAX_HW_EFFECTS &&
-      t500rs->hw_id_owner[hw_slot] == logical_id) {
-    t500rs->hw_id_in_use[hw_slot] = false;
-    t500rs->hw_id_owner[hw_slot] = 0xFFFF; /* Mark as unowned */
-  }
+   hw_slot = t500rs->hw_id[logical_id];
+   if (hw_slot < T500RS_MAX_HW_EFFECTS &&
+       t500rs->hw_id_owner[hw_slot] == logical_id) {
+     t500rs->hw_id_in_use[hw_slot] = false;
+     t500rs->hw_id_owner[hw_slot] = 0xFFFF; /* Mark as unowned */
+   }
+}
+
+/*
+ * Debug function to list currently active effects and their hardware slots.
+ * Useful for troubleshooting multi-effect scenarios.
+ */
+static void t500rs_debug_active_effects(struct t500rs_device_entry *t500rs) {
+   int i;
+   bool has_active = false;
+
+   for (i = 0; i < T500RS_MAX_HW_EFFECTS; i++) {
+     if (t500rs->hw_id_in_use[i]) {
+       T500RS_DBG(t500rs, "Active effect: hw_slot=%d, logical_id=%d\n",
+                  i, t500rs->hw_id_owner[i]);
+       has_active = true;
+     }
+   }
+
+   if (!has_active) {
+     T500RS_DBG(t500rs, "No active effects\n");
+   }
 }
 
 /*
@@ -859,15 +892,16 @@ static int t500rs_upload_condition(struct t500rs_device_entry *t500rs,
   }
 
   /*
-   * All conditional effects use hw_id=1 (subtypes 0x2a/0x38).
-   * This gives them a separate hardware slot from constant effects (hw_id=0).
+   * Allocate a hardware effect ID for this conditional effect.
+   * Conditional effects MUST skip index 0 - the device rejects 0x05 packets
+   * with index 0 subtypes (EPROTO). Per Windows captures, all conditional
+   * effects use index 1+ (subtypes 0x2a/0x38 or higher).
    */
-  hw_id = 1;
-
-  if (effect->id >= 0 && effect->id < T500RS_MAX_EFFECTS) {
-    t500rs->hw_id[effect->id] = hw_id;
-    t500rs->hw_id_in_use[hw_id] = true;
-    t500rs->hw_id_owner[hw_id] = effect->id;
+  hw_id = t500rs_alloc_hw_id(t500rs, effect->id, true);
+  if (hw_id < 0) {
+    hid_err(t500rs->hdev, "Failed to allocate hw_id for %s effect %d\n",
+            type_name, effect->id);
+    return hw_id;
   }
 
   direction_dev = t500rs_scale_direction(effect->direction);
@@ -1257,7 +1291,12 @@ static int t500rs_play_effect(void *data,
   }
 
   /* START command uses hw_id as effect_id to match 0x01 packet */
-  return t500rs_send_start(t500rs, (u8)hw_id);
+  ret = t500rs_send_start(t500rs, (u8)hw_id);
+  if (ret == 0) {
+    T500RS_DBG(t500rs, "Started effect %d (hw_id=%d)\n", effect->id, hw_id);
+    t500rs_debug_active_effects(t500rs);
+  }
+  return ret;
 }
 
 /*

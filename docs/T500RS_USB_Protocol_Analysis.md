@@ -1,11 +1,6 @@
 # T500RS USB Force Feedback Protocol Analysis
 ## Comprehensive Effect Implementation Reference
 
-**Analysis Date:** 2025-11-25
-**Last Updated:** 2025-12-03 (Effect ID slot collision fix documented)
-**Source:** Windows SDL2 USB captures from `captures/` directory
-**Target Driver:** `src/tmt500rs/hid-tmt500rs-usb.c`
-
 ---
 
 ## USB Packet Types Overview
@@ -72,13 +67,15 @@ Envelope attack/fade length and level values themselves live **only** in the 0x0
 Offset | Size | Field          | Description
 -------|------|----------------|----------------------------------
 0      | 1    | packet_type    | 0x01
-1      | 2    | effect_id      | Effect slot ID (0x0000-0x00ff, see Effect ID section)
-3      | 2    | direction      | 0-35999 (0.01 degree units), little-endian
-5      | 2    | duration_ms    | Duration in milliseconds, little-endian
-7      | 2    | delay_ms       | Delay before start, little-endian
+1      | 1    | effect_id      | Always 0x00 (single effect scenarios)
+2      | 1    | effect_type    | Effect type (0x00=constant, 0x22=sine, 0x40=conditional)
+3      | 1    | control        | Always 0x40
+4      | 2    | duration_ms    | Duration in milliseconds, little-endian
+6      | 2    | delay_ms       | Delay before start, little-endian
+8      | 1    | reserved1      | 0x00
 9      | 2    | packet_code_1  | Code for subsequent packet type (variable!)
 11     | 2    | packet_code_2  | Code for second subsequent packet (variable!)
-13     | 2    | reserved       | 0x0000
+13     | 2    | reserved2      | 0x0000
 ```
 
 **IMPORTANT:** Bytes 9-12 specify the packet codes used in subsequent packets. These are NOT fixed values!
@@ -90,15 +87,25 @@ Offset | Size | Field          | Description
 - Alternative codes observed: 0x00b6/0x00c4 (newer captures), 0x0046/0x0054, 0x0062/0x0070, 0x007e/0x008c, 0x009a/0x00a8
 
 **Examples:**
-- `01 00 00 40 00 d0 07 00 00 0e 00 1c 00 00 00` - Constant effect with envelope
-  - Effect ID: 0x0000
-  - Direction: 0x0040 = 64 (0.64°)
-  - Duration: 0x07d0 = 2000ms
+- `01 00 00 40 f4 01 00 00 0e 00 1c 00 00 00` - Constant effect with envelope
+  - Effect ID: 0x00
+  - Effect type: 0x00 (constant)
+  - Control: 0x40
+  - Duration: 0x01f4 = 500ms
+  - Delay: 0x0000 = 0ms
+  - Reserved1: 0x00
   - Packet codes: 0x000e (constant), 0x001c (envelope)
+  - Reserved2: 0x0000
 
-- `01 00 40 40 00 d0 07 00 00 2a 00 38 00 00 00` - Conditional effect
-  - Effect ID: 0x0040
+- `01 00 40 40 d0 07 00 00 2a 00 38 00 00 00` - Conditional effect
+  - Effect ID: 0x00
+  - Effect type: 0x40 (conditional)
+  - Control: 0x40
+  - Duration: 0x07d0 = 2000ms
+  - Delay: 0x0000 = 0ms
+  - Reserved1: 0x00
   - Packet codes: 0x002a (first conditional), 0x0038 (second conditional)
+  - Reserved2: 0x0000
 
 ### 0x02 - Envelope Packet (9 bytes)
 ```
