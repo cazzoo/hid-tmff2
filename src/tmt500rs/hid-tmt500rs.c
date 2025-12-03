@@ -192,19 +192,12 @@ struct t500rs_device_entry {
    * hw_id_in_use[hw_slot] = true if that hardware slot is currently in use
    * hw_id_owner[hw_slot] = logical_id that owns this hw slot (valid only if in_use)
    *
-   * These are wired in by later refactor phases; for now they are populated
-   * but legacy paths continue to use effect_id=0 for all effects.
+   * Maps logical effect IDs to hardware slot IDs.
+   * hw_id is used as effect_id in 0x01/0x41 packets to prevent slot collision.
    */
   u16 hw_id[T500RS_MAX_EFFECTS];
   bool hw_id_in_use[T500RS_MAX_HW_EFFECTS];
-  u16 hw_id_owner[T500RS_MAX_HW_EFFECTS]; /* Which logical_id owns each hw slot */
-
-  /*
-   * Track whether we've sent START for each effect.
-   * The base driver may call play_effect multiple times per frame,
-   * but we should only send START once until the effect is stopped.
-   */
-  bool effect_started[T500RS_MAX_EFFECTS];
+  u16 hw_id_owner[T500RS_MAX_HW_EFFECTS];
 };
 
 /*
@@ -750,20 +743,8 @@ static int t500rs_upload_constant(struct t500rs_device_entry *t500rs,
    * Constant effects CAN use index 0 (subtypes 0x0e/0x1c) per Windows captures.
    */
   hw_id = t500rs_alloc_hw_id(t500rs, effect->id, false);
-  if (hw_id < 0) {
-    hid_err(t500rs->hdev, "Failed to allocate hw_id for effect %d\n",
-            effect->id);
+  if (hw_id < 0)
     return hw_id;
-  }
-
-  /* Clear started flag - effect needs START after upload */
-  if (effect->id < T500RS_MAX_EFFECTS)
-    t500rs->effect_started[effect->id] = false;
-
-  /*
-   * NOTE: Pre-upload STOP removed - Windows captures show NO STOP before
-   * effect upload. The device handles slot reuse internally.
-   */
 
   /* Compute protocol parameters using hw_id for subtype calculation */
   direction_dev = t500rs_scale_direction(effect->direction);
@@ -847,144 +828,86 @@ static int t500rs_upload_condition(struct t500rs_device_entry *t500rs,
   u16 param_sub, env_sub;
   const struct ff_condition_effect *cond = &effect->u.condition[0];
 
-  /* DEBUG: upload_condition ENABLED for testing */
-
   /*
-   * Determine effect type code and select appropriate gain.
-   *
-   * Per Windows captures:
-   *   - Spring uses effect_type = 0x40
-   *   - Damper/Friction/Inertia use effect_type = 0x41
+   * Determine effect type code and gain level.
+   * Per Windows captures: Spring=0x40, Damper/Friction/Inertia=0x41
    */
   u8 effect_type;
   switch (effect->type) {
   case FF_SPRING:
     type_name = "spring";
     effect_gain = spring_level;
-    effect_type = 0x40;  /* Spring uses 0x40 */
+    effect_type = 0x40;
     break;
   case FF_DAMPER:
     type_name = "damper";
     effect_gain = damper_level;
-    effect_type = 0x41;  /* Damper uses 0x41 */
+    effect_type = 0x41;
     break;
   case FF_FRICTION:
     type_name = "friction";
     effect_gain = friction_level;
-    effect_type = 0x41;  /* Friction uses 0x41 */
+    effect_type = 0x41;
     break;
   case FF_INERTIA:
     type_name = "inertia";
     effect_gain = 100;
-    effect_type = 0x41;  /* Inertia uses 0x41 */
+    effect_type = 0x41;
     break;
   default:
     return -EINVAL;
   }
 
   /*
-   * CRITICAL: Per Windows captures, ALL conditional effects share the SAME
-   * hardware slot (hw_id=1, giving codes 0x2a/0x38). The T500RS firmware
-   * appears to only recognize this specific slot for conditional effects.
-   *
-   * This means:
-   * - Multiple conditional effects (spring, damper, friction, inertia) all
-   *   share slot 1 and the last uploaded one "wins"
-   * - Games typically blend these into a single effect anyway
-   * - We still track the logical->hw_id mapping so stop/update work correctly
+   * All conditional effects use hw_id=1 (subtypes 0x2a/0x38).
+   * This gives them a separate hardware slot from constant effects (hw_id=0).
    */
-  hw_id = 1;  /* Always use hw_id=1 for conditionals (codes 0x2a/0x38) */
+  hw_id = 1;
 
-  /* Store the mapping for this logical effect */
   if (effect->id >= 0 && effect->id < T500RS_MAX_EFFECTS) {
     t500rs->hw_id[effect->id] = hw_id;
     t500rs->hw_id_in_use[hw_id] = true;
     t500rs->hw_id_owner[hw_id] = effect->id;
-    /* Clear started flag - effect needs START after upload */
-    t500rs->effect_started[effect->id] = false;
   }
 
-  /* Per Windows captures, conditional effects use index-based subtypes */
   direction_dev = t500rs_scale_direction(effect->direction);
   duration_ms = effect->replay.length ? effect->replay.length : 0xffff;
   delay_ms = effect->replay.delay;
   t500rs_index_to_subtypes(hw_id, &param_sub, &env_sub);
 
-  T500RS_DBG(t500rs,
-             "Upload %s: id=%d, hw_id=%d, gain=%u%%, dir=%u, param_sub=0x%04x, "
-             "env_sub=0x%04x, rcoef=%d, lcoef=%d\n",
-             type_name, effect->id, hw_id, effect_gain, direction_dev,
-             param_sub, env_sub, cond->right_coeff, cond->left_coeff);
+  T500RS_DBG(t500rs, "Upload %s: id=%d, hw_id=%d, param_sub=0x%04x\n",
+             type_name, effect->id, hw_id, param_sub);
 
-  /*
-   * NOTE: Pre-upload STOP removed - Windows captures show NO STOP before
-   * effect upload. The device handles slot reuse internally.
-   *
-   * CRITICAL: Windows sends packets in this order for conditionals:
-   *   1. 0x05 X-axis parameters
-   *   2. 0x01 Main effect descriptor
-   *   3. 0x41 START
-   *
-   * Y-axis packet skipped for single-axis T500RS to prevent EPROTO errors.
-   * This is DIFFERENT from constant/periodic which send 0x01 first!
-   */
-
-  /* Report 0x05 - X-axis condition parameters (code = param_sub low byte)
-   * is_first_packet=true fills in the condition data
-   */
+  /* Send 0x05 X-axis parameters, then 0x05 Y-axis, then 0x01 main */
   {
     struct t500rs_pkt_r05_condition *p = (struct t500rs_pkt_r05_condition *)buf;
     t500rs_build_r05_condition(p, (u8)(param_sub & 0xff), cond, true);
-    hid_info(t500rs->hdev, "FFB: 0x05 X-axis: %02x %02x %02x%02x %02x%02x %02x%02x %02x %02x %02x\n",
-             buf[0], buf[1], buf[2], buf[3], buf[4], buf[5], buf[6], buf[7], buf[8], buf[9], buf[10]);
   }
   ret = t500rs_send_hid(t500rs, buf, sizeof(struct t500rs_pkt_r05_condition));
-  if (ret) {
-    hid_err(t500rs->hdev, "Failed to send Report 0x05 (X-axis): %d\n", ret);
+  if (ret)
     return ret;
-  }
 
-  /* Report 0x05 - Y-axis condition parameters (code = env_sub low byte)
-   * For single-axis T500RS, Y-axis coefficients/deadband/center are zeroed,
-   * but saturation values must still be set per Windows captures.
-   * Now that coefficients are zeroed, this packet should be safe to send.
-   */
+  /* Y-axis packet (zeroed coefficients for single-axis T500RS) */
   {
     struct t500rs_pkt_r05_condition *p = (struct t500rs_pkt_r05_condition *)buf;
     t500rs_build_r05_condition(p, (u8)(env_sub & 0xff), cond, false);
-    hid_info(t500rs->hdev, "FFB: 0x05 Y-axis: %02x %02x %02x%02x %02x%02x %02x%02x %02x %02x %02x\n",
-             buf[0], buf[1], buf[2], buf[3], buf[4], buf[5], buf[6], buf[7], buf[8], buf[9], buf[10]);
   }
   ret = t500rs_send_hid(t500rs, buf, sizeof(struct t500rs_pkt_r05_condition));
-  if (ret) {
-    hid_err(t500rs->hdev, "Failed to send Report 0x05 (Y-axis): %d\n", ret);
+  if (ret)
     return ret;
-  }
 
-  /* Report 0x01 - Main effect upload (AFTER 0x05 packets for conditionals!)
-   * Per Windows captures:
-   *   - Spring uses effect_type=0x40
-   *   - Damper/Friction/Inertia use effect_type=0x41
-   *
-   * CRITICAL: Use hw_id as effect_id to avoid overwriting constant effect slot!
-   * Windows may use effect_id=0 for all, but that might be because it only
-   * has one active effect at a time. For concurrent effects, we need unique IDs.
+  /*
+   * 0x01 main packet uses hw_id as effect_id to prevent slot collision
+   * with constant effects (which use effect_id=0).
    */
   {
     struct t500rs_pkt_r01_main *m = (struct t500rs_pkt_r01_main *)buf;
     t500rs_build_r01_main(m, (u8)hw_id, effect_type, duration_ms, delay_ms, param_sub, env_sub);
-    hid_info(t500rs->hdev, "FFB: 0x01 cond: %02x %02x %02x %02x %02x%02x %02x%02x %02x %02x%02x %02x%02x %02x\n",
-             buf[0], buf[1], buf[2], buf[3], buf[4], buf[5], buf[6], buf[7],
-             buf[8], buf[9], buf[10], buf[11], buf[12], buf[13]);
   }
   ret = t500rs_send_hid(t500rs, buf, sizeof(struct t500rs_pkt_r01_main));
-  if (ret) {
-    hid_err(t500rs->hdev, "Failed to send Report 0x01 (condition): %d\n", ret);
+  if (ret)
     return ret;
-  }
 
-  T500RS_DBG(t500rs, "%s effect %d uploaded (0x05 + 0x01)\n",
-             type_name, effect->id);
   return 0;
 }
 
@@ -1266,60 +1189,34 @@ static int t500rs_upload_effect(void *data,
                                  const struct tmff2_effect_state *state) {
   struct t500rs_device_entry *t500rs = data;
   const struct ff_effect *effect = &state->effect;
-  int ret;
 
   if (!t500rs)
     return -ENODEV;
 
-  hid_info(t500rs->hdev, "FFB: upload_effect id=%d type=%d\n", effect->id, effect->type);
-
   switch (effect->type) {
   case FF_CONSTANT:
-    ret = t500rs_upload_constant(t500rs, state);
-    if (ret == 0)
-      hid_info(t500rs->hdev, "FFB: CONSTANT effect %d uploaded successfully\n", effect->id);
-    else
-      hid_err(t500rs->hdev, "FFB: CONSTANT effect %d upload failed: %d\n", effect->id, ret);
-    return ret;
+    return t500rs_upload_constant(t500rs, state);
   case FF_SPRING:
   case FF_DAMPER:
   case FF_FRICTION:
   case FF_INERTIA:
-    ret=t500rs_upload_condition(t500rs, state);
-    if (ret == 0)
-      hid_info(t500rs->hdev, "FFB: CONDITION effect %d uploaded successfully\n", effect->id);
-    else
-      hid_err(t500rs->hdev, "FFB: CONDITION effect %d upload failed: %d\n", effect->id, ret);
-    return ret;
+    return t500rs_upload_condition(t500rs, state);
   case FF_PERIODIC:
   case FF_SINE:
   case FF_TRIANGLE:
   case FF_SAW_UP:
   case FF_SAW_DOWN:
-    ret = t500rs_upload_periodic(t500rs, state);
-    if (ret == 0)
-      hid_info(t500rs->hdev, "FFB: PERIODIC effect %d uploaded successfully\n", effect->id);
-    else
-      hid_err(t500rs->hdev, "FFB: PERIODIC effect %d upload failed: %d\n", effect->id, ret);
-    return ret;
+    return t500rs_upload_periodic(t500rs, state);
   case FF_RAMP:
-    ret = t500rs_upload_ramp(t500rs, state);
-    if (ret == 0)
-      hid_info(t500rs->hdev, "FFB: RAMP effect %d uploaded successfully\n", effect->id);
-    else
-      hid_err(t500rs->hdev, "FFB: RAMP effect %d upload failed: %d\n", effect->id, ret);
-    return ret;
+    return t500rs_upload_ramp(t500rs, state);
   default:
-    hid_warn(t500rs->hdev, "FFB: Unsupported effect type %d for effect %d\n", effect->type, effect->id);
     return -EINVAL;
   }
 }
 
 /*
  * Play effect - send START command (0x41) for the effect.
- *
- * For constant force, also send a level update (0x03) before START.
- * Uses per-effect hw_id for proper multi-effect support.
+ * For constant force, also sends a level update (0x03) before START.
  */
 static int t500rs_play_effect(void *data,
                                const struct tmff2_effect_state *state) {
@@ -1336,21 +1233,11 @@ static int t500rs_play_effect(void *data,
   if (!buf)
     return -ENOMEM;
 
-  hid_info(t500rs->hdev, "FFB: play_effect id=%d type=%d flags=0x%lx\n",
-           effect->id, effect->type, state->flags);
-
-  /* Get the allocated hw_id for this logical effect */
   hw_id = t500rs_get_hw_id(t500rs, effect->id);
-  if (hw_id < 0) {
-    hid_err(t500rs->hdev, "No hw_id allocated for effect %d\n", effect->id);
+  if (hw_id < 0)
     return hw_id;
-  }
 
-  T500RS_DBG(t500rs,
-              "Play effect: id=%d, hw_id=%d, type=0x%02x\n",
-              effect->id, hw_id, effect->type);
-
-  /* For constant force: send level update (0x03) then START (0x41) */
+  /* For constant force: send level update (0x03) before START */
   if (effect->type == FF_CONSTANT) {
     int level = effect->u.constant.level;
     u16 direction = effect->direction;
@@ -1360,52 +1247,21 @@ static int t500rs_play_effect(void *data,
     signed_level = t500rs_scale_const_with_direction(level, direction);
     t500rs_index_to_subtypes(hw_id, &param_sub, &env_sub);
 
-    T500RS_DBG(t500rs,
-                "Constant force: level=%d dir=%u -> %d (0x%02x)\n", level,
-                direction, signed_level, (u8)signed_level);
-
-    /* Send Report 0x03 (force level) */
     {
       struct t500rs_r03_const *r3 = (struct t500rs_r03_const *)buf;
       t500rs_build_r03_constant(r3, (u8)(param_sub & 0xff), signed_level);
     }
     ret = t500rs_send_hid(t500rs, buf, sizeof(struct t500rs_r03_const));
-    if (ret) {
-      hid_err(t500rs->hdev, "Failed to send Report 0x03: %d\n", ret);
+    if (ret)
       return ret;
-    }
   }
 
-  /*
-   * Send START command.
-   *
-   * CRITICAL: The effect_id in the START command (0x41) must match the
-   * effect_id used in the 0x01 main upload packet.
-   *
-   * For constant effects: effect_id=0 (hw_id=0)
-   * For conditional effects: effect_id=hw_id (typically 1)
-   *
-   * This prevents slot collision between concurrent effect types.
-   */
-  T500RS_DBG(t500rs, "Sending START command (effect_id=%d) for effect %d\n",
-              hw_id, effect->id);
-  ret = t500rs_send_start(t500rs, (u8)hw_id);  /* Use hw_id as effect_id */
-  if (ret == 0) {
-    hid_info(t500rs->hdev, "FFB: Effect %d started successfully\n", effect->id);
-    /* Mark effect as started so we don't send START again */
-    if (effect->id < T500RS_MAX_EFFECTS)
-      t500rs->effect_started[effect->id] = true;
-  } else {
-    hid_err(t500rs->hdev, "FFB: Failed to start effect %d: %d\n", effect->id, ret);
-  }
-  return ret;
+  /* START command uses hw_id as effect_id to match 0x01 packet */
+  return t500rs_send_start(t500rs, (u8)hw_id);
 }
 
 /*
- * Stop effect - send STOP command (0x41) for the effect.
- *
- * Uses per-effect hw_id for proper multi-effect support.
- * Also frees the hardware effect ID slot for reuse.
+ * Stop effect - send STOP command (0x41) and free hardware slot.
  */
 static int t500rs_stop_effect(void *data,
                                const struct tmff2_effect_state *state) {
@@ -1413,61 +1269,25 @@ static int t500rs_stop_effect(void *data,
   int ret;
   int hw_id;
 
-  if (!t500rs) {
-    pr_err("t500rs_stop_effect: t500rs is NULL!\n");
+  if (!t500rs)
     return -ENODEV;
-  }
 
-  if (!t500rs->send_buffer) {
-    hid_err(t500rs->hdev, "Stop effect: send_buffer is NULL!\n");
+  if (!t500rs->send_buffer)
     return -ENOMEM;
-  }
 
-  hid_info(t500rs->hdev, "FFB: stop_effect id=%d type=%d\n", state->effect.id, state->effect.type);
-
-  /* DEBUG: Skip stop for conditionals to isolate the issue */
-  if (state->effect.type == FF_SPRING || state->effect.type == FF_DAMPER ||
-      state->effect.type == FF_FRICTION || state->effect.type == FF_INERTIA) {
-    hid_info(t500rs->hdev, "FFB: stop_effect id=%d SKIPPED (conditional debug)\n", state->effect.id);
-    return 0;
-  }
-
-  /* Get the allocated hw_id for this logical effect */
   hw_id = t500rs_get_hw_id(t500rs, state->effect.id);
-  if (hw_id < 0) {
-    /* No hw_id means effect was never uploaded, nothing to stop */
-    hid_info(t500rs->hdev, "FFB: Stop effect %d - no hw_id allocated (effect not uploaded)\n",
-             state->effect.id);
-    return 0;
-  }
+  if (hw_id < 0)
+    return 0;  /* Effect was never uploaded */
 
-  T500RS_DBG(t500rs, "Stop effect: id=%d, hw_id=%d, type=%d\n",
-              state->effect.id, hw_id, state->effect.type);
+  /* STOP command uses hw_id as effect_id to match 0x01 packet */
+  ret = t500rs_send_stop(t500rs, (u8)hw_id);
 
-  /*
-   * Send STOP command with effect_id=0.
-   * Per Windows captures, STOP uses the same effect_id as the 0x01 main packet,
-   * which is always 0 for all effect types.
-   */
-  ret = t500rs_send_stop(t500rs, 0);  /* Always effect_id=0 per Windows */
-
-  /* Free the hardware slot for reuse */
   t500rs_free_hw_id(t500rs, state->effect.id);
 
-  /* Clear the started flag so effect can be started again */
-  if (state->effect.id < T500RS_MAX_EFFECTS)
-    t500rs->effect_started[state->effect.id] = false;
-
-  if (ret == 0)
-    hid_info(t500rs->hdev, "FFB: Effect %d stopped successfully\n", state->effect.id);
-  else
-    hid_err(t500rs->hdev, "FFB: Failed to stop effect %d: %d\n", state->effect.id, ret);
-
-  T500RS_DBG(t500rs, "Stop effect returned: %d\n", ret);
   return ret;
 }
 
-/* Update effect - re-upload and update force level if constant force */
+/* Update effect - send parameter updates without re-uploading */
 static int t500rs_update_effect(void *data,
                                  const struct tmff2_effect_state *state) {
   struct t500rs_device_entry *t500rs = data;
@@ -1475,7 +1295,6 @@ static int t500rs_update_effect(void *data,
   const struct ff_effect *old = &state->old;
   u8 *buf;
   int hw_id;
-  int ret = 0;
 
   if (!t500rs)
     return -ENODEV;
@@ -1484,42 +1303,26 @@ static int t500rs_update_effect(void *data,
   if (!buf)
     return -ENOMEM;
 
-	hid_info(t500rs->hdev, "FFB: update_effect id=%d type=%d\n", effect->id, effect->type);
-
-	/* Get the hw_id for this effect (must have been allocated during upload) */
   hw_id = t500rs_get_hw_id(t500rs, effect->id);
-  if (hw_id < 0) {
-    /* Effect not uploaded yet - skip update */
-    hid_info(t500rs->hdev, "FFB: Update effect %d - not uploaded yet\n", effect->id);
-    return 0;
-  }
+  if (hw_id < 0)
+    return 0;  /* Effect not uploaded yet */
 
-  /* Do NOT re-upload here; Windows keeps the effect and we only update parameters */
   switch (effect->type) {
   case FF_CONSTANT: {
       int level = effect->u.constant.level;
-      int old_level = old->u.constant.level;
       u16 direction = effect->direction;
-      u16 old_direction = old->direction;
 
-      /* Skip update if parameters haven't changed */
-      if (level == old_level && direction == old_direction) {
-        hid_info(t500rs->hdev, "FFB: Update CONSTANT id=%d: parameters unchanged, skipping\n", effect->id);
+      if (level == old->u.constant.level && direction == old->direction)
         return 0;
-      }
 
       s8 signed_level = t500rs_scale_const_with_direction(level, direction);
       u16 param_sub, env_sub;
       t500rs_index_to_subtypes(hw_id, &param_sub, &env_sub);
-      hid_info(t500rs->hdev, "FFB: Update CONSTANT id=%d: level=%d dir=%u -> scaled=%d (hw_id=%d, code=0x%02x)\n",
-               effect->id, level, direction, signed_level, hw_id, (u8)(param_sub & 0xff));
       struct t500rs_r03_const *r3 = (struct t500rs_r03_const *)buf;
       t500rs_build_r03_constant(r3, (u8)(param_sub & 0xff), signed_level);
-      ret = t500rs_send_hid(t500rs, (u8 *)r3, sizeof(*r3));
-      break;
+      return t500rs_send_hid(t500rs, (u8 *)r3, sizeof(*r3));
     }
   case FF_PERIODIC: {
-      /* Update periodic using protocol-accurate helpers and ms period */
       u8 mag = t500rs_scale_periodic_magnitude(effect->u.periodic.magnitude);
       u8 phase = t500rs_scale_periodic_phase(effect->u.periodic.phase);
       u8 offset = t500rs_scale_periodic_offset(effect->u.periodic.offset);
@@ -1528,82 +1331,52 @@ static int t500rs_update_effect(void *data,
       if (period_ms == 0)
         period_ms = 100;
 
-      /* Use index-based subtype for the 0x04 packet code */
       t500rs_index_to_subtypes(hw_id, &param_sub, &env_sub);
-      hid_info(t500rs->hdev, "FFB: Update PERIODIC id=%d: mag=%u phase=%u offset=%d period=%ums -> scaled mag=%u phase=%u offset=%d (hw_id=%d, code=0x%02x)\n",
-               effect->id, effect->u.periodic.magnitude, effect->u.periodic.phase, effect->u.periodic.offset, period_ms,
-               mag, phase, offset, hw_id, (u8)(param_sub & 0xff));
       struct t500rs_pkt_r04_periodic_ramp *p =
           (struct t500rs_pkt_r04_periodic_ramp *)buf;
       t500rs_build_r04_periodic(p, (u8)(param_sub & 0xff), mag, offset, phase, period_ms);
-      ret = t500rs_send_hid(t500rs, buf, sizeof(*p));
-      break;
+      return t500rs_send_hid(t500rs, buf, sizeof(*p));
     }
   case FF_RAMP: {
-      /* Update ramp using protocol-accurate helper */
       u16 duration_ms = effect->replay.length ? effect->replay.length : 1000;
       u16 param_sub, env_sub;
-      /* Use index-based subtype for the 0x04 packet code */
       t500rs_index_to_subtypes(hw_id, &param_sub, &env_sub);
       struct t500rs_pkt_r04_periodic_ramp *p =
           (struct t500rs_pkt_r04_periodic_ramp *)buf;
       t500rs_build_r04_ramp(p, (u8)(param_sub & 0xff), effect->u.ramp.start_level,
                             effect->u.ramp.end_level, duration_ms);
-      ret = t500rs_send_hid(t500rs, buf, sizeof(*p));
-      break;
+      return t500rs_send_hid(t500rs, buf, sizeof(*p));
     }
   case FF_SPRING:
   case FF_DAMPER:
   case FF_FRICTION:
   case FF_INERTIA: {
       /*
-       * Update conditional effect using protocol-accurate helper.
-       *
-       * Rationale: ACC (and similar) may spam condition updates at low speed with
-       * the exact same parameters. Re-sending 0x05 at high cadence makes T500RS
-       * micro-pulse/rumble. Therefore we compare old vs new and only send when
-       * they differ. We only update X-axis (code 0x2a); Y-axis is always zero
-       * for single-axis T500RS.
+       * Skip update if parameters unchanged - prevents micro-pulse/rumble
+       * when games spam identical condition updates.
        */
       const struct ff_condition_effect *cond = &effect->u.condition[0];
       const struct ff_condition_effect *cond_old = &old->u.condition[0];
-
       u16 param_sub, env_sub;
 
-      /* Simple change detection: compare raw condition parameters */
       if (cond->right_coeff == cond_old->right_coeff &&
           cond->left_coeff == cond_old->left_coeff &&
           cond->right_saturation == cond_old->right_saturation &&
           cond->left_saturation == cond_old->left_saturation &&
           cond->deadband == cond_old->deadband &&
           cond->center == cond_old->center &&
-          effect->type == old->type) {
-        hid_info(t500rs->hdev, "FFB: Update CONDITION id=%d: parameters unchanged, skipping\n", effect->id);
+          effect->type == old->type)
         return 0;
-      }
 
-      /* Send updated X-axis 0x05 packet with proper per-effect code */
       t500rs_index_to_subtypes(hw_id, &param_sub, &env_sub);
-      hid_info(t500rs->hdev, "FFB: Update CONDITION id=%d: rcoef=%d lcoef=%d rsat=%u lsat=%u (hw_id=%d, code=0x%02x)\n",
-               effect->id, cond->right_coeff, cond->left_coeff, cond->right_saturation, cond->left_saturation,
-               hw_id, (u8)(param_sub & 0xff));
       struct t500rs_pkt_r05_condition *p =
           (struct t500rs_pkt_r05_condition *)buf;
       t500rs_build_r05_condition(p, (u8)(param_sub & 0xff), cond, true);
-      ret = t500rs_send_hid(t500rs, buf, sizeof(*p));
-      break;
+      return t500rs_send_hid(t500rs, buf, sizeof(*p));
     }
   default:
-      hid_info(t500rs->hdev, "FFB: Unknown effect type %d for update id=%d\n", effect->type, effect->id);
-      ret = 0;
+      return 0;
   }
-
-  if (ret == 0)
-    hid_info(t500rs->hdev, "FFB: Effect %d updated successfully\n", effect->id);
-  else
-    hid_err(t500rs->hdev, "FFB: Failed to update effect %d: %d\n", effect->id, ret);
-
-  return ret;
 }
 
 /* Set autocenter */

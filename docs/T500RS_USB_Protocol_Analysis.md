@@ -2,7 +2,7 @@
 ## Comprehensive Effect Implementation Reference
 
 **Analysis Date:** 2025-11-25
-**Last Updated:** 2025-11-25 (New test results integrated)
+**Last Updated:** 2025-12-03 (Effect ID slot collision fix documented)
 **Source:** Windows SDL2 USB captures from `captures/` directory
 **Target Driver:** `src/tmt500rs/hid-tmt500rs-usb.c`
 
@@ -508,6 +508,44 @@ Offset | Size | Field          | Description
   - Must track which effect IDs are in use
   - Must assign unique IDs when uploading concurrent effects
   - Must use correct effect ID in START/STOP commands (0x41 packet byte 1)
+
+### 3a. Effect ID Slot Collision Issue (Critical Discovery)
+
+**Problem:** When using effect_id=0 for ALL effect types (as seen in single-effect Windows captures),
+concurrent effects overwrite each other's hardware slots. This manifests as:
+- Constant force effects stop working after conditional effects are uploaded
+- The device firmware uses effect_id to track which effect slot to update/play/stop
+
+**Root Cause:** The 0x01 main upload packet's effect_id field (byte 1) determines which hardware
+slot the effect occupies. When both constant and conditional effects use effect_id=0, the
+conditional upload overwrites the constant effect's slot in firmware.
+
+**Solution:** Use the hardware ID (hw_id) as the effect_id in all packets:
+- Constant effects: effect_id=0 (hw_id=0) with subtypes 0x0e/0x1c
+- Conditional effects: effect_id=1 (hw_id=1) with subtypes 0x2a/0x38
+- START/STOP commands (0x41) must use the same effect_id as the 0x01 packet
+
+**Packet Examples:**
+
+Constant effect (hw_id=0, effect_id=0):
+```
+0x01 packet: 01 00 00 40 d0 07 00 00 00 0e 00 1c 00 00 00
+                 ^^ effect_id=0
+0x41 START:  41 00 41 01
+                 ^^ effect_id=0
+```
+
+Conditional effect (hw_id=1, effect_id=1):
+```
+0x01 packet: 01 01 40 40 d0 07 00 00 00 2a 00 38 00 00 00
+                 ^^ effect_id=1
+0x41 START:  41 01 41 01
+                 ^^ effect_id=1
+```
+
+**Key Insight:** Windows captures showed effect_id=0 for all effects because they were testing
+single effects in isolation. For concurrent effect support (e.g., constant + spring running
+simultaneously), unique effect_ids are required to prevent slot collision.
 
 ### 4. Envelope Flag
 - 0x01 packet byte 11-12: 0x001c when envelope is present
