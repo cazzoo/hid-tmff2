@@ -198,6 +198,13 @@ struct t500rs_device_entry {
   u16 hw_id[T500RS_MAX_EFFECTS];
   bool hw_id_in_use[T500RS_MAX_HW_EFFECTS];
   u16 hw_id_owner[T500RS_MAX_HW_EFFECTS]; /* Which logical_id owns each hw slot */
+
+  /*
+   * Track whether we've sent START for each effect.
+   * The base driver may call play_effect multiple times per frame,
+   * but we should only send START once until the effect is stopped.
+   */
+  bool effect_started[T500RS_MAX_EFFECTS];
 };
 
 /*
@@ -466,14 +473,14 @@ static void t500rs_build_r04_ramp(struct t500rs_pkt_r04_periodic_ramp *p,
  * zeroed coefficients/deadband/center. Only saturation values should be non-zero.
  * Sending non-zero coefficients may confuse the device firmware and cause EPROTO errors.
  *
- * Parameter scaling (from protocol doc, needs verification):
- * - Coefficients: SDL2 0-32767 → device value (scaling TBD, using /256 for now)
- * - Deadband: SDL2 0-65535 → device value (scaling TBD, using /256 for now)
- * - Center: SDL2 -32767..+32767 → device 0-255 (using (val + 32767) / 256)
- * - Saturation: SDL2 0-32767 → device 0-255 (observed: 0x54, 0x64)
+ * Effect behaviour is controlled solely through saturation values in the 0-100
+ * range (observed: 0x54 = 84 for spring, 0x64 = 100 for damper/friction).
+ * Values > 100 are rejected by the firmware and can cause subsequent packets
+ * to fail with EPROTO.
  *
- * The `is_first_packet` flag determines which code to use and whether to
- * populate parameters (first packet) or zeros (second packet for Y-axis).
+ * The `is_first_packet` flag is kept for parity with the USB driver but is
+ * currently unused: both X and Y packets use zero coefficients and identical
+ * saturation.
  */
 static void t500rs_build_r05_condition(struct t500rs_pkt_r05_condition *p,
                                         u8 code,
@@ -488,30 +495,33 @@ static void t500rs_build_r05_condition(struct t500rs_pkt_r05_condition *p,
     if (!c)
       return;
 
-    /*
-     * Scale saturation: SDL 0-65535 → device 0-255 (full range)
-     * Per Windows captures, observed values are 0x54 (84) and 0x64 (100).
-     * The device appears to reject values > 100, so we clamp.
-     * Saturation must be set for both X and Y axis packets.
-     */
-    right_sat = (u8)((c->right_saturation * 255) / 65535);
-    if (right_sat > 255)
-      right_sat = 255;
-    left_sat = (u8)((c->left_saturation * 255) / 65535);
-    if (left_sat > 255)
-      left_sat = 255;
+	    /*
+	     * Scale saturation: SDL 0-65535 → device 0-100 (Windows parity)
+	     * -------------------------------------------------------------
+	     * Per Windows captures and the validated USB driver implementation,
+	     * conditional behaviour is controlled solely via saturation values in
+	     * the 0-100 range (observed: 0x54 = 84 for spring, 0x64 = 100 for
+	     * damper/friction). Sending values > 100 is rejected by the firmware
+	     * and can cause subsequent packets to fail with EPROTO.
+	     */
+	    right_sat = (u8)((c->right_saturation * 100) / 65535);
+	    if (right_sat > 100)
+	      right_sat = 100;
+	    left_sat = (u8)((c->left_saturation * 100) / 65535);
+	    if (left_sat > 100)
+	      left_sat = 100;
 
     p->right_sat = right_sat;
     p->left_sat = left_sat;
 
-    /*
-     * WORKAROUND: Per Windows captures, BOTH X-axis and Y-axis packets have
-     * zeroed coefficients/deadband/center. Only saturation values should be non-zero.
-     * Sending non-zero coefficients may confuse the device firmware and cause EPROTO errors.
-     *
-     * Coefficients, deadband, center are intentionally left as zeros.
-     */
-    (void)is_first_packet; /* Unused - both packets get zeros for coefficients */
+	    /*
+	     * WORKAROUND: Per Windows captures, BOTH X-axis and Y-axis packets have
+	     * zeroed coefficients/deadband/center. Only saturation values should be
+	     * non-zero. Sending non-zero coefficients may confuse the device firmware
+	     * and cause EPROTO errors. Coefficients, deadband and center are
+	     * intentionally left as zeros for both X and Y packets.
+	     */
+	    (void)is_first_packet; /* Unused - both packets keep zeros for coefficients */
 }
 
 /*
@@ -746,12 +756,14 @@ static int t500rs_upload_constant(struct t500rs_device_entry *t500rs,
     return hw_id;
   }
 
-  /* Pre-upload STOP to clear the slot (Windows parity) */
-  ret = t500rs_send_stop(t500rs, (u8)hw_id);
-  if (ret) {
-    hid_err(t500rs->hdev, "Pre-upload STOP failed: %d\n", ret);
-    return ret;
-  }
+  /* Clear started flag - effect needs START after upload */
+  if (effect->id < T500RS_MAX_EFFECTS)
+    t500rs->effect_started[effect->id] = false;
+
+  /*
+   * NOTE: Pre-upload STOP removed - Windows captures show NO STOP before
+   * effect upload. The device handles slot reuse internally.
+   */
 
   /* Compute protocol parameters using hw_id for subtype calculation */
   direction_dev = t500rs_scale_direction(effect->direction);
@@ -835,57 +847,61 @@ static int t500rs_upload_condition(struct t500rs_device_entry *t500rs,
   u16 param_sub, env_sub;
   const struct ff_condition_effect *cond = &effect->u.condition[0];
 
-  /*
-   * TEMPORARY DIAGNOSTIC PATH (DiRT Rally 2.0 / AMS2 investigation)
-   * -----------------------------------------------------------------
-   * We suspect conditional effects (spring/damper/friction/inertia)
-   * may be interfering with FFB behavior in some titles. To isolate
-   * the issue we provide an option to disable all conditional uploads
-   * at the driver level while keeping constant and ramp effects
-   * functional.
-   *
-   * For now this is hard-wired to "disabled" for debugging. When
-   * active, we return success without sending any HID packets so that
-   * games continue without hard failures, but the wheel will not have
-   * hardware conditional effects present.
-   */
-  hid_info(t500rs->hdev,
-           "T500RS: CONDITIONAL upload for effect %d temporarily disabled (diagnostic)",
-           effect->id);
-  return 0;
+  /* DEBUG: upload_condition ENABLED for testing */
 
-  /* Determine effect type and select appropriate gain */
+  /*
+   * Determine effect type code and select appropriate gain.
+   *
+   * Per Windows captures:
+   *   - Spring uses effect_type = 0x40
+   *   - Damper/Friction/Inertia use effect_type = 0x41
+   */
+  u8 effect_type;
   switch (effect->type) {
   case FF_SPRING:
     type_name = "spring";
     effect_gain = spring_level;
+    effect_type = 0x40;  /* Spring uses 0x40 */
     break;
   case FF_DAMPER:
     type_name = "damper";
     effect_gain = damper_level;
+    effect_type = 0x41;  /* Damper uses 0x41 */
     break;
   case FF_FRICTION:
     type_name = "friction";
     effect_gain = friction_level;
+    effect_type = 0x41;  /* Friction uses 0x41 */
     break;
   case FF_INERTIA:
     type_name = "inertia";
     effect_gain = 100;
+    effect_type = 0x41;  /* Inertia uses 0x41 */
     break;
   default:
     return -EINVAL;
   }
 
-  /* Allocate a hardware effect ID for this logical effect.
-   * Conditional effects MUST skip index 0 - the device rejects 0x05 packets
-   * with index 0 subtypes (EPROTO). Per Windows captures, all conditional
-   * effects use index 1+ (subtypes 0x2a/0x38 or higher).
+  /*
+   * CRITICAL: Per Windows captures, ALL conditional effects share the SAME
+   * hardware slot (hw_id=1, giving codes 0x2a/0x38). The T500RS firmware
+   * appears to only recognize this specific slot for conditional effects.
+   *
+   * This means:
+   * - Multiple conditional effects (spring, damper, friction, inertia) all
+   *   share slot 1 and the last uploaded one "wins"
+   * - Games typically blend these into a single effect anyway
+   * - We still track the logical->hw_id mapping so stop/update work correctly
    */
-  hw_id = t500rs_alloc_hw_id(t500rs, effect->id, true);
-  if (hw_id < 0) {
-    hid_err(t500rs->hdev, "Failed to allocate hw_id for %s effect %d\n",
-            type_name, effect->id);
-    return hw_id;
+  hw_id = 1;  /* Always use hw_id=1 for conditionals (codes 0x2a/0x38) */
+
+  /* Store the mapping for this logical effect */
+  if (effect->id >= 0 && effect->id < T500RS_MAX_EFFECTS) {
+    t500rs->hw_id[effect->id] = hw_id;
+    t500rs->hw_id_in_use[hw_id] = true;
+    t500rs->hw_id_owner[hw_id] = effect->id;
+    /* Clear started flag - effect needs START after upload */
+    t500rs->effect_started[effect->id] = false;
   }
 
   /* Per Windows captures, conditional effects use index-based subtypes */
@@ -900,14 +916,10 @@ static int t500rs_upload_condition(struct t500rs_device_entry *t500rs,
              type_name, effect->id, hw_id, effect_gain, direction_dev,
              param_sub, env_sub, cond->right_coeff, cond->left_coeff);
 
-  /* Pre-upload STOP to clear the slot (Windows parity) */
-  ret = t500rs_send_stop(t500rs, (u8)hw_id);
-  if (ret) {
-    hid_err(t500rs->hdev, "Pre-upload STOP failed: %d\n", ret);
-    return ret;
-  }
-
   /*
+   * NOTE: Pre-upload STOP removed - Windows captures show NO STOP before
+   * effect upload. The device handles slot reuse internally.
+   *
    * CRITICAL: Windows sends packets in this order for conditionals:
    *   1. 0x05 X-axis parameters
    *   2. 0x01 Main effect descriptor
@@ -923,6 +935,8 @@ static int t500rs_upload_condition(struct t500rs_device_entry *t500rs,
   {
     struct t500rs_pkt_r05_condition *p = (struct t500rs_pkt_r05_condition *)buf;
     t500rs_build_r05_condition(p, (u8)(param_sub & 0xff), cond, true);
+    hid_info(t500rs->hdev, "FFB: 0x05 X-axis: %02x %02x %02x%02x %02x%02x %02x%02x %02x %02x %02x\n",
+             buf[0], buf[1], buf[2], buf[3], buf[4], buf[5], buf[6], buf[7], buf[8], buf[9], buf[10]);
   }
   ret = t500rs_send_hid(t500rs, buf, sizeof(struct t500rs_pkt_r05_condition));
   if (ret) {
@@ -938,6 +952,8 @@ static int t500rs_upload_condition(struct t500rs_device_entry *t500rs,
   {
     struct t500rs_pkt_r05_condition *p = (struct t500rs_pkt_r05_condition *)buf;
     t500rs_build_r05_condition(p, (u8)(env_sub & 0xff), cond, false);
+    hid_info(t500rs->hdev, "FFB: 0x05 Y-axis: %02x %02x %02x%02x %02x%02x %02x%02x %02x %02x %02x\n",
+             buf[0], buf[1], buf[2], buf[3], buf[4], buf[5], buf[6], buf[7], buf[8], buf[9], buf[10]);
   }
   ret = t500rs_send_hid(t500rs, buf, sizeof(struct t500rs_pkt_r05_condition));
   if (ret) {
@@ -946,13 +962,20 @@ static int t500rs_upload_condition(struct t500rs_device_entry *t500rs,
   }
 
   /* Report 0x01 - Main effect upload (AFTER 0x05 packets for conditionals!)
-   * Per Windows captures: ALL conditional effects use effect_type=0x40
-   * (Spring: 01 00 40 40..., Damper: 01 00 40 40...)
+   * Per Windows captures:
+   *   - Spring uses effect_type=0x40
+   *   - Damper/Friction/Inertia use effect_type=0x41
+   *
+   * CRITICAL: Use hw_id as effect_id to avoid overwriting constant effect slot!
+   * Windows may use effect_id=0 for all, but that might be because it only
+   * has one active effect at a time. For concurrent effects, we need unique IDs.
    */
   {
-    u8 effect_type = 0x40;  /* All conditionals use 0x40 per Windows captures */
     struct t500rs_pkt_r01_main *m = (struct t500rs_pkt_r01_main *)buf;
-    t500rs_build_r01_main(m, 0, effect_type, duration_ms, delay_ms, param_sub, env_sub);
+    t500rs_build_r01_main(m, (u8)hw_id, effect_type, duration_ms, delay_ms, param_sub, env_sub);
+    hid_info(t500rs->hdev, "FFB: 0x01 cond: %02x %02x %02x %02x %02x%02x %02x%02x %02x %02x%02x %02x%02x %02x\n",
+             buf[0], buf[1], buf[2], buf[3], buf[4], buf[5], buf[6], buf[7],
+             buf[8], buf[9], buf[10], buf[11], buf[12], buf[13]);
   }
   ret = t500rs_send_hid(t500rs, buf, sizeof(struct t500rs_pkt_r01_main));
   if (ret) {
@@ -1313,7 +1336,8 @@ static int t500rs_play_effect(void *data,
   if (!buf)
     return -ENOMEM;
 
-  hid_info(t500rs->hdev, "FFB: play_effect id=%d type=%d\n", effect->id, effect->type);
+  hid_info(t500rs->hdev, "FFB: play_effect id=%d type=%d flags=0x%lx\n",
+           effect->id, effect->type, state->flags);
 
   /* Get the allocated hw_id for this logical effect */
   hw_id = t500rs_get_hw_id(t500rs, effect->id);
@@ -1352,21 +1376,28 @@ static int t500rs_play_effect(void *data,
     }
   }
 
-  /* Conditional effects may not need START command */
-  if (effect->type == FF_SPRING || effect->type == FF_DAMPER ||
-      effect->type == FF_FRICTION || effect->type == FF_INERTIA) {
-    hid_info(t500rs->hdev, "FFB: Conditional effect %d started (no START sent)\n", effect->id);
-    return 0;
-  }
-
-  /* Send START command with proper hw_id */
-  T500RS_DBG(t500rs, "Sending START command (hw_id=%d) for effect %d\n",
+  /*
+   * Send START command.
+   *
+   * CRITICAL: The effect_id in the START command (0x41) must match the
+   * effect_id used in the 0x01 main upload packet.
+   *
+   * For constant effects: effect_id=0 (hw_id=0)
+   * For conditional effects: effect_id=hw_id (typically 1)
+   *
+   * This prevents slot collision between concurrent effect types.
+   */
+  T500RS_DBG(t500rs, "Sending START command (effect_id=%d) for effect %d\n",
               hw_id, effect->id);
-  ret = t500rs_send_start(t500rs, (u8)hw_id);
-  if (ret == 0)
+  ret = t500rs_send_start(t500rs, (u8)hw_id);  /* Use hw_id as effect_id */
+  if (ret == 0) {
     hid_info(t500rs->hdev, "FFB: Effect %d started successfully\n", effect->id);
-  else
+    /* Mark effect as started so we don't send START again */
+    if (effect->id < T500RS_MAX_EFFECTS)
+      t500rs->effect_started[effect->id] = true;
+  } else {
     hid_err(t500rs->hdev, "FFB: Failed to start effect %d: %d\n", effect->id, ret);
+  }
   return ret;
 }
 
@@ -1394,6 +1425,13 @@ static int t500rs_stop_effect(void *data,
 
   hid_info(t500rs->hdev, "FFB: stop_effect id=%d type=%d\n", state->effect.id, state->effect.type);
 
+  /* DEBUG: Skip stop for conditionals to isolate the issue */
+  if (state->effect.type == FF_SPRING || state->effect.type == FF_DAMPER ||
+      state->effect.type == FF_FRICTION || state->effect.type == FF_INERTIA) {
+    hid_info(t500rs->hdev, "FFB: stop_effect id=%d SKIPPED (conditional debug)\n", state->effect.id);
+    return 0;
+  }
+
   /* Get the allocated hw_id for this logical effect */
   hw_id = t500rs_get_hw_id(t500rs, state->effect.id);
   if (hw_id < 0) {
@@ -1406,11 +1444,19 @@ static int t500rs_stop_effect(void *data,
   T500RS_DBG(t500rs, "Stop effect: id=%d, hw_id=%d, type=%d\n",
               state->effect.id, hw_id, state->effect.type);
 
-  /* Send STOP command with proper hw_id */
-  ret = t500rs_send_stop(t500rs, (u8)hw_id);
+  /*
+   * Send STOP command with effect_id=0.
+   * Per Windows captures, STOP uses the same effect_id as the 0x01 main packet,
+   * which is always 0 for all effect types.
+   */
+  ret = t500rs_send_stop(t500rs, 0);  /* Always effect_id=0 per Windows */
 
   /* Free the hardware slot for reuse */
   t500rs_free_hw_id(t500rs, state->effect.id);
+
+  /* Clear the started flag so effect can be started again */
+  if (state->effect.id < T500RS_MAX_EFFECTS)
+    t500rs->effect_started[state->effect.id] = false;
 
   if (ret == 0)
     hid_info(t500rs->hdev, "FFB: Effect %d stopped successfully\n", state->effect.id);
@@ -1438,30 +1484,9 @@ static int t500rs_update_effect(void *data,
   if (!buf)
     return -ENOMEM;
 
-  hid_info(t500rs->hdev, "FFB: update_effect id=%d type=%d\n", effect->id, effect->type);
+	hid_info(t500rs->hdev, "FFB: update_effect id=%d type=%d\n", effect->id, effect->type);
 
-  /*
-   * TEMPORARY DIAGNOSTIC PATH (DiRT Rally 2.0 / AMS2 investigation)
-   * -----------------------------------------------------------------
-   * To isolate whether conditional effects are responsible for
-   * missing FFB in some titles, we short-circuit updates for these
-   * types so that only constant, periodic and ramp updates reach
-   * the hardware.
-   */
-  switch (effect->type) {
-  case FF_SPRING:
-  case FF_DAMPER:
-  case FF_FRICTION:
-  case FF_INERTIA:
-    hid_info(t500rs->hdev,
-             "T500RS: update for conditional effect %d temporarily disabled (diagnostic)",
-             effect->id);
-    return 0;
-  default:
-    break;
-  }
-
-  /* Get the hw_id for this effect (must have been allocated during upload) */
+	/* Get the hw_id for this effect (must have been allocated during upload) */
   hw_id = t500rs_get_hw_id(t500rs, effect->id);
   if (hw_id < 0) {
     /* Effect not uploaded yet - skip update */
