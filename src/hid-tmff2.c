@@ -330,6 +330,14 @@ static void tmff2_set_autocenter(struct input_dev *dev, uint16_t value)
 		schedule_delayed_work(&tmff2->work, 0);
 }
 
+/* Static array to avoid large stack allocation */
+static struct {
+	int effect_id;
+	struct tmff2_effect_state effect;
+	bool do_stop;
+	bool do_start;
+} effect_actions[16];
+
 static void tmff2_work_handler(struct work_struct *w)
 {
 	unsigned long lock_flags = 0;
@@ -369,16 +377,17 @@ static void tmff2_work_handler(struct work_struct *w)
 	if (set_gain && tmff2->set_autocenter)
 		tmff2->set_autocenter(tmff2->data, pending_autocenter);
 
+	/* First pass: Process UPLOAD/UPDATE actions and collect STOP/START actions */
+	int num_actions = 0;
+	
 	for (effect_id = 0; effect_id < tmff2->max_effects; ++effect_id) {
 		unsigned long actions = 0;
 		struct tmff2_effect_state effect;
 
 		time_now = JIFFIES2MS(jiffies);
-
 		state = &tmff2->states[effect_id];
 
-		/* critical section for updating state flags, keep log of what
-		 * actions to take after the critical section with actions */
+		/* Update state flags */
 		spin_lock_irqsave(&tmff2->lock, lock_flags);
 
 		effect_delay = state->effect.replay.delay;
@@ -395,8 +404,6 @@ static void tmff2_work_handler(struct work_struct *w)
 		if (test_bit(FF_EFFECT_QUEUE_UPLOAD, &state->flags)) {
 			__set_bit(FF_EFFECT_QUEUE_UPLOAD, &actions);
 			__clear_bit(FF_EFFECT_QUEUE_UPLOAD, &state->flags);
-			/* if we're uploading an effect, it's bound to be up
-			 * to date */
 			__clear_bit(FF_EFFECT_QUEUE_UPDATE, &state->flags);
 		}
 
@@ -405,54 +412,74 @@ static void tmff2_work_handler(struct work_struct *w)
 			__clear_bit(FF_EFFECT_QUEUE_UPDATE, &state->flags);
 		}
 
-		if (test_bit(FF_EFFECT_QUEUE_START, &state->flags)) {
-			__set_bit(FF_EFFECT_QUEUE_START, &actions);
-			__clear_bit(FF_EFFECT_QUEUE_START, &state->flags);
-			/* effect is playing since we're started it right now */
-			__set_bit(FF_EFFECT_PLAYING, &state->flags);
-		}
-
 		if (test_bit(FF_EFFECT_QUEUE_STOP, &state->flags)) {
 			__set_bit(FF_EFFECT_QUEUE_STOP, &actions);
-			__clear_bit(FF_EFFECT_QUEUE_STOP, &state->flags);
+			if (!test_bit(FF_EFFECT_QUEUE_START, &state->flags))
+				__clear_bit(FF_EFFECT_PLAYING, &state->flags);
+		}
 
-			/* the effect can't be playing if we're stopped, aye? */
-			__clear_bit(FF_EFFECT_PLAYING, &state->flags);
+		if (test_bit(FF_EFFECT_QUEUE_START, &state->flags)) {
+			__set_bit(FF_EFFECT_QUEUE_START, &actions);
+			__set_bit(FF_EFFECT_PLAYING, &state->flags);
 		}
 
 		if (state->count > max_count)
 			max_count = state->count;
 
-		/* copy effect state to local variable so we can pass it around
-		 * after the atomic section */
 		effect = *state;
-
 		spin_unlock_irqrestore(&tmff2->lock, lock_flags);
 
-		/* perform the identified actions */
-		if (test_bit(FF_EFFECT_QUEUE_UPLOAD, &actions)
-				&& tmff2->upload_effect(tmff2->data, &effect)) {
+		/* Execute UPLOAD/UPDATE actions immediately */
+		if (test_bit(FF_EFFECT_QUEUE_UPLOAD, &actions) &&
+		    tmff2->upload_effect(tmff2->data, &effect))
 			hid_warn(tmff2->hdev, "failed uploading effect\n");
-		}
 
-		if (test_bit(FF_EFFECT_QUEUE_UPDATE, &actions)
-				&& tmff2->update_effect(tmff2->data, &effect)) {
+		if (test_bit(FF_EFFECT_QUEUE_UPDATE, &actions) &&
+		    tmff2->update_effect(tmff2->data, &effect))
 			hid_warn(tmff2->hdev, "failed updating effect\n");
+
+		/* Collect STOP/START actions for batch processing */
+		if (test_bit(FF_EFFECT_QUEUE_STOP, &actions) ||
+		    test_bit(FF_EFFECT_QUEUE_START, &actions)) {
+			effect_actions[num_actions].effect_id = effect_id;
+			effect_actions[num_actions].effect = effect;
+			effect_actions[num_actions].do_stop = test_bit(FF_EFFECT_QUEUE_STOP, &actions);
+			effect_actions[num_actions].do_start = test_bit(FF_EFFECT_QUEUE_START, &actions);
+			num_actions++;
 		}
 
-		if (test_bit(FF_EFFECT_QUEUE_START, &actions)
-				&& tmff2->play_effect(tmff2->data, &effect)) {
-			hid_warn(tmff2->hdev, "failed starting effect\n");
-		}
+		hid_hw_wait(tmff2->hdev);
+	}
 
-		if (test_bit(FF_EFFECT_QUEUE_STOP, &actions)
-				&& tmff2->stop_effect(tmff2->data, &effect)) {
+	/* Second pass: Send all STOP commands first */
+	for (int i = 0; i < num_actions; i++) {
+		if (!effect_actions[i].do_stop)
+			continue;
+
+		state = &tmff2->states[effect_actions[i].effect_id];
+		spin_lock_irqsave(&tmff2->lock, lock_flags);
+		__clear_bit(FF_EFFECT_QUEUE_STOP, &state->flags);
+		spin_unlock_irqrestore(&tmff2->lock, lock_flags);
+
+		if (tmff2->stop_effect(tmff2->data, &effect_actions[i].effect))
 			hid_warn(tmff2->hdev, "failed stopping effect\n");
-		}
 
+		hid_hw_wait(tmff2->hdev);
+	}
 
-		/* wait for each effect update to actually be sent out to avoid
-		 * filling up usb output queue */
+	/* Third pass: Send all START commands */
+	for (int i = 0; i < num_actions; i++) {
+		if (!effect_actions[i].do_start)
+			continue;
+
+		state = &tmff2->states[effect_actions[i].effect_id];
+		spin_lock_irqsave(&tmff2->lock, lock_flags);
+		__clear_bit(FF_EFFECT_QUEUE_START, &state->flags);
+		spin_unlock_irqrestore(&tmff2->lock, lock_flags);
+
+		if (tmff2->play_effect(tmff2->data, &effect_actions[i].effect))
+			hid_warn(tmff2->hdev, "failed starting effect\n");
+
 		hid_hw_wait(tmff2->hdev);
 	}
 
