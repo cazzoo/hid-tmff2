@@ -1,0 +1,26 @@
+[package]
+name = "ffb-visualizer"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+default = []
+
+[dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util"] }
+axum = { version = "0.7", features = ["ws", "json", "macros"] }
+axum-extra = { version = "0.9", features = ["typed-header"] }
+tower = "0.4"
+tower-http = { version = "0.5", features = ["cors", "trace", "fs", "util"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+evdev = { version = "0.10", features = ["kabi"] }
+nix = { version = "0.27", default-features = false, features = ["ioctl", "poll", "process", "user"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+libc = "0.2"
+once_cell = "1"
+thiserror = "2"
+itoa = "1"
+
+[build-dependencies]

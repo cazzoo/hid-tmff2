@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FFB Visualizer</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <h1>FFB Visualizer</h1>
+  <div id="status">
+    <span id="mode">mode: —</span>
+    <span id="device">device: —</span>
+    <span id="virtual">virtual: —</span>
+    <span id="ws-state" class="dot off" title="websocket"></span>
+  </div>
+</header>
+
+<main>
+  <section class="panel scope">
+    <h2>Force (torque) scope</h2>
+    <canvas id="scope" width="780" height="220"></canvas>
+    <div class="legend">
+      <span class="sw t"></span> torque (signed)
+      <span class="sw p"></span> wheel position
+      <span class="sw g"></span> gain
+    </div>
+  </section>
+
+  <section class="panel gauges">
+    <div class="gauge">
+      <h2>Strength</h2>
+      <div class="vbar"><div id="strength-fill"></div></div>
+      <div class="readout" id="strength-val">0%</div>
+    </div>
+    <div class="gauge">
+      <h2>Direction</h2>
+      <div class="hbar">
+        <div class="hbar-center"></div>
+        <div id="dir-fill"></div>
+      </div>
+      <div class="readout" id="dir-val">0°</div>
+    </div>
+    <div class="gauge num">
+      <h2>Net torque</h2>
+      <div class="big" id="torque-val">0.00</div>
+      <div class="sub" id="gain-val">gain 100%</div>
+    </div>
+    <div class="gauge num">
+      <h2>Wheel</h2>
+      <div class="big" id="pos-val">0.00</div>
+      <div class="sub" id="vel-val">vel 0.00/s</div>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2>Active effects</h2>
+    <table id="effects">
+      <thead>
+        <tr>
+          <th>ID</th><th>Type</th><th>Wave</th><th>Dir°</th>
+          <th>Level/Mag</th><th>Age</th><th>Length</th>
+          <th>Repeat</th><th>Contrib</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+    <div id="no-effects" class="muted">No active effects.</div>
+  </section>
+
+  <section class="panel">
+    <h2>Live gain settings <small id="gains-note" class="muted"></small></h2>
+    <div id="gains"></div>
+  </section>
+</main>
+
+<footer>
+  <span class="muted">
+    Force shown is a <b>model of FF command intent</b>, not a measurement of motor current.
+    &nbsp;|&nbsp;
+    <a href="/api/devices">devices</a> &middot;
+    <a href="/api/gains">gains</a>
+  </span>
+</footer>
+
+<script src="app.js"></script>
+</body>
+</html>
