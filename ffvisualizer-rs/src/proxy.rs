@@ -10,161 +10,36 @@
 //!
 //! Runs on a dedicated blocking thread; sample() is async-safe.
 
-use std::collections::{HashSet, HashMap};
+use std::collections::{HashMap, HashSet};
 use std::os::unix::io::RawFd;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use evdev::{AbsoluteAxisCode, Device, EventType, InputDevice, FFEffect};
+use evdev::Device;
 use tracing::{debug, error, info, warn};
 
+use crate::input::supported_ff_effect_codes;
 use crate::model::ForceModel;
 use crate::protocol::{
-    begin_ff_erase, begin_ff_upload, end_ff_erase, end_ff_upload,
-    erase_effect, poll_fds, upload_effect, effect_to_params as proto_effect_to_params,
-    FfEffect, PollFd, RawFdStream, EV_UINPUT,
+    begin_ff_erase, begin_ff_upload, end_ff_erase, end_ff_upload, erase_effect,
+    poll_fds, upload_effect, effect_to_params as proto_effect_to_params, PollFd, RawFdStream,
+    EV_UINPUT, UI_DEV_CREATE, UI_DEV_SETUP, UI_SET_ABSBIT, UI_SET_EVBIT, UI_SET_FFBIT,
+    UI_SET_KEYBIT, UinputSetup, UINPUT_MAX_NAME_SIZE,
 };
-use crate::types::{EffectType, FF_AUTOCENTER as FF_AUTOCENTER_CODE, FF_GAIN as FF_GAIN_CODE};
+use crate::types::{
+    FF_AUTOCENTER as FF_AUTOCENTER_CODE, FF_GAIN as FF_GAIN_CODE,
+};
 
-// Linux input.h
-const EV_KEY: u16 = 0x01;
-const EV_REL: u16 = 0x02;
-const EV_ABS: u16 = 0x03;
-const EV_MSC: u16 = 0x04;
+// Linux input.h event types
 const EV_SYN: u16 = 0x00;
-const EV_FF:  u16 = 0x03;
+const EV_KEY: u16 = 0x01;
+const EV_ABS: u16 = 0x03;
+const EV_FF: u16 = 0x15;
 
 // uinput FF command codes for EV_UINPUT
 const UI_FF_UPLOAD: u16 = 1;
-const UI_FF_ERASE:  u16 = 2;
-
-const BUS_USB: u16 = 0x03;
-
-// ===========================================================================
-// UInput builder via raw syscalls (evdev 0.10 has no UInput wrapper)
-// ===========================================================================
-
-#[derive(Debug, Default)]
-struct UinputBuilder {
-    name:    String,
-    vendor:  u16,
-    product: u16,
-    version: u16,
-    bustype: u16,
-    ff_bits:  HashSet<u16>,
-    ev_bits:  HashSet<u16>,
-    abs_bits: HashSet<u16>,
-    key_bits:HashSet<u16>,
-}
-
-impl UinputBuilder {
-    fn new(name: impl Into<String>) -> Self {
-        Self {
-            name: name.into(),
-            bustype: BUS_USB,
-            ..Self::default()
-        }
-    }
-    fn set_ff(mut self, b: impl IntoIterator<Item=u16>) -> Self { self.ff_bits.extend(b); self }
-    fn set_ev(mut self, b: impl IntoIterator<Item=u16>) -> Self { self.ev_bits.extend(b); self }
-    fn set_abs(mut self, b: impl IntoIterator<Item=u16>) -> Self { self.abs_bits.extend(b); self }
-    fn set_key(mut self, b: impl IntoIterator<Item=u16>) -> Self { self.key_bits.extend(b); self }
-
-    /// Build the virtual device.  Returns (uinput_control_fd, device_name_eventN).
-    fn build(self) -> std::io::Result<(RawFd, String)> {
-        unsafe {
-            let fd = libc::open(
-                b"/dev/uinput\0" as *const u8 as *const libc::c_char,
-                libc::O_WRONLY | libc::O_NONBLOCK,
-            );
-            if fd < 0 {
-                let e = std::io::Error::last_os_error();
-                if e.raw_os_error() == Some(libc::ENOENT) {
-                    return Err(std::io::Error::new(
-                        std::io::ErrorKind::NotFound,
-                        "/dev/uinput not found — `modprobe uinput` and retry",
-                    ));
-                }
-                return Err(e);
-            }
-
-            // ioctl request: _IOW('U', nr, size)
-            fn iow(fd: RawFd, nr: u8, v: u32) -> std::io::Result<()> {
-                let req = (2u64 << 30) | ((b'U' as u64) << 8) | ((nr as u64) << 16) | (4u64 << 16);
-                if unsafe { libc::ioctl(fd, req, v) } < 0 {
-                    Err(std::io::Error::last_os_error())
-                } else {
-                    Ok(())
-                }
-            }
-
-            // Set properties
-            iow(fd, 0x00, ((self.vendor  as u32) << 16) | self.product  as u32)?;
-            iow(fd, 0x01, self.version as u32)?;
-            iow(fd, 0x03, self.bustype as u32)?;
-
-            // Device name (NUL-terminated, max 64 bytes)
-            let name_bytes = format!("{}\0", self.name);
-            let req = (2u64 << 30) | ((b'U' as u64) << 8) | (0x02u64 << 16) | (name_bytes.len() as u64);
-            if unsafe { libc::ioctl(fd, req, name_bytes.as_ptr() as *mut libc::c_void) } < 0 {
-                let e = std::io::Error::last_os_error();
-                unsafe { libc::close(fd); }
-                return Err(e);
-            }
-
-            // Capability bits
-            for b in &self.ev_bits  { iow(fd, 0x20, *b as u32)?; }
-            for b in &self.abs_bits { iow(fd, 0x3A, *b as u32)?; }
-            for b in &self.key_bits { iow(fd, 0x33, *b as u32)?; }
-            for b in &self.ff_bits  { iow(fd, 0x75, *b as u32)?; }
-
-            // Create the device
-            let create_req = (2u64 << 30) | ((b'U' as u64) << 8) | (0x01u64 << 16);
-            if unsafe { libc::ioctl(fd, create_req, 0) } < 0 {
-                let e = std::io::Error::last_os_error();
-                unsafe { libc::close(fd); }
-                return Err(e);
-            }
-
-            // Wait for the kernel to create the event node
-            unsafe { libc::usleep(200_000); } // 200 ms
-
-            // Find the event node by scanning /sys/class/input/eventN/device/name
-            let ev_name = find_virtual_event_name(&self.name).ok_or_else(|| {
-                std::io::Error::new(
-                    std::io::ErrorKind::NotFound,
-                    format!("virtual event node for '{}' not found — run: cat /proc/bus/input/devices", self.name),
-                )
-            })?;
-
-            Ok((fd, ev_name))
-        }
-    }
-}
-
-fn find_virtual_event_name(dev_name: &str) -> Option<String> {
-    let sysp = std::path::Path::new("/sys/class/input");
-    let mut entries: Vec<_> = std::fs::read_dir(sysp)
-        .ok()?
-        .filter_map(|e| e.ok())
-        .collect();
-    // Sort by mtime descending (newest first — our device was just created)
-    entries.sort_by(|a, b| {
-        let at = a.metadata().and_then(|m| m.modified()).unwrap_or(std::time::UNIX_EPOCH);
-        let bt = b.metadata().and_then(|m| m.modified()).unwrap_or(std::time::UNIX_EPOCH);
-        bt.cmp(&at)
-    });
-    for entry in entries {
-        let nf = entry.path().join("device").join("name");
-        if let Ok(name) = std::fs::read_to_string(nf) {
-            if name.trim() == dev_name {
-                return Some(entry.file_name().to_string_lossy().into_owned());
-            }
-        }
-    }
-    None
-}
+const UI_FF_ERASE: u16 = 2;
 
 // ===========================================================================
 // Axis helpers
@@ -172,39 +47,280 @@ fn find_virtual_event_name(dev_name: &str) -> Option<String> {
 
 struct AxisInfo {
     code: u16,
-    min:  i32,
-    max:  i32,
+    min: i32,
+    max: i32,
 }
 
-fn detect_axis(dev: &Device) -> AxisInfo {
-    for candidate in [
-        AbsoluteAxisCode::ABS_RX,
-        AbsoluteAxisCode::ABS_X,
-        AbsoluteAxisCode::ABS_WHEEL,
-    ] {
-        if let Some(ai) = dev.get_abs_info(candidate) {
-            return AxisInfo {
-                code: candidate as u16,
-                min: ai.min(),
-                max: ai.max(),
-            };
+/// EVIOCGABS(ax): _IOWR('E', 0x40 + (ax), sizeof(input_absinfo))
+const fn eviocgabs(axis: u16) -> u32 {
+    let nr = 0x40u32 + axis as u32;
+    // _IOWR = dir=3, then (dir<<30)|(type<<8)|(nr<<16)|(size<<16)
+    (3u32 << 30)
+        | ((b'E' as u32) << 8)
+        | (nr << 16)
+        | (std::mem::size_of::<libc::input_absinfo>() as u32) << 16
+}
+
+fn abs_info(fd: RawFd, axis: u16) -> Option<AxisInfo> {
+    let mut ai: libc::input_absinfo = unsafe { std::mem::zeroed() };
+    let r =
+        unsafe { libc::ioctl(fd, eviocgabs(axis) as libc::c_ulong, &mut ai as *mut _ as *mut libc::c_void) };
+    if r < 0 {
+        return None;
+    }
+    Some(AxisInfo {
+        code: axis,
+        min: ai.minimum,
+        max: ai.maximum,
+    })
+}
+
+fn detect_axis(fd: RawFd, dev: &Device) -> AxisInfo {
+    for candidate in [0x03u16, 0x00, 0x08] {
+        // ABS_RX, ABS_X, ABS_WHEEL
+        if let Some(ai) = abs_info(fd, candidate) {
+            return ai;
         }
     }
-    for ax in dev.supported_abs_axes() {
-        if let Some(ai) = dev.get_abs_info(ax) {
-            return AxisInfo {
-                code: ax as u16,
-                min: ai.min(),
-                max: ai.max(),
-            };
+    let axes = dev.absolute_axes_supported();
+    for code in 0..0x3fu16 {
+        if axes.contains(evdev::AbsoluteAxis::from_bits_truncate(1u64 << code)) {
+            if let Some(ai) = abs_info(fd, code) {
+                return ai;
+            }
         }
     }
-    AxisInfo { code: AbsoluteAxisCode::ABS_X as u16, min: 0, max: 32767 }
+    AxisInfo {
+        code: 0x00,
+        min: 0,
+        max: 65535,
+    }
 }
 
 fn norm_axis(value: i32, min: i32, max: i32) -> f32 {
     let span = (max - min).max(1) as f32;
     (((value - min) as f32) / span * 2.0 - 1.0).clamp(-1.0, 1.0)
+}
+
+/// Write one raw input_event (libc layout, field `type_`) to an fd.
+fn write_input_event(fd: RawFd, type_: u16, code: u16, value: i32) -> std::io::Result<()> {
+    let ev = libc::input_event {
+        time: libc::timeval {
+            tv_sec: 0,
+            tv_usec: 0,
+        },
+        type_,
+        code,
+        value,
+    };
+    let buf = unsafe {
+        std::slice::from_raw_parts(
+            &ev as *const _ as *const u8,
+            std::mem::size_of::<libc::input_event>(),
+        )
+    };
+    let n = unsafe { libc::write(fd, buf.as_ptr() as *const libc::c_void, buf.len() as _) };
+    if n < 0 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
+// ===========================================================================
+// UInput builder via raw ioctls (evdev 0.10 has no UInput wrapper)
+// ===========================================================================
+
+/// Run one uinput setup step, logging which ioctl failed on error.
+fn set_step<F>(fd: RawFd, name: &str, f: F) -> std::io::Result<()>
+where
+    F: FnOnce() -> std::io::Result<()>,
+{
+    let _ = fd;
+    match f() {
+        Ok(_) => Ok(()),
+        Err(e) => {
+            warn!(step = name, errno = e.raw_os_error(), error = %e, "uinput setup step failed");
+            Err(e)
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+struct UinputBuilder {
+    name: String,
+    ff_bits: HashSet<u16>,
+    ev_bits: HashSet<u16>,
+    abs_bits: HashSet<u16>,
+    key_bits: HashSet<u16>,
+}
+
+impl UinputBuilder {
+    fn new(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            ..Self::default()
+        }
+    }
+    fn set_ff(mut self, b: impl IntoIterator<Item = u16>) -> Self {
+        self.ff_bits.extend(b);
+        self
+    }
+    fn set_ev(mut self, b: impl IntoIterator<Item = u16>) -> Self {
+        self.ev_bits.extend(b);
+        self
+    }
+    fn set_abs(mut self, b: impl IntoIterator<Item = u16>) -> Self {
+        self.abs_bits.extend(b);
+        self
+    }
+    fn set_key(mut self, b: impl IntoIterator<Item = u16>) -> Self {
+        self.key_bits.extend(b);
+        self
+    }
+
+    /// Build the virtual device. Returns (uinput_control_fd, /dev/input/eventN).
+    fn build(self) -> std::io::Result<(RawFd, String)> {
+        let c_path = b"/dev/uinput\0";
+        let fd = unsafe {
+            libc::open(
+                c_path.as_ptr() as *const libc::c_char,
+                libc::O_RDWR | libc::O_NONBLOCK,
+            )
+        };
+        if fd < 0 {
+            let e = std::io::Error::last_os_error();
+            if e.raw_os_error() == Some(libc::ENOENT) {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "/dev/uinput not found — `modprobe uinput` and retry",
+                ));
+            }
+            return Err(e);
+        }
+
+        let setup_ok = (|| -> std::io::Result<()> {
+            // Capability bits MUST be set BEFORE UI_DEV_SETUP: UI_DEV_SETUP
+            // (and the legacy uinput_user_dev write) transitions the fd out of
+            // the UINPUT_NEW state, after which UI_SET_*BIT returns EINVAL.
+            // EV_SYN (0) must NOT be set via UI_SET_EVBIT (kernel rejects it).
+            for b in &self.ev_bits {
+                if *b == EV_SYN {
+                    continue;
+                }
+                set_step(fd, &format!("UI_SET_EVBIT({b})"), || {
+                    crate::protocol::ui_set_bit(fd, UI_SET_EVBIT, *b as i32)
+                })?;
+            }
+            for b in &self.abs_bits {
+                set_step(fd, &format!("UI_SET_ABSBIT({b})"), || {
+                    crate::protocol::ui_set_bit(fd, UI_SET_ABSBIT, *b as i32)
+                })?;
+            }
+            for b in &self.key_bits {
+                set_step(fd, &format!("UI_SET_KEYBIT({b})"), || {
+                    crate::protocol::ui_set_bit(fd, UI_SET_KEYBIT, *b as i32)
+                })?;
+            }
+            for b in &self.ff_bits {
+                set_step(fd, &format!("UI_SET_FFBIT({b})"), || {
+                    crate::protocol::ui_set_bit(fd, UI_SET_FFBIT, *b as i32)
+                })?;
+            }
+
+            // UI_DEV_SETUP with name + id + max effects (after the SET calls).
+            let mut setup = UinputSetup {
+                id: libc::input_id {
+                    bustype: 0x03,
+                    vendor: 0x0001,
+                    product: 0x0001,
+                    version: 0x0001,
+                },
+                name: [0u8; UINPUT_MAX_NAME_SIZE],
+                ff_effects_max: 64,
+            };
+            let name_bytes = self.name.as_bytes();
+            let n = name_bytes.len().min(UINPUT_MAX_NAME_SIZE - 1);
+            setup.name[..n].copy_from_slice(&name_bytes[..n]);
+            set_step(fd, "UI_DEV_SETUP", || {
+                crate::protocol::raw_ioctl_ptr(
+                    fd,
+                    UI_DEV_SETUP,
+                    &mut setup as *mut UinputSetup as *mut libc::c_void,
+                )
+                .map(|_| ())
+            })?;
+            Ok(())
+        })();
+
+        if let Err(e) = setup_ok {
+            unsafe {
+                libc::close(fd);
+            }
+            return Err(e);
+        }
+
+        // UI_DEV_CREATE
+        if let Err(e) = crate::protocol::raw_ioctl(fd, UI_DEV_CREATE) {
+            unsafe {
+                libc::close(fd);
+            }
+            return Err(e);
+        }
+
+        // Wait for the kernel to create the event node
+        unsafe {
+            libc::usleep(200_000);
+        } // 200 ms
+
+        let ev_name = find_virtual_event_name(&self.name).ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!(
+                    "virtual event node for '{}' not found — run: cat /proc/bus/input/devices",
+                    self.name
+                ),
+            )
+        })?;
+
+        Ok((fd, ev_name))
+    }
+}
+
+fn find_virtual_event_name(dev_name: &str) -> Option<String> {
+    let sysp = std::path::Path::new("/sys/class/input");
+    let mut entries: Vec<_> = std::fs::read_dir(sysp).ok()?.filter_map(|e| e.ok()).collect();
+    // Sort by mtime descending (newest first — our device was just created)
+    entries.sort_by(|a, b| {
+        let at = a
+            .metadata()
+            .and_then(|m| m.modified())
+            .unwrap_or(std::time::UNIX_EPOCH);
+        let bt = b
+            .metadata()
+            .and_then(|m| m.modified())
+            .unwrap_or(std::time::UNIX_EPOCH);
+        bt.cmp(&at)
+    });
+    for entry in entries {
+        let file_name = entry.file_name();
+        let fname = match file_name.to_str() {
+            Some(s) => s,
+            None => continue,
+        };
+        // Only accept event device nodes (eventN), not jsN/mice symlinks that
+        // point at the same input device.
+        if !fname.starts_with("event") {
+            continue;
+        }
+        let nf = entry.path().join("device").join("name");
+        if let Ok(name) = std::fs::read_to_string(nf) {
+            if name.trim() == dev_name {
+                return Some(fname.to_string());
+            }
+        }
+    }
+    None
 }
 
 // ===========================================================================
@@ -220,30 +336,25 @@ pub enum ProxyMode {
 
 impl std::fmt::Display for ProxyMode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self { ProxyMode::Observe => write!(f, "observe"), ProxyMode::Proxy => write!(f, "proxy") }
+        match self {
+            ProxyMode::Observe => write!(f, "observe"),
+            ProxyMode::Proxy => write!(f, "proxy"),
+        }
     }
 }
 
 #[derive(Debug, Default)]
 pub struct ProxyState {
-    pub mode:         ProxyMode,
+    pub mode: ProxyMode,
     pub virtual_path: Option<String>,
-    pub real_path:    String,
+    pub real_path: String,
 }
-
-// ===========================================================================
-// Inner state shared between the ProxyBackend handle and the background thread.
-// ===========================================================================
 
 struct ProxyInner {
-    state:   Arc<Mutex<ProxyState>>,
-    model:   Arc<Mutex<ForceModel>>,
-    real_fd: RawFd,
+    state: Arc<Mutex<ProxyState>>,
+    model: Arc<Mutex<ForceModel>>,
+    real_fd: Mutex<RawFd>,
 }
-
-// ===========================================================================
-// ProxyBackend — public handle
-// ===========================================================================
 
 pub struct ProxyBackend {
     inner: Arc<ProxyInner>,
@@ -252,18 +363,26 @@ pub struct ProxyBackend {
 impl ProxyBackend {
     pub fn new(real_path: String, observe: bool) -> Self {
         let state = Arc::new(Mutex::new(ProxyState {
-            mode: if observe { ProxyMode::Observe } else { ProxyMode::Proxy },
+            mode: if observe {
+                ProxyMode::Observe
+            } else {
+                ProxyMode::Proxy
+            },
             virtual_path: None,
             real_path,
         }));
         let model = Arc::new(Mutex::new(ForceModel::new()));
-        // The real_fd must be set by run_proxy() before the event loop.
+        // The real_fd must be set by run_proxy()/run_observer() before use.
         Self {
-            inner: Arc::new(ProxyInner { state, model, real_fd: -1 }),
+            inner: Arc::new(ProxyInner {
+                state,
+                model,
+                real_fd: Mutex::new(-1),
+            }),
         }
     }
 
-    /// Start a blocking thread.  Returns immediately.
+    /// Start a blocking thread. Returns immediately.
     pub fn start(self: Arc<Self>) {
         let observe = {
             let s = self.inner.state.lock().unwrap();
@@ -287,11 +406,12 @@ impl ProxyBackend {
         Arc::clone(&self.inner.state)
     }
 
+    #[allow(dead_code)]
     pub fn model_arc(&self) -> Arc<Mutex<ForceModel>> {
         Arc::clone(&self.inner.model)
     }
 
-    /// Gather a snapshot of the force-model state (async-safe, acquires a read lock).
+    /// Gather a snapshot of the force-model state (async-safe, acquires a lock).
     pub fn sample(&self) -> crate::types::SampleSnapshot {
         self.inner.model.lock().unwrap().sample()
     }
@@ -303,31 +423,41 @@ impl ProxyBackend {
 
 impl ProxyBackend {
     fn run_observer(self: Arc<Self>) {
-        let path = { self.inner.state.lock().unwrap().real_path.clone() };
-        info!(path = %path, "observer: opening device read-only");
-        let Ok(dev) = InputDevice::open(&path) else {
-            error!(path = %path, "observer: cannot open device");
-            return;
+        let path = {
+            self.inner.state.lock().unwrap().real_path.clone()
         };
-        info!(dev_name = %dev.name().unwrap_or("?"), "observer: opened");
+        info!(path = %path, "observer: opening device read-only");
+        let dev = match Device::open(&path) {
+            Ok(d) => d,
+            Err(e) => {
+                error!(path = %path, error = ?e, "observer: cannot open device");
+                return;
+            }
+        };
+        info!(dev_name = %dev.name().to_string_lossy(), "observer: opened");
+        let fd = dev.fd();
+        *self.inner.real_fd.lock().unwrap() = fd;
 
-        let AxisInfo { code: ff_axis, min, max } = detect_axis(&dev);
+        let AxisInfo {
+            code: ff_axis,
+            min,
+            max,
+        } = detect_axis(fd, &dev);
+        let mut dev = dev;
 
         loop {
-            match dev.read_events() {
+            match dev.events() {
                 Ok(events) => {
                     for ev in events {
-                        if ev.event_type() == EV_ABS && ev.code == ff_axis {
-                            let norm = norm_axis(ev.value as i32, min, max);
+                        let t = ev._type;
+                        if t == EV_ABS && ev.code == ff_axis {
+                            let norm = norm_axis(ev.value, min, max);
                             self.inner.model.lock().unwrap().update_position(norm);
                         }
-                        if ev.event_type() == EV_FF {
-                            self.handle_ev_ff(ev.code as u16, ev.value as u16);
+                        if t == EV_FF {
+                            self.handle_ev_ff(ev.code, ev.value as u16);
                         }
                     }
-                }
-                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                    thread::sleep(Duration::from_millis(10));
                 }
                 Err(e) => {
                     warn!(?e, "observer read error");
@@ -344,41 +474,71 @@ impl ProxyBackend {
 
 impl ProxyBackend {
     fn run_proxy(self: Arc<Self>) {
-        let path = { self.inner.state.lock().unwrap().real_path.clone() };
+        let path = {
+            self.inner.state.lock().unwrap().real_path.clone()
+        };
         info!(path = %path, "proxy: opening real device");
 
-        let Ok(real_dev) = InputDevice::open(&path) else {
-            error!(path = %path, "proxy: cannot open real device");
-            return;
+        let real_dev = match Device::open(&path) {
+            Ok(d) => d,
+            Err(e) => {
+                error!(path = %path, error = ?e, "proxy: cannot open real device");
+                return;
+            }
         };
-        let real_fd = real_dev.as_raw_fd();
-        info!(dev_name = %real_dev.name().unwrap_or("?"), "proxy: real device opened");
+        let real_fd = real_dev.fd();
+        *self.inner.real_fd.lock().unwrap() = real_fd;
+        info!(
+            dev_name = %real_dev.name().to_string_lossy(),
+            "proxy: real device opened"
+        );
 
-        // Update real_fd on the inner so other methods can use it
-        // SAFETY: we hold Arc and run the proxy thread; no other thread
-        // modifies real_fd.
-        { self.inner.real_fd = real_fd; }
-
-        let AxisInfo { code: ff_axis, min, max } = detect_axis(&real_dev);
+        let AxisInfo {
+            code: ff_axis,
+            min,
+            max,
+        } = detect_axis(real_fd, &real_dev);
 
         // Collect capabilities to mirror on the virtual device
         let mut abs_bits: Vec<u16> = Vec::new();
         let mut key_bits: Vec<u16> = Vec::new();
         let mut ff_bits: Vec<u16> = Vec::new();
+        let mut ev_bits: Vec<u16> = Vec::new();
 
-        for ax in real_dev.supported_abs_axes() { abs_bits.push(ax as u16); }
-        for k in real_dev.keys_supported().ones() { key_bits.push(k as u16); }
-        // FF effect codes the device supports
-        for eff in real_dev.supported_ff_effects() {
-            let c = eff as u16;
-            if c < 0x60 { ff_bits.push(c); } // 0..0x5F covers all known FF types
+        for code in 0..0x3fu16 {
+            if real_dev
+                .absolute_axes_supported()
+                .contains(evdev::AbsoluteAxis::from_bits_truncate(1u64 << code))
+            {
+                abs_bits.push(code);
+            }
         }
+        let keys = real_dev.keys_supported();
+        for code in 0..0x2ffu16 {
+            if keys.contains(code as usize) {
+                key_bits.push(code);
+            }
+        }
+        for eff in supported_ff_effect_codes(real_fd) {
+            if eff < 0x60 {
+                ff_bits.push(eff);
+            }
+        }
+        if !ff_bits.is_empty() {
+            ev_bits.push(EV_FF);
+        }
+        if !abs_bits.is_empty() {
+            ev_bits.push(EV_ABS);
+        }
+        if !key_bits.is_empty() {
+            ev_bits.push(EV_KEY);
+        }
+        ev_bits.push(EV_SYN);
 
         info!("proxy: creating virtual uinput device…");
 
-        // ioctl for setting ev/rel bits (UI_SET_EVBIT / UI_SET_RELBIT etc.)
         let builder = UinputBuilder::new("FFB Visualizer Proxy")
-            .set_ev(0..0u16)   // EV_SYN/EV_FF don't go into uinput device's EVENT set
+            .set_ev(ev_bits)
             .set_abs(abs_bits)
             .set_key(key_bits)
             .set_ff(ff_bits);
@@ -389,8 +549,10 @@ impl ProxyBackend {
                 let errno = e.raw_os_error();
                 error!(?e, errno, "proxy: uinput setup FAILED");
                 match errno {
-                    Some(2)  => error!("  /dev/uinput not found — run: modprobe uinput"),
-                    Some(1) | Some(13) => error!("  need CAP_SYS_ADMIN on /dev/uinput (run as root)"),
+                    Some(2) => error!("  /dev/uinput not found — run: modprobe uinput"),
+                    Some(1) | Some(13) => {
+                        error!("  need CAP_SYS_ADMIN on /dev/uinput (run as root)")
+                    }
                     _ => error!("  Check dmesg for uinput errors; try --observe as fallback."),
                 }
                 return;
@@ -407,22 +569,25 @@ impl ProxyBackend {
         }
 
         // Open virtual event node for reading game EV_FF events
-        let Ok(mut virt_dev) = InputDevice::open(&virt_ev_path) else {
-            error!(path = %virt_ev_path, "proxy: cannot open virtual device");
-            unsafe { libc::close(uinput_fd); }
-            return;
+        let virt_fd = match crate::input::open_fd(&virt_ev_path) {
+            Ok(fd) => fd,
+            Err(e) => {
+                error!(path = %virt_ev_path, error = ?e, "proxy: cannot open virtual device");
+                unsafe {
+                    libc::close(uinput_fd);
+                }
+                return;
+            }
         };
-        let virt_fd = virt_dev.as_raw_fd();
 
         // UInput fd wrappers (for reading EV_UINPUT and writing EVIOCSFF)
         let mut ui_reader = RawFdStream::new(uinput_fd);
-        let mut ui_writer = RawFdStream::new(uinput_fd);
 
         let mut id_map: HashMap<i32, i32> = HashMap::new(); // virtual_id -> real_id
+        let mut real_dev = real_dev;
 
         info!("proxy: entering event loop");
 
-        // Poll arrays
         let mut pfds = vec![
             PollFd::new_read(real_fd),
             PollFd::new_read(virt_fd),
@@ -430,24 +595,16 @@ impl ProxyBackend {
         ];
 
         // Pre-allocated buffer for raw input_events from the uinput fd
-        let ev_size  = std::mem::size_of::<libc::input_event>();
-        let ui_buf   = vec![0u8; ev_size * 32];
-        let mut ui_buf_all = ui_buf; // owned by the pump loop
+        let ev_size = std::mem::size_of::<libc::input_event>();
+        let mut ui_buf = vec![0u8; ev_size * 32];
 
         loop {
-            if self.stop_requested() {
-                info!("proxy: shutting down");
-                break;
-            }
             if let Ok(ready) = poll_fds(&mut pfds, 50) {
                 for i in ready {
                     match i {
-                        0 => self.pump_real(&real_dev, &mut virt_dev, ff_axis, min, max),
-                        1 => self.pump_virtual_ev(&mut virt_dev),
-                        2 => {
-                            self.pump_uinput(&mut ui_reader, &mut ui_writer, uinput_fd,
-                                             &mut id_map, &mut ui_buf_all);
-                        }
+                        0 => self.pump_real(&mut real_dev, virt_fd, ff_axis, min, max),
+                        1 => self.pump_virtual_ev(virt_fd),
+                        2 => self.pump_uinput(&mut ui_reader, uinput_fd, &mut id_map, &mut ui_buf),
                         _ => {}
                     }
                 }
@@ -459,66 +616,64 @@ impl ProxyBackend {
 
     fn pump_real(
         &self,
-        real: &Device,
-        virt: &mut InputDevice,
+        real: &mut Device,
+        virt_fd: RawFd,
         ff_axis: u16,
         axis_min: i32,
         axis_max: i32,
     ) {
-        match real.read_events() {
+        match real.events() {
             Ok(events) => {
                 for ev in events {
-                    if ev.event_type() == EV_ABS && ev.code == ff_axis {
-                        let norm = norm_axis(ev.value as i32, axis_min, axis_max);
+                    let t = ev._type;
+                    if t == EV_ABS && ev.code == ff_axis {
+                        let norm = norm_axis(ev.value, axis_min, axis_max);
                         self.inner.model.lock().unwrap().update_position(norm);
                     }
-                    match ev.event_type() {
-                        EV_ABS | EV_KEY | EV_SYN => {
-                            let _ = virt.write_event(
-                                evdev::InputEvent::new(ev.event_type().into(),
-                                                       ev.code, ev.value),
-                            );
-                            virt.sync();
-                        }
-                        _ => {}
+                    if matches!(t, EV_ABS | EV_KEY | EV_SYN) {
+                        let _ = write_input_event(virt_fd, t, ev.code, ev.value);
                     }
                 }
             }
-            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
             Err(e) => warn!(?e, "real read error"),
         }
     }
 
     // ---- pump: virtual → real (game EV_FF play/stop/gain) ----
 
-    fn pump_virtual_ev(&self, virt_dev: &mut InputDevice) {
-        match virt_dev.read_events() {
-            Ok(events) => {
-                for ev in events {
-                    if ev.event_type() == EV_FF {
-                        // Feed the force model so the dashboard reflects it immediately
-                        self.handle_ev_ff(ev.code as u16, ev.value as u16);
-                        // Forward as raw EV_FF to the real device
-                        let evt = libc::input_event {
-                            time:  libc::timeval { tv_sec: 0, tv_usec: 0 },
-                            type_:  EV_FF,
-                            code:   ev.code,
-                            value:  ev.value,
-                        };
-                        let buf = std::slice::from_raw_parts(
-                            &evt as *const _ as *const u8,
-                            std::mem::size_of::<libc::input_event>(),
-                        );
-                        unsafe {
-                            libc::write(self.inner.real_fd,
-                                        buf.as_ptr() as *const libc::c_void,
-                                        buf.len() as _);
-                        }
-                    }
+    fn pump_virtual_ev(&self, virt_fd: RawFd) {
+        // Drain the virtual event node. evdev 0.10 doesn't give us a Device
+        // wrapper for an arbitrary raw fd, so read raw input_events directly.
+        let ev_size = std::mem::size_of::<libc::input_event>();
+        let mut buf = vec![0u8; ev_size * 32];
+        loop {
+            let n = unsafe {
+                libc::read(
+                    virt_fd,
+                    buf.as_mut_ptr() as *mut libc::c_void,
+                    buf.len() as _,
+                )
+            };
+            if n <= 0 {
+                break;
+            }
+            let n = n as usize;
+            let n_evts = n / ev_size;
+            for i in 0..n_evts {
+                let off = i * ev_size;
+                let bytes = &buf[off..off + ev_size];
+                let ev = unsafe { &*(bytes.as_ptr() as *const libc::input_event) };
+                if ev.type_ == EV_FF {
+                    // Feed the force model so the dashboard reflects it immediately
+                    self.handle_ev_ff(ev.code, ev.value as u16);
+                    // Forward as raw EV_FF to the real device
+                    let real_fd = *self.inner.real_fd.lock().unwrap();
+                    let _ = write_input_event(real_fd, EV_FF, ev.code, ev.value);
                 }
             }
-            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
-            Err(e) => warn!(?e, "virtual read error"),
+            if n < buf.len() {
+                break;
+            }
         }
     }
 
@@ -527,70 +682,75 @@ impl ProxyBackend {
     fn pump_uinput(
         &self,
         ui_reader: &mut RawFdStream,
-        ui_writer: &mut dyn std::io::Write,
         uinput_fd: RawFd,
         id_map: &mut HashMap<i32, i32>,
         ui_buf: &mut [u8],
     ) {
         let ev_size = std::mem::size_of::<libc::input_event>();
         loop {
-            let n = match ui_reader.read(ui_buf) {
-                Ok(0)  => break,
-                Ok(n)  => n,
+            let n = match std::io::Read::read(ui_reader, ui_buf) {
+                Ok(0) => break,
+                Ok(n) => n,
                 Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
-                Err(e)  => { warn!(?e, "uinput fd error"); break; }
+                Err(e) => {
+                    warn!(?e, "uinput fd error");
+                    break;
+                }
             };
             let n_evts = n / ev_size;
             for i in 0..n_evts {
-                let bytes = &ui_buf[i * ev_size..(i+1) * ev_size];
-                self.dispatch_uinput_evt(ui_writer, id_map, bytes, uinput_fd);
+                let off = i * ev_size;
+                let bytes = &ui_buf[off..off + ev_size];
+                self.dispatch_uinput_evt(id_map, bytes, uinput_fd);
             }
-            if n % ev_size != 0 { break; }
-            // Drain eagerly (events might be queued)
+            if n % ev_size != 0 {
+                break;
+            }
         }
     }
 
     /// Parse one raw input_event read from the uinput fd.
     fn dispatch_uinput_evt(
         &self,
-        ui_writer: &mut dyn std::io::Write,
-        id_map:    &mut HashMap<i32, i32>,
-        bytes:     &[u8],
+        id_map: &mut HashMap<i32, i32>,
+        bytes: &[u8],
         uinput_fd: RawFd,
     ) {
         let ev_size = std::mem::size_of::<libc::input_event>();
-        if bytes.len() < ev_size { return; }
+        if bytes.len() < ev_size {
+            return;
+        }
         let ev = unsafe { &*(bytes.as_ptr() as *const libc::input_event) };
-        if ev.type_ != EV_UINPUT { return; }
-        let code  = ev.code as u16;
+        if ev.type_ != EV_UINPUT as u16 {
+            return;
+        }
+        let code = ev.code;
         let req_i = ev.value as u32;
 
         match code {
-            UI_FF_UPLOAD => self.do_upload(ui_writer, id_map, req_i, uinput_fd),
-            UI_FF_ERASE  => self.do_erase(ui_writer, id_map, req_i, uinput_fd),
+            UI_FF_UPLOAD => self.do_upload(id_map, req_i, uinput_fd),
+            UI_FF_ERASE => self.do_erase(id_map, req_i, uinput_fd),
             _ => {}
         }
     }
 
     /// Handle one FF upload handshake (UI_BEGIN/UI_END_FF_UPLOAD).
-    fn do_upload(
-        self: &Arc<Self>,
-        ui_writer: &mut dyn std::io::Write,
-        id_map:    &mut HashMap<i32, i32>,
-        req_i:     u32,
-        uinput_fd: RawFd,
-    ) {
+    fn do_upload(&self, id_map: &mut HashMap<i32, i32>, req_i: u32, uinput_fd: RawFd) {
         let mut u = match begin_ff_upload(uinput_fd, req_i) {
             Ok(u) => u,
-            Err(e) => { warn!(?e, "UI_BEGIN_FF_UPLOAD failed"); return; }
+            Err(e) => {
+                warn!(?e, "UI_BEGIN_FF_UPLOAD failed");
+                return;
+            }
         };
         let v_id = u.effect.id as i32;
 
         // Copy the effect and allocate — clear id first
-        let mut eff = u.effect.clone();
+        let mut eff = u.effect;
         eff.id = -1;
 
-        match upload_effect(self.inner.real_fd, eff.clone()) {
+        let real_fd = *self.inner.real_fd.lock().unwrap();
+        match upload_effect(real_fd, eff) {
             Ok(real_id) => {
                 id_map.insert(v_id, real_id);
                 id_map.insert(real_id, v_id);
@@ -600,11 +760,11 @@ impl ProxyBackend {
                 self.inner.model.lock().unwrap().set_effect(real_id, params);
                 debug!(v_id, real_id, "upload OK");
 
-                u.retval   = 0;
-                u.effect.id = v_id; // preserve the virtual id the game knows
+                u.retval = 0;
+                u.effect.id = v_id as i16; // preserve the virtual id the game knows
             }
             Err(e) => {
-                warn!(v_id, ?e, "EVIOCSFF failed on real device");
+                warn!(v_id, error = ?e, "EVIOCSFF failed on real device");
                 u.retval = -(e.raw_os_error().unwrap_or(1)) as i32;
             }
         }
@@ -615,22 +775,20 @@ impl ProxyBackend {
     }
 
     /// Handle one FF erase handshake (UI_BEGIN/UI_END_FF_ERASE).
-    fn do_erase(
-        self: &Arc<Self>,
-        _ui_writer: &mut dyn std::io::Write,
-        id_map:    &mut HashMap<i32, i32>,
-        req_i:     u32,
-        uinput_fd: RawFd,
-    ) {
+    fn do_erase(&self, id_map: &mut HashMap<i32, i32>, req_i: u32, uinput_fd: RawFd) {
         let mut e = match begin_ff_erase(uinput_fd, req_i) {
             Ok(e) => e,
-            Err(err) => { warn!(?err, "UI_BEGIN_FF_ERASE"); return; }
+            Err(err) => {
+                warn!(?err, "UI_BEGIN_FF_ERASE");
+                return;
+            }
         };
         let v_id = e.effect_id as i32;
 
         if let Some(real_id) = id_map.remove(&v_id) {
             id_map.remove(&real_id);
-            let _ = erase_effect(self.inner.real_fd, real_id);
+            let real_fd = *self.inner.real_fd.lock().unwrap();
+            let _ = erase_effect(real_fd, real_id);
             self.inner.model.lock().unwrap().erase_effect(real_id);
             debug!(v_id, real_id, "erase OK");
         }
@@ -645,12 +803,10 @@ impl ProxyBackend {
     fn handle_ev_ff(&self, code: u16, value: u16) {
         let mut m = self.inner.model.lock().unwrap();
         match code {
-            FF_GAIN_CODE       => m.set_gain(value),
+            FF_GAIN_CODE => m.set_gain(value),
             FF_AUTOCENTER_CODE => m.set_autocenter(value),
-            _ if value > 0     => m.play(code as i32, value),
-            _                  => m.stop(code as i32),
+            _ if value > 0 => m.play(code as i32, value),
+            _ => m.stop(code as i32),
         }
     }
-
-    fn stop_requested(&self) -> bool { false }
 }

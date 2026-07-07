@@ -5,7 +5,7 @@
 
 use std::io::{self, Read, Write};
 use std::os::unix::io::{AsRawFd, RawFd};
-use std::{mem, ptr};
+use std::mem;
 
 // ---------------------------------------------------------------------------
 // Linux UAPI structs – repr(C) and byte layout must match <linux/input.h>.
@@ -227,9 +227,10 @@ pub const UI_SET_ABSBIT: u32 = _iow(b'U', 103, 4);
 /// UI_SET_FFBIT – enable a force-feedback effect-type bit.
 pub const UI_SET_FFBIT: u32 = _iow(b'U', 107, 4);
 
-/// Set a single capability bit on a uinput control fd.
+/// Set a single capability bit on a uinput control fd. The bit code is passed
+/// directly as the ioctl argument (see `raw_ioctl_int`).
 pub fn ui_set_bit(fd: RawFd, req: u32, bit: i32) -> io::Result<()> {
-    raw_ioctl_ptr(fd, req, &bit as *const i32 as *mut libc::c_void).map(|_| ())
+    raw_ioctl_int(fd, req, bit).map(|_| ())
 }
 
 /// Query the FF effect-type bits the real device supports (EVIOCGBIT(EV_FF, ...)).
@@ -339,6 +340,18 @@ pub fn raw_ioctl(fd: RawFd, request: u32) -> io::Result<i32> {
 
 pub fn raw_ioctl_ptr(fd: RawFd, request: u32, arg: *mut libc::c_void) -> io::Result<i32> {
     let ret = unsafe { libc::ioctl(fd, request as libc::c_ulong, arg) };
+    if ret < 0 { Err(io::Error::last_os_error()) } else { Ok(ret) }
+}
+
+/// Raw ioctl that passes an integer argument directly (NOT a pointer).
+///
+/// The uinput UI_SET_*BIT ioctls are declared `_IOW('U', nr, int)` but the
+/// kernel takes the bit code directly in `arg` rather than dereferencing it
+/// — confirmed by stracing evdev, which passes e.g. `ioctl(fd, UI_SET_EVBIT,
+/// 0x15)`. Passing a pointer here makes the kernel read a bogus code and
+/// return EINVAL.
+pub fn raw_ioctl_int(fd: RawFd, request: u32, arg: i32) -> io::Result<i32> {
+    let ret = unsafe { libc::ioctl(fd, request as libc::c_ulong, arg as libc::c_int) };
     if ret < 0 { Err(io::Error::last_os_error()) } else { Ok(ret) }
 }
 

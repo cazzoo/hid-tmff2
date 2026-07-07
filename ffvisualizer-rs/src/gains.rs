@@ -74,8 +74,8 @@ pub fn probe(event_path: &str) -> Vec<GainInfo> {
     for attr in KNOWN_GAIN_ATTRS.iter().copied() {
         if !seen.insert(attr) { continue; }
         let path = find_attr(&sysp, attr);
-        let val  = path.as_ref().and_then(read_attr);
-        let writ = path.as_ref().map(is_writable).unwrap_or(false);
+        let val = path.as_ref().and_then(|p| read_attr(p));
+        let writ = path.as_ref().map(|p| is_writable(p)).unwrap_or(false);
         if let (Some(p), Some(v)) = (path, val) {
             let (key, name, mn, mx, unit) = attr_meta(attr);
             results.push(GainInfo {

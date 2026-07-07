@@ -2,11 +2,10 @@
 
 use std::sync::Arc;
 
-use tracing::{error, info};
 
 use ffb_visualizer::input::list_ffb_devices;
 use ffb_visualizer::proxy::ProxyBackend;
-use ffb_visualizer::server::{serve, AppState};
+use ffb_visualizer::server::serve;
 
 fn pick_device(cli: Option<&str>) -> Option<String> {
     let devs = list_ffb_devices();
@@ -28,14 +27,8 @@ fn pick_device(cli: Option<&str>) -> Option<String> {
     Some(devs[0].path.clone())
 }
 
-fn main() -> anyhow::Result<()> {
-    use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
-    tracing_subscriber::registry()
-        .with(EnvFilter::try_from_default_env()
-            .unwrap_or_else(|_| EnvFilter::new("ffb_visualizer=info")))
-        .with(tracing_subscriber::fmt::layer())
-        .try_init()?;
-
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().collect();
 
     let mut device:  Option<String> = None;
@@ -63,6 +56,15 @@ fn main() -> anyhow::Result<()> {
         i += 1;
     }
 
+    // Initialize logging (verbose -> debug level).
+    use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
+    let default_filter = if verbose { "debug" } else { "ffb_visualizer=info" };
+    tracing_subscriber::registry()
+        .with(EnvFilter::try_from_default_env()
+            .unwrap_or_else(|_| EnvFilter::new(default_filter)))
+        .with(tracing_subscriber::fmt::layer())
+        .try_init()?;
+
     // Pick device
     let real_path = match pick_device(device.as_deref()) {
         Some(p) => p,
@@ -79,7 +81,7 @@ fn main() -> anyhow::Result<()> {
 
     // Build and start the proxy backend
     let backend = Arc::new(ProxyBackend::new(real_path.clone(), observe));
-    backend.start();
+    Arc::clone(&backend).start();
 
     // Serve the web dashboard (blocks on the axum HTTP server)
     serve(&format!("{host}:{port}"), backend).await?;

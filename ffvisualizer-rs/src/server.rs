@@ -14,7 +14,7 @@ use axum::{
     extract::State,
     http::StatusCode,
     response::{IntoResponse, Response},
-    routing::{get, post},
+    routing::get,
     Json, Router,
 };
 use axum::extract::ws::{WebSocket, WebSocketUpgrade, Message};
@@ -41,8 +41,8 @@ pub async fn serve(bind: &str, backend: Arc<ProxyBackend>) -> anyhow::Result<()>
         std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("web");
 
     let api = Router::new()
-        .route("/api/devices", get(list_devices))
-        .route("/api/gains", get(gains_get).post(gains_post));
+        .route("/devices", get(list_devices))
+        .route("/gains", get(gains_get).post(gains_post));
 
     let ws_route = Router::new()
         .route("/ws", get(ws_handler));
@@ -121,9 +121,6 @@ async fn list_devices(
 // REST: gains
 // ---------------------------------------------------------------------------
 
-#[derive(serde::Deserialize)]
-struct GainQuery { key: String, value: Option<u32> }
-
 #[derive(serde::Serialize)]
 struct GainsResp {
     gains: Vec<crate::gains::GainInfo>,
@@ -138,7 +135,8 @@ async fn gains_get(State(state): State<AppState>) -> Response {
         .map(|s| s.real_path.clone())
         .unwrap_or_default();
     let observe = {
-        let s = state.backend.state_arc().lock().unwrap();
+        let state_arc = state.backend.state_arc();
+        let s = state_arc.lock().unwrap();
         matches!(s.mode, ProxyMode::Observe)
     };
     let gains = crate::gains::probe(&path);
@@ -156,7 +154,8 @@ async fn gains_post(
     Json(body):  Json<GainPostBody>,
 ) -> Response {
     let path = {
-        let s = state.backend.state_arc().lock().unwrap();
+        let state_arc = state.backend.state_arc();
+        let s = state_arc.lock().unwrap();
         s.real_path.clone()
     };
     let ok = crate::gains::set_gain(&path, &body.key, body.value);

@@ -3,10 +3,10 @@
 //! current measurement.  See PLAN.md §5.
 
 use std::collections::HashMap;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use crate::types::{
-    EffectInfo, EffectParams, EffectType, FF_AUTOCENTER, FF_GAIN, MAX_LEVEL,
+    EffectInfo, EffectParams, EffectType, MAX_LEVEL,
     SampleSnapshot, TYPE_NAMES, Waveform,
 };
 
@@ -139,21 +139,18 @@ impl ForceModel {
 
     pub fn update_position(&mut self, normalized: f32) {
         let now = Instant::now();
-        let dt = now
-            .duration_since(self._last_pos_t)
-            .map(|d| d.as_secs_f32())
-            .unwrap_or(0.0);
+        let dt = now.duration_since(self._last_pos_t).as_secs_f32();
         if dt > 0.001 {
             self.velocity = ((normalized - self._last_pos) / dt).clamp(-2.0, 2.0);
         }
-        self._last_pos    = normalized.clamp(-1.0, 1.0);
-        self._last_pos_t  = now;
-        self.position     = self._last_pos;
+        self._last_pos = normalized.clamp(-1.0, 1.0);
+        self._last_pos_t = now;
+        self.position = self._last_pos;
     }
 
     // ---- evaluation ----
 
-    fn contribution(&self, e: &EffectParams, age: f32, p: &Playing) -> f32 {
+    fn contribution(&self, e: &EffectParams, age: f32, _p: &Playing) -> f32 {
         let dp = dir_proj(e.direction);
         let eff_len = e.length as f32;
         let delay   = e.delay as f32;
