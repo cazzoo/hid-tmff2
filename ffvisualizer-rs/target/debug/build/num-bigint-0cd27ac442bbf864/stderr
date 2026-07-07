@@ -1,0 +1,19 @@
+error[E0432]: unresolved imports `std::prelude::v1::RustcDecodable`, `std::prelude::v1::RustcEncodable`
+ --> <anon>:3:28
+  |
+3 | pub use std::prelude::v1::{RustcDecodable, RustcEncodable};
+  |                            ^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^ no `RustcEncodable` in `prelude::v1`
+  |                            |
+  |                            no `RustcDecodable` in `prelude::v1`
+
+warning: lint `soft_unstable` has been removed: the general soft-unstable mechanism has been removed
+ --> <anon>:2:9
+  |
+2 | #[allow(soft_unstable, deprecated)]
+  |         ^^^^^^^^^^^^^
+  |
+  = note: `#[warn(renamed_and_removed_lints)]` on by default
+
+error: aborting due to 1 previous error; 1 warning emitted
+
+For more information about this error, try `rustc --explain E0432`.

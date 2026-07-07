@@ -11,19 +11,19 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use axum::{
-    extract::{Query, State},
+    extract::State,
     http::StatusCode,
-    response::{Html, IntoResponse, Response},
+    response::{IntoResponse, Response},
     routing::{get, post},
-    Json, Router, Serve,
+    Json, Router,
 };
 use axum::extract::ws::{WebSocket, WebSocketUpgrade, Message};
 use futures_util::{SinkExt, StreamExt};
 use tokio::net::TcpListener;
 use tower_http::services::ServeDir;
-use tracing::{debug, info};
+use tracing::info;
 
-use crate::proxy::{ProxyBackend, ProxyState, ProxyMode};
+use crate::proxy::{ProxyBackend, ProxyMode};
 
 // ---------------------------------------------------------------------------
 // App state
@@ -131,7 +131,12 @@ struct GainsResp {
 }
 
 async fn gains_get(State(state): State<AppState>) -> Response {
-    let path = { state.backend.state_arc().lock().ok()?.real_path.clone() };
+    let path = state
+        .backend
+        .state_arc()
+        .lock()
+        .map(|s| s.real_path.clone())
+        .unwrap_or_default();
     let observe = {
         let s = state.backend.state_arc().lock().unwrap();
         matches!(s.mode, ProxyMode::Observe)

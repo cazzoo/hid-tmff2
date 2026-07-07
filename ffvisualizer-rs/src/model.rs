@@ -139,10 +139,12 @@ impl ForceModel {
 
     pub fn update_position(&mut self, normalized: f32) {
         let now = Instant::now();
-        if let Ok(dt) = now.duration_since(self._last_pos_t).as_secs_f32() {
-            if dt > 0.001 {
-                self.velocity = ((normalized - self._last_pos) / dt).clamp(-2.0, 2.0);
-            }
+        let dt = now
+            .duration_since(self._last_pos_t)
+            .map(|d| d.as_secs_f32())
+            .unwrap_or(0.0);
+        if dt > 0.001 {
+            self.velocity = ((normalized - self._last_pos) / dt).clamp(-2.0, 2.0);
         }
         self._last_pos    = normalized.clamp(-1.0, 1.0);
         self._last_pos_t  = now;
@@ -188,8 +190,8 @@ impl ForceModel {
             }
 
             EffectType::Spring => {
-                let center   = norm(e.center.unwrap_or(0));
-                let deadband = norm(e.deadband.unwrap_or(0));
+                let center   = norm(e.center.unwrap_or(0) as i16);
+                let deadband = norm(e.deadband.unwrap_or(0) as i16);
                 let err      = center - self.position;
                 if err.abs() < deadband { return 0.0; }
                 let coeff = if err > 0.0 { norm(e.right_coeff.unwrap_or(0)) }

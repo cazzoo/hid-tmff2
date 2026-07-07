@@ -6,14 +6,15 @@ use serde::Serialize;
 // Linux input.h FF effect-type codes
 // ---------------------------------------------------------------------------
 
-pub const FF_CONSTANT: u16  = 0x00;
-pub const FF_RAMP: u16      = 0x03;
-pub const FF_SPRING: u16    = 0x40;
-pub const FF_FRICTION: u16  = 0x41;
-pub const FF_DAMPER: u16    = 0x42;
-pub const FF_INERTIA: u16   = 0x43;
+// Linux kernel input-event-codes.h FF effect-type codes.
 pub const FF_RUMBLE: u16    = 0x50;
-pub const FF_PERIODIC: u16  = 0x05;
+pub const FF_PERIODIC: u16  = 0x51;
+pub const FF_CONSTANT: u16  = 0x52;
+pub const FF_SPRING: u16    = 0x53;
+pub const FF_FRICTION: u16  = 0x54;
+pub const FF_DAMPER: u16    = 0x55;
+pub const FF_INERTIA: u16   = 0x56;
+pub const FF_RAMP: u16      = 0x57;
 
 pub const FF_SQUARE: u16   = 0x58;
 pub const FF_TRIANGLE: u16 = 0x59;
@@ -27,7 +28,7 @@ pub const FF_AUTOCENTER: u16 = 0x61;
 
 pub const MAX_LEVEL: f32 = 32767.0;
 
-pub const EFFECT_TYPES: [u16; 9] = [
+pub const EFFECT_TYPES: [u16; 8] = [
     FF_CONSTANT, FF_RAMP, FF_PERIODIC,
     FF_SPRING, FF_DAMPER, FF_FRICTION, FF_INERTIA,
     FF_RUMBLE,
@@ -58,8 +59,8 @@ pub const WAVE_NAMES: &[(u16, &str)] = &[
 
 pub fn type_name(t: u16) -> &'static str {
     TYPE_NAMES.iter().find(|(k, _)| *k == t).map(|(_, v)| *v).unwrap_or_else(|| {
-        let mut h = itoa::Buffer::new();
-        h.format(t)
+        let s = itoa::Buffer::new().format(t).to_string();
+        Box::leak(s.into_boxed_str())
     })
 }
 
@@ -71,9 +72,10 @@ pub fn wave_name(w: u16) -> &'static str {
 // Effect type enum (for the force model)
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Default)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum EffectType {
+    #[default]
     Constant,
     Ramp,
     Periodic,
@@ -153,7 +155,7 @@ pub fn clamp1(v: f32) -> f32 {
 // Force model primitive data
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Default)]
 pub struct EffectParams {
     pub id: i32,
     #[serde(serialize_with = "serialize_effect_type")]
