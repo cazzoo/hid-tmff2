@@ -11,6 +11,9 @@
 #include "../hid-tmff2.h"
 #include <linux/hid.h>
 #include <linux/input.h>
+#include <linux/jiffies.h>
+#include <linux/spinlock.h>
+#include <linux/workqueue.h>
 
 /* Packet sequence templates for each effect type */
 static const enum t500rs_seq_packet t500rs_seq_constant[] = {
@@ -69,29 +72,18 @@ static inline s8 t500rs_scale_const_with_direction(int level, u16 direction)
 }
 
 /*
- * Map logical effect ID to hardware effect ID.
- * hw_id = logical_id + 1
- *
- * This avoids hardware index 0 entirely, which has quirky behavior
- * (only valid for constant effects). By always using indices 1-15,
- * all effect types work uniformly with no special-casing needed.
- *
- * Trade-off: 15 effect slots instead of 16, but simpler code and
- * no risk of index 0 misuse. Most games don't need 16 simultaneous effects.
+ * T500RS encodes the effect "slot" in the parameter/envelope subtypes
+ * (0x0e + 0x1c*n / 0x1c + 0x1c*n), NOT in the 0x01/0x41 effect_id field,
+ * which is always T500RS_EFFECT_ID (0x00). There is therefore no logical->
+ * hardware ID mapping; callers index subtypes directly via effect->id.
  */
-static inline unsigned int t500rs_logical_to_hw_id(unsigned int logical_id)
-{
-	/* Clamp to valid range: logical 0-14 -> hw 1-15 */
-	if (logical_id >= T500RS_MAX_EFFECTS)
-		logical_id = T500RS_MAX_EFFECTS - 1;
-	return logical_id + 1;
-}
 
-/* Map hardware effect index to parameter/envelope subtypes as per protocol:
- * Per protocol analysis, subtypes are calculated as:
+/* Map effect index to parameter/envelope subtypes as per protocol:
  *  param_sub = 0x000e + 0x001c * idx
  *  env_sub   = 0x001c + 0x001c * idx
- * idx is the hardware effect ID (1..15 with simplified architecture).
+ * idx is the per-effect slot index (callers pass effect->id + 1 so that
+ * non-constant effects never collide with the constant force's fixed
+ * index-0 subtypes). See docs/FFB_T500RS.md.
  */
 static inline void t500rs_index_to_subtypes(unsigned int idx, u16 *param_sub,
 					    u16 *env_sub)
@@ -115,6 +107,25 @@ struct t500rs_device_entry {
 
 	u8 *send_buffer;
 	size_t buffer_length;
+
+	/*
+	 * Software-expiry tracker. The T500RS hardware never auto-stops an
+	 * effect: once STARTed it runs until an explicit 0x41 STOP. The tmff2
+	 * core relies on hardware auto-stop (which T500RS lacks), so we enforce
+	 * replay.length here. A single re-arming delayed_work scans active[] and
+	 * sends a global 0x41 STOP when an effect's time elapses.
+	 * expiry_buffer is a dedicated DMA-safe buffer so the worker (which runs
+	 * outside the core FFB worker) never races send_buffer (mirrors the
+	 * set_range pattern).
+	 */
+	spinlock_t expiry_lock;
+	struct delayed_work expiry_work;
+	u8 *expiry_buffer;
+	struct t500rs_active_effect {
+		bool active;
+		unsigned long start_j;
+		u32 total_ms;
+	} active[T500RS_MAX_EFFECTS];
 };
 
 /*
@@ -141,7 +152,7 @@ struct t500rs_device_entry {
  *
  * This is a pure constructor: callers must validate effect_id/effect_type
  * beforehand (the MAIN sequence step derives them from validated effect
- * fields, and hw_id is clamped by t500rs_logical_to_hw_id).
+ * fields; effect_id is always T500RS_EFFECT_ID).
  */
 static void t500rs_build_r01_main(struct t500rs_pkt_r01_main *p, u8 effect_id,
 				  u8 effect_type, u16 duration_ms, u16 delay_ms,
@@ -341,8 +352,10 @@ static void t500rs_build_r04_ramp(struct t500rs_pkt_r04_periodic_ramp *p,
 /* Forward declarations for functions used by helper functions */
 static int t500rs_send_hid(struct t500rs_device_entry *t500rs, u8 *data,
 			   size_t len);
-static inline int t500rs_send_stop(struct t500rs_device_entry *t500rs,
-				   u8 hw_effect_id);
+static int t500rs_send_stop(struct t500rs_device_entry *t500rs);
+static int t500rs_send_start(struct t500rs_device_entry *t500rs);
+static int t500rs_send_stop_now(struct t500rs_device_entry *t500rs, u8 *buf);
+static void t500rs_expiry_work(struct work_struct *work);
 static void t500rs_build_r03_constant(struct t500rs_r03_const *p, u8 code,
 				      s8 level);
 static void t500rs_build_r02_envelope(struct t500rs_pkt_r02_envelope *p,
@@ -781,10 +794,14 @@ const signed short t500rs_effects[] = { FF_CONSTANT, FF_SPRING,	    FF_DAMPER,
 /*
  * Send a sequence of packets for effect upload.
  * Abstracts the hardcoded packet orders in upload functions.
+ *
+ * Per docs/FFB_T500RS.md, the 0x01 effect_id is always T500RS_EFFECT_ID
+ * (0x00); the per-effect slot is encoded in the parameter/envelope subtypes.
+ * Constant force uses fixed subtypes (T500RS_CONSTANT_PARAM_SUB/ENV_SUB);
+ * every other effect derives subtypes from its logical id (effect->id + 1).
  */
 static int t500rs_send_packet_sequence(struct t500rs_device_entry *t500rs,
 				       const struct tmff2_effect_state *state,
-				       u8 hw_id,
 				       const enum t500rs_seq_packet *sequence,
 				       size_t seq_len)
 {
@@ -793,7 +810,12 @@ static int t500rs_send_packet_sequence(struct t500rs_device_entry *t500rs,
 	int ret;
 	u16 param_sub, env_sub;
 
-	t500rs_index_to_subtypes(hw_id, &param_sub, &env_sub);
+	if (effect->type == FF_CONSTANT) {
+		param_sub = T500RS_CONSTANT_PARAM_SUB;
+		env_sub = T500RS_CONSTANT_ENV_SUB;
+	} else {
+		t500rs_index_to_subtypes(effect->id + 1, &param_sub, &env_sub);
+	}
 
 	for (size_t i = 0; i < seq_len; i++) {
 		/* Log sequence progress for debugging */
@@ -803,7 +825,7 @@ static int t500rs_send_packet_sequence(struct t500rs_device_entry *t500rs,
 
 		switch (sequence[i]) {
 		case T500RS_SEQ_STOP:
-			ret = t500rs_send_stop(t500rs, hw_id);
+			ret = t500rs_send_stop(t500rs);
 			break;
 
 		case T500RS_SEQ_SYNC_42_05:
@@ -924,7 +946,7 @@ static int t500rs_send_packet_sequence(struct t500rs_device_entry *t500rs,
 
 			struct t500rs_pkt_r01_main *m =
 				(struct t500rs_pkt_r01_main *)buf;
-			t500rs_build_r01_main(m, hw_id, effect_type,
+			t500rs_build_r01_main(m, T500RS_EFFECT_ID, effect_type,
 					      duration_ms, delay_ms, param_sub,
 					      env_sub);
 
@@ -1013,45 +1035,59 @@ static int t500rs_send_hid(struct t500rs_device_entry *t500rs, u8 *data,
 }
 
 /*
- * Send STOP command for a specific hardware effect ID.
- * Used both for pre-upload clearing and explicit stop.
- * Per protocol: 0x41 effect_id command arg
- *   command = 0x00 for STOP, 0x41 for START
+ * Send STOP command (0x41, effect_id = T500RS_EFFECT_ID) into the supplied
+ * buffer. Callers in the core FFB worker use t500rs_send_stop() (shared
+ * send_buffer); the expiry worker uses this with its own DMA-safe buffer so
+ * it never races the core worker.
  */
-static inline int t500rs_send_stop(struct t500rs_device_entry *t500rs,
-				   u8 hw_effect_id)
+static int t500rs_send_stop_now(struct t500rs_device_entry *t500rs, u8 *buf)
 {
 	struct t500rs_r41_cmd *r41;
+
 	if (!t500rs)
 		return -ENODEV;
-
-	r41 = (struct t500rs_r41_cmd *)t500rs->send_buffer;
-	if (!r41)
+	if (!buf)
 		return -ENOMEM;
 
+	r41 = (struct t500rs_r41_cmd *)buf;
 	r41->id = 0x41;
-	r41->effect_id = hw_effect_id;
+	r41->effect_id = T500RS_EFFECT_ID;
 	r41->command = 0x00; /* STOP */
 	r41->arg = 0x01;
 	return t500rs_send_hid(t500rs, (u8 *)r41, sizeof(*r41));
 }
 
 /*
- * Send START command for a specific hardware effect ID.
+ * Send STOP command for the device. Per protocol the 0x41 effect_id is always
+ * T500RS_EFFECT_ID (0x00); the wheel relies on subtypes to address slots, so
+ * this stops the currently-playing effect(s).
  */
-static inline int t500rs_send_start(struct t500rs_device_entry *t500rs,
-				    u8 hw_effect_id)
+static int t500rs_send_stop(struct t500rs_device_entry *t500rs)
 {
-	struct t500rs_r41_cmd *r41;
 	if (!t500rs)
 		return -ENODEV;
+	if (!t500rs->send_buffer)
+		return -ENOMEM;
+	return t500rs_send_stop_now(t500rs, t500rs->send_buffer);
+}
 
-	r41 = (struct t500rs_r41_cmd *)t500rs->send_buffer;
-	if (!r41)
+/*
+ * Send START command (0x41, effect_id = T500RS_EFFECT_ID). No duration/count
+ * field: the T500RS runs the effect until an explicit 0x41 STOP, which the
+ * driver enforces in software via the expiry tracker.
+ */
+static int t500rs_send_start(struct t500rs_device_entry *t500rs)
+{
+	struct t500rs_r41_cmd *r41;
+
+	if (!t500rs)
+		return -ENODEV;
+	if (!t500rs->send_buffer)
 		return -ENOMEM;
 
+	r41 = (struct t500rs_r41_cmd *)t500rs->send_buffer;
 	r41->id = 0x41;
-	r41->effect_id = hw_effect_id;
+	r41->effect_id = T500RS_EFFECT_ID;
 	r41->command = 0x41; /* START */
 	r41->arg = 0x01;
 	return t500rs_send_hid(t500rs, (u8 *)r41, sizeof(*r41));
@@ -1063,18 +1099,16 @@ static int t500rs_upload_constant(struct t500rs_device_entry *t500rs,
 {
 	const struct ff_effect *effect = &state->effect;
 	int ret;
-	int hw_id;
 	int level = effect->u.constant.level;
 
 	/* Note: Gain is applied in play_effect, not here */
 	T500RS_DBG(t500rs, "Upload constant: id=%d, level=%d, dir=%u\n",
 		   effect->id, level, effect->direction);
 
-	hw_id = t500rs_logical_to_hw_id(effect->id);
-
-	/* Send packet sequence for constant effect */
+	/* Send packet sequence for constant effect. The 0x01 effect_id is
+	 * always T500RS_EFFECT_ID (0x00); constant force uses fixed subtypes. */
 	ret = t500rs_send_packet_sequence(
-		t500rs, state, hw_id, t500rs_seq_constant,
+		t500rs, state, t500rs_seq_constant,
 		sizeof(t500rs_seq_constant) / sizeof(t500rs_seq_constant[0]));
 	if (ret) {
 		hid_err(t500rs->hdev,
@@ -1082,8 +1116,7 @@ static int t500rs_upload_constant(struct t500rs_device_entry *t500rs,
 		return ret;
 	}
 
-	T500RS_DBG(t500rs, "Constant effect %d uploaded (hw_id=%d)\n",
-		   effect->id, hw_id);
+	T500RS_DBG(t500rs, "Constant effect %d uploaded\n", effect->id);
 	return 0;
 }
 
@@ -1100,7 +1133,6 @@ static int t500rs_upload_condition(struct t500rs_device_entry *t500rs,
 {
 	const struct ff_effect *effect = &state->effect;
 	int ret;
-	int hw_id;
 	const char *type_name;
 
 	/* Resolve the effect name for diagnostics. The hardware effect_type
@@ -1124,11 +1156,9 @@ static int t500rs_upload_condition(struct t500rs_device_entry *t500rs,
 		return -EINVAL;
 	}
 
-	hw_id = t500rs_logical_to_hw_id(effect->id);
-
 	/* Send packet sequence for conditional effect */
 	ret = t500rs_send_packet_sequence(
-		t500rs, state, hw_id, t500rs_seq_condition,
+		t500rs, state, t500rs_seq_condition,
 		sizeof(t500rs_seq_condition) / sizeof(t500rs_seq_condition[0]));
 	if (ret) {
 		hid_err(t500rs->hdev, "Failed to send %s effect sequence: %d\n",
@@ -1160,7 +1190,6 @@ static int t500rs_upload_periodic(struct t500rs_device_entry *t500rs,
 {
 	const struct ff_effect *effect = &state->effect;
 	int ret;
-	int hw_id;
 	const char *type_name;
 	u8 effect_type;
 
@@ -1204,11 +1233,9 @@ static int t500rs_upload_periodic(struct t500rs_device_entry *t500rs,
 		return -EINVAL;
 	}
 
-	hw_id = t500rs_logical_to_hw_id(effect->id);
-
 	/* Send packet sequence for periodic effect */
 	ret = t500rs_send_packet_sequence(
-		t500rs, state, hw_id, t500rs_seq_periodic,
+		t500rs, state, t500rs_seq_periodic,
 		sizeof(t500rs_seq_periodic) / sizeof(t500rs_seq_periodic[0]));
 	if (ret) {
 		hid_err(t500rs->hdev, "Failed to send %s effect sequence: %d\n",
@@ -1234,12 +1261,9 @@ static int t500rs_upload_ramp(struct t500rs_device_entry *t500rs,
 {
 	const struct ff_effect *effect = &state->effect;
 	int ret;
-	int hw_id;
-
-	hw_id = t500rs_logical_to_hw_id(effect->id);
 
 	/* Send packet sequence for ramp effect */
-	ret = t500rs_send_packet_sequence(t500rs, state, hw_id, t500rs_seq_ramp,
+	ret = t500rs_send_packet_sequence(t500rs, state, t500rs_seq_ramp,
 					  sizeof(t500rs_seq_ramp) /
 						  sizeof(t500rs_seq_ramp[0]));
 	if (ret) {
@@ -1347,15 +1371,89 @@ static int t500rs_upload_effect(void *data,
 }
 
 /*
- * Play effect - send START command (0x41) for the effect.
+ * (Re)arm the expiry worker for the soonest still-active finite effect.
+ * Caller must hold t500rs->expiry_lock. Finite effects (total_ms != 0) get a
+ * delayed_work at their deadline; infinite effects (total_ms == 0) never
+ * auto-stop (Linux FFB semantics) and are skipped. If nothing finite is
+ * pending the worker is cancelled.
+ */
+static void t500rs_expiry_arm_locked(struct t500rs_device_entry *t500rs)
+{
+	unsigned long soonest = 0;
+	bool found = false;
+
+	for (int i = 0; i < T500RS_MAX_EFFECTS; i++) {
+		struct t500rs_active_effect *a = &t500rs->active[i];
+		unsigned long deadline;
+
+		if (!a->active || a->total_ms == 0)
+			continue;
+		deadline = a->start_j + msecs_to_jiffies(a->total_ms);
+		if (!found || time_before(deadline, soonest)) {
+			soonest = deadline;
+			found = true;
+		}
+	}
+
+	if (found) {
+		long delay = (long)soonest - (long)jiffies;
+
+		if (delay < 0)
+			delay = 0;
+		mod_delayed_work(system_wq, &t500rs->expiry_work,
+				 (unsigned long)delay);
+	} else {
+		cancel_delayed_work(&t500rs->expiry_work);
+	}
+}
+
+/*
+ * Expiry worker. Scans active[]; any finite effect whose time has elapsed is
+ * marked inactive and the device receives a global 0x41 STOP. Because the
+ * T500RS 0x41 effect_id is always 0x00, a single STOP halts playback; this is
+ * correct for the common single-effect case. (Multi-simultaneous finite
+ * effects sharing the global STOP need hardware validation — see
+ * docs/FFB_T500RS.md.)
+ */
+static void t500rs_expiry_work(struct work_struct *work)
+{
+	struct t500rs_device_entry *t500rs =
+		container_of(to_delayed_work(work), struct t500rs_device_entry,
+			     expiry_work);
+	unsigned long flags;
+	unsigned long now = jiffies;
+	bool any_expired = false;
+
+	spin_lock_irqsave(&t500rs->expiry_lock, flags);
+	for (int i = 0; i < T500RS_MAX_EFFECTS; i++) {
+		struct t500rs_active_effect *a = &t500rs->active[i];
+
+		if (!a->active || a->total_ms == 0)
+			continue;
+		if (time_after_eq(now,
+				  a->start_j + msecs_to_jiffies(a->total_ms))) {
+			a->active = false;
+			any_expired = true;
+		}
+	}
+	t500rs_expiry_arm_locked(t500rs);
+	spin_unlock_irqrestore(&t500rs->expiry_lock, flags);
+
+	if (any_expired)
+		t500rs_send_stop_now(t500rs, t500rs->expiry_buffer);
+}
+
+/*
+ * Play effect - send START command (0x41) for the effect and arm the
+ * software expiry tracker so finite effects actually terminate.
  */
 static int t500rs_play_effect(void *data,
 			      const struct tmff2_effect_state *state)
 {
 	struct t500rs_device_entry *t500rs = data;
 	const struct ff_effect *effect = &state->effect;
+	unsigned long flags;
 	int ret;
-	int hw_id;
 
 	/* Validate effect ID range */
 	if (effect->id >= T500RS_MAX_EFFECTS) {
@@ -1380,25 +1478,37 @@ static int t500rs_play_effect(void *data,
 		return -EINVAL;
 	}
 
-	hw_id = t500rs_logical_to_hw_id(effect->id);
-
-	ret = t500rs_send_start(t500rs, (u8)hw_id);
+	ret = t500rs_send_start(t500rs);
 	if (ret == 0) {
-		T500RS_DBG(t500rs, "Started effect %d (hw_id=%d)\n", effect->id,
-			   hw_id);
+		u32 total = effect->replay.length;
+
+		spin_lock_irqsave(&t500rs->expiry_lock, flags);
+		if (total == 0) {
+			/* Infinite effect: never auto-stop. */
+			t500rs->active[effect->id].active = false;
+		} else {
+			t500rs->active[effect->id].active = true;
+			t500rs->active[effect->id].start_j = jiffies;
+			t500rs->active[effect->id].total_ms = total;
+		}
+		t500rs_expiry_arm_locked(t500rs);
+		spin_unlock_irqrestore(&t500rs->expiry_lock, flags);
+
+		T500RS_DBG(t500rs, "Started effect %d (duration=%u ms)\n",
+			   effect->id, total);
 	}
 	return ret;
 }
 
 /*
- * Stop effect - send STOP command (0x41).
- * No slot freeing needed with simplified hw_id = logical_id + 1 mapping.
+ * Stop effect - send STOP command (0x41) and deactivate the software
+ * expiry slot. No slot freeing needed; effect_id is always 0x00.
  */
 static int t500rs_stop_effect(void *data,
 			      const struct tmff2_effect_state *state)
 {
 	struct t500rs_device_entry *t500rs = data;
-	int hw_id;
+	unsigned long flags;
 
 	/* Validate effect ID range */
 	if (state->effect.id >= T500RS_MAX_EFFECTS) {
@@ -1412,10 +1522,12 @@ static int t500rs_stop_effect(void *data,
 		return -ENOMEM;
 	}
 
-	hw_id = t500rs_logical_to_hw_id(state->effect.id);
+	spin_lock_irqsave(&t500rs->expiry_lock, flags);
+	t500rs->active[state->effect.id].active = false;
+	t500rs_expiry_arm_locked(t500rs);
+	spin_unlock_irqrestore(&t500rs->expiry_lock, flags);
 
-	/* STOP command uses hw_id as effect_id to match 0x01 packet */
-	return t500rs_send_stop(t500rs, (u8)hw_id);
+	return t500rs_send_stop(t500rs);
 }
 
 /*
@@ -1434,7 +1546,6 @@ static int t500rs_update_effect(void *data,
 	const struct ff_effect *effect = &state->effect;
 	const struct ff_effect *old = &state->old;
 	u8 *buf;
-	int hw_id;
 
 	if (!t500rs)
 		return -ENODEV;
@@ -1443,19 +1554,16 @@ static int t500rs_update_effect(void *data,
 	if (!buf)
 		return -ENOMEM;
 
-	hw_id = t500rs_logical_to_hw_id(effect->id);
-
 	switch (effect->type) {
 	case FF_CONSTANT: {
 		if (effect->u.constant.level == old->u.constant.level &&
 		    effect->direction == old->direction)
 			return 0;
 
-		u16 param_sub, env_sub;
-		t500rs_index_to_subtypes(hw_id, &param_sub, &env_sub);
-		return t500rs_send_constant_packet(t500rs, buf, (u8)param_sub,
-						   effect->u.constant.level,
-						   effect->direction);
+		/* Constant force uses fixed subtypes (see docs/FFB_T500RS.md). */
+		return t500rs_send_constant_packet(
+			t500rs, buf, (u8)T500RS_CONSTANT_PARAM_SUB,
+			effect->u.constant.level, effect->direction);
 	}
 
 	case FF_PERIODIC: {
@@ -1468,7 +1576,7 @@ static int t500rs_update_effect(void *data,
 			return 0;
 
 		u16 param_sub, env_sub;
-		t500rs_index_to_subtypes(hw_id, &param_sub, &env_sub);
+		t500rs_index_to_subtypes(effect->id + 1, &param_sub, &env_sub);
 		return t500rs_send_periodic_packet(t500rs, buf, (u8)param_sub,
 						   &effect->u.periodic,
 						   effect->direction);
@@ -1482,7 +1590,7 @@ static int t500rs_update_effect(void *data,
 			return 0;
 
 		u16 param_sub, env_sub;
-		t500rs_index_to_subtypes(hw_id, &param_sub, &env_sub);
+		t500rs_index_to_subtypes(effect->id + 1, &param_sub, &env_sub);
 		return t500rs_send_ramp_packet(t500rs, buf, (u8)param_sub,
 					       &effect->u.ramp,
 					       effect->replay.length);
@@ -1511,7 +1619,7 @@ static int t500rs_update_effect(void *data,
 		    effect->type == old->type)
 			return 0;
 
-		t500rs_index_to_subtypes(hw_id, &param_sub, &env_sub);
+		t500rs_index_to_subtypes(effect->id + 1, &param_sub, &env_sub);
 		return t500rs_send_condition_packet(t500rs, buf,
 						    (u8)param_sub, cond,
 						    t500rs_condition_level(effect->type));
@@ -1716,6 +1824,21 @@ static int t500rs_wheel_init(struct tmff2_device_entry *tmff2, int open_mode)
 		goto err_buffer_alloc;
 	}
 
+	/* Allocate dedicated DMA-safe buffer for the expiry worker so it never
+	 * races the shared send_buffer used by the core FFB worker. */
+	t500rs->expiry_buffer = kzalloc(t500rs->buffer_length, GFP_KERNEL);
+	if (!t500rs->expiry_buffer) {
+		hid_err(tmff2->hdev,
+			"Failed to allocate expiry buffer (%zu bytes)\n",
+			t500rs->buffer_length);
+		ret = -ENOMEM;
+		goto err_expiry_alloc;
+	}
+
+	spin_lock_init(&t500rs->expiry_lock);
+	INIT_DELAYED_WORK(&t500rs->expiry_work, t500rs_expiry_work);
+	memset(t500rs->active, 0, sizeof(t500rs->active));
+
 	/* Store device data in tmff2 BEFORE any operations that might fail */
 	tmff2->data = t500rs;
 
@@ -1821,6 +1944,8 @@ static int t500rs_wheel_init(struct tmff2_device_entry *tmff2, int open_mode)
 
 	return 0;
 
+err_expiry_alloc:
+	kfree(t500rs->send_buffer);
 err_buffer_alloc:
 	/* t500rs structure is allocated but not yet stored in tmff2->data */
 	kfree(t500rs);
@@ -1840,7 +1965,15 @@ static int t500rs_wheel_destroy(void *data)
 
 	T500RS_DBG(t500rs, "T500RS: Cleaning up\n");
 
+	/* Cancel any pending expiry work before freeing its buffer. */
+	cancel_delayed_work_sync(&t500rs->expiry_work);
+
 	/* Free resources in reverse order of allocation */
+	if (t500rs->expiry_buffer) {
+		kfree(t500rs->expiry_buffer);
+		t500rs->expiry_buffer = NULL;
+	}
+
 	if (t500rs->send_buffer) {
 		kfree(t500rs->send_buffer);
 		t500rs->send_buffer = NULL;
