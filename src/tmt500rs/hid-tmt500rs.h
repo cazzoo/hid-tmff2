@@ -25,6 +25,19 @@
 /* Control constants */
 #define T500RS_CONTROL_DEFAULT 0x40
 
+/* Effect ID: T500RS always uses 0x00 for 0x01 uploads and 0x41 START/STOP.
+ * Non-zero IDs mute constant force and make other effects unreliable
+ * (see docs/FFB_T500RS.md). The init-time autocenter STOP is the only
+ * exception, which targets a fixed ID 15. */
+#define T500RS_EFFECT_ID 0x00
+#define T500RS_AUTOCENTER_STOP_ID 15
+
+/* Fixed constant-force subtypes. These must NOT be per-effect: using
+ * per-effect subtypes for constant force breaks level updates (no torque).
+ * See docs/FFB_T500RS.md "Special case - constant force subtypes". */
+#define T500RS_CONSTANT_PARAM_SUB 0x0e
+#define T500RS_CONSTANT_ENV_SUB 0x1c
+
 /* Effect type constants */
 #define T500RS_EFFECT_CONSTANT 0x00
 #define T500RS_EFFECT_SQUARE 0x20 
@@ -104,8 +117,8 @@ extern const signed short t500rs_effects[];
  * - b13-b14: reserved (0x0000)
  */
 struct t500rs_pkt_r01_main {
-	u8 id; /* b0: T500RS_PKT_MAIN */
-	u8 effect_id; /* b1: hardware effect slot ID (1-15) */
+  u8 id; /* b0: T500RS_PKT_MAIN */
+  u8 effect_id; /* b1: always T500RS_EFFECT_ID (0x00) on T500RS */
 	u8 effect_type; /* b2: effect type (T500RS_EFFECT_*) */
 	u8 control; /* b3: always T500RS_CONTROL_DEFAULT (0x40) */
 	__le16 duration_ms; /* b4-b5: duration in ms (LE) */
@@ -188,10 +201,10 @@ struct t500rs_r03_const {
 
 /* 0x41 - START/STOP command (4 bytes) */
 struct t500rs_r41_cmd {
-	u8 id; /* 0x41 */
-	u8 effect_id; /* usually 0 on T500RS */
-	u8 command; /* 0x41 START, 0x00 STOP, 0x00 clear in init */
-	u8 arg; /* 0x01 */
+  u8 id; /* 0x41 */
+  u8 effect_id; /* always T500RS_EFFECT_ID (0x00); autocenter init STOP uses 15 */
+  u8 command; /* 0x41 START, 0x00 STOP, 0x00 clear in init */
+  u8 arg; /* 0x01 */
 } __packed;
 
 /* 0x02 - Envelope packet (9 bytes) */
