@@ -1412,7 +1412,7 @@ static void t500rs_expiry_arm_locked(struct t500rs_device_entry *t500rs)
  * marked inactive and the device receives a global 0x41 STOP. Because the
  * T500RS 0x41 effect_id is always 0x00, a single STOP halts playback; this is
  * correct for the common single-effect case. (Multi-simultaneous finite
- * effects sharing the global STOP need hardware validation — see
+ * effects sharing the global STOP need hardware validation - see
  * docs/T500RS_FFBEFFECTS.md.)
  */
 static void t500rs_expiry_work(struct work_struct *work)
@@ -1991,18 +1991,17 @@ static int t500rs_wheel_destroy(void *data)
 
 /* Populate API callbacks.
  *
- * No wheel_fixup is registered (unlike t300rs/tspc) and this is deliberate,
- * verified against the real T500RS HID descriptor: the stock report 
- * descriptor already correctly declares the wheel X axis (0..65535), 
- * pedals (Y/Rz/Slider, 0..1023), 13 buttons, and an 8-way hat — 
- * it is well-formed and needs no patching.
+ * No wheel_fixup is registered: the stock T500RS report descriptor already
+ * correctly declares the wheel X axis (0..65535), pedals (Y/Rz/Slider,
+ * 0..1023), 13 buttons, and an 8-way hat - it is well-formed and needs no
+ * patching. The FFB output path also does not depend on the descriptor (it
+ * sends raw packets via hid_hw_output_report()).
  *
- * The FFB output path also does not depend on the descriptor: it sends raw
- * packets via hid_hw_output_report(), which issues USB SET_REPORT control
- * transfers keyed by the first byte of the buffer as the report ID. This
- * bypasses descriptor validation, so the descriptor's declared vendor output
- * report (ID 0x0a) is irrelevant to FFB. Hence no report/field fixup is
- * required for either input or output.
+ * NOTE: Oversteer expects pedals on the Simulation-page usages
+ * (ABS_GAS/ABS_BRAKE/ABS_THROTTLE), but the hardware reports them as
+ * Y/Rz/Slider. Remapping those in the descriptor breaks games that bind to
+ * the stock Y/Rz layout, so the fix must live in userspace (SDL / Wine /
+ * game-specific mapping), not here.
  *
  * No open/close callback is installed: FFB is armed once in wheel_init and
  * the parent falls back to the default HID open/close (see comment on
