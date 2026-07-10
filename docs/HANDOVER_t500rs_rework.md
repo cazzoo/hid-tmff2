@@ -13,7 +13,7 @@ Make the T500RS force-feedback driver behave like the other wheels in this
 repo (T300RS etc.): an effect that is started should **terminate when its
 `replay.length` elapses**, instead of running forever and accumulating.
 
-Root cause (established from `docs/FFB_T500RS.md` + capture analysis):
+Root cause (established from `docs/T500RS_FFBEFFECTS.md` + capture analysis):
 
 1. **EffectID must be `0x00`** for every `0x01` upload **and** every `0x41`
    START/STOP. The old code put a per-effect hardware id (`1..15`) into this
@@ -28,7 +28,7 @@ Root cause (established from `docs/FFB_T500RS.md` + capture analysis):
 
 ---
 
-## 2. Authoritative protocol facts (`docs/FFB_T500RS.md`)
+## 2. Authoritative protocol facts (`docs/T500RS_FFBEFFECTS.md`)
 
 - `EffectID = 0x00` for all `0x01` and `0x41` (only exception: init-time
   autocenter STOP at fixed id `15` — not used by this code path, which disables
@@ -246,5 +246,5 @@ use fixed constant subtypes, and auto-stop finite effects via the tracker.
 | `.preview/tmt500rs.c` / `.h` | HID-report version, committed | **Complete** (EffectID + subtypes + expiry); not built |
 | `src/hid-tmff2.c` / `.h` | Shared core (effect lifecycle) | Untouched (expiry is T500RS-only by design) |
 | `src/tmt300rs/hid-tmt300rs.c` | Reference wheel (hardware auto-stop) | N/A |
-| `docs/FFB_T500RS.md` | Authoritative T500RS protocol | Use as source of truth |
+| `docs/T500RS_FFBEFFECTS.md` | Authoritative T500RS protocol | Use as source of truth |
 | `docs/T500RS_FFBEFFECTS.md`, `docs/FFBEFFECTS.md` | Capture-derived notes | Supporting |

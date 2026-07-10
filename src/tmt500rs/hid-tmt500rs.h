@@ -27,14 +27,14 @@
 
 /* Effect ID: T500RS always uses 0x00 for 0x01 uploads and 0x41 START/STOP.
  * Non-zero IDs mute constant force and make other effects unreliable
- * (see docs/FFB_T500RS.md). The init-time autocenter STOP is the only
+ * (see docs/T500RS_FFBEFFECTS.md). The init-time autocenter STOP is the only
  * exception, which targets a fixed ID 15. */
 #define T500RS_EFFECT_ID 0x00
 #define T500RS_AUTOCENTER_STOP_ID 15
 
 /* Fixed constant-force subtypes. These must NOT be per-effect: using
  * per-effect subtypes for constant force breaks level updates (no torque).
- * See docs/FFB_T500RS.md "Special case - constant force subtypes". */
+ * See docs/T500RS_FFBEFFECTS.md "Special case - constant force subtypes". */
 #define T500RS_CONSTANT_PARAM_SUB 0x0e
 #define T500RS_CONSTANT_ENV_SUB 0x1c
 

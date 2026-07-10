@@ -83,7 +83,7 @@ static inline s8 t500rs_scale_const_with_direction(int level, u16 direction)
  *  env_sub   = 0x001c + 0x001c * idx
  * idx is the per-effect slot index (callers pass effect->id + 1 so that
  * non-constant effects never collide with the constant force's fixed
- * index-0 subtypes). See docs/FFB_T500RS.md.
+ * index-0 subtypes). See docs/T500RS_FFBEFFECTS.md.
  */
 static inline void t500rs_index_to_subtypes(unsigned int idx, u16 *param_sub,
 					    u16 *env_sub)
@@ -795,7 +795,7 @@ const signed short t500rs_effects[] = { FF_CONSTANT, FF_SPRING,	    FF_DAMPER,
  * Send a sequence of packets for effect upload.
  * Abstracts the hardcoded packet orders in upload functions.
  *
- * Per docs/FFB_T500RS.md, the 0x01 effect_id is always T500RS_EFFECT_ID
+ * Per docs/T500RS_FFBEFFECTS.md, the 0x01 effect_id is always T500RS_EFFECT_ID
  * (0x00); the per-effect slot is encoded in the parameter/envelope subtypes.
  * Constant force uses fixed subtypes (T500RS_CONSTANT_PARAM_SUB/ENV_SUB);
  * every other effect derives subtypes from its logical id (effect->id + 1).
@@ -1413,7 +1413,7 @@ static void t500rs_expiry_arm_locked(struct t500rs_device_entry *t500rs)
  * T500RS 0x41 effect_id is always 0x00, a single STOP halts playback; this is
  * correct for the common single-effect case. (Multi-simultaneous finite
  * effects sharing the global STOP need hardware validation — see
- * docs/FFB_T500RS.md.)
+ * docs/T500RS_FFBEFFECTS.md.)
  */
 static void t500rs_expiry_work(struct work_struct *work)
 {
@@ -1565,7 +1565,7 @@ static int t500rs_update_effect(void *data,
 		    effect->direction == old->direction)
 			return 0;
 
-		/* Constant force uses fixed subtypes (see docs/FFB_T500RS.md). */
+		/* Constant force uses fixed subtypes (see docs/T500RS_FFBEFFECTS.md). */
 		return t500rs_send_constant_packet(
 			t500rs, buf, (u8)T500RS_CONSTANT_PARAM_SUB,
 			effect->u.constant.level, effect->direction);

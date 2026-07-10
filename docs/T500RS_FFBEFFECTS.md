@@ -64,7 +64,7 @@ Start with these examples to understand how effects are created in practice, the
 Offset | Size | Field          | Description
 -------|------|----------------|----------------------------------
  0      | 1    | packet_type    | 0x01
- 1      | 1    | effect_id      | Hardware effect slot ID (0-15, assigned by driver)
+ 1      | 1    | effect_id      | Always 0x00 on T500RS (fixed; NOT a hardware slot — see note)
  2      | 1    | effect_type    | Effect type (see table below)
  3      | 1    | control        | Always 0x40
  4      | 2    | duration_ms    | Duration in milliseconds, little-endian
@@ -75,7 +75,7 @@ Offset | Size | Field          | Description
 13      | 2    | reserved2      | 0x0000
 ```
 
-**Driver Implementation Note:** effect_id must be unique for concurrent effects to prevent slot collision. Use hardware ID allocation (0-15) instead of always 0x00.
+**Driver Implementation Note:** On T500RS the `effect_id` byte is **always 0x00** for both `0x01` uploads and `0x41` START/STOP. It is not a hardware slot index. Sending a non-zero value is hardware-verified to mute constant force and make other effects unreliable. Per-effect identity is carried by the subtype codes (e.g. `0x0e + 0x1c*n`), not by `effect_id`.
 
 **Effect Type Codes (byte 2):**
 | Code | Effect Type | Source |
@@ -101,10 +101,10 @@ Offset | Size | Field          | Description
 
 **Examples:**
 
-> **NOTE:** Effect IDs in examples are hardware slot IDs (1-15) assigned by the driver. The driver maps logical effect IDs (0-14) to hardware IDs (1-15). Examples show typical values. See the [Subtype System and Effect Indexing](#subtype-system-and-effect-indexing) section for details on how hardware IDs are allocated.
+> **NOTE:** On T500RS the `effect_id` byte is always 0x00 in every `0x01` upload and `0x41` command. The examples below show the captured packet layout; the subtype codes (not `effect_id`) carry the per-effect identity.
 
-- `01 01 00 40 f4 01 00 00 0e 00 1c 00 00 00` - Constant effect with envelope
-  - Effect ID: 0x01 (hardware slot 1, logical 0)
+- `01 00 00 40 f4 01 00 00 0e 00 1c 00 00 00` - Constant effect with envelope
+  - Effect ID: 0x00 (fixed on T500RS; see note above)
   - Effect type: 0x00 (constant)
   - Control: 0x40
   - Duration: 0x01f4 = 500ms
@@ -114,8 +114,8 @@ Offset | Size | Field          | Description
     - Note: Constant effects use fixed subtype 0x000e/0x001c regardless of hw_id
   - Reserved2: 0x0000
 
-- `01 01 40 40 d0 07 00 00 2a 00 38 00 00 00` - Conditional effect
-  - Effect ID: 0x01 (hardware slot 1, logical 0)
+- `01 00 40 40 d0 07 00 00 2a 00 38 00 00 00` - Conditional effect
+  - Effect ID: 0x00 (fixed on T500RS; see note above)
   - Effect type: 0x40 (conditional)
   - Control: 0x40
   - Duration: 0x07d0 = 2000ms
