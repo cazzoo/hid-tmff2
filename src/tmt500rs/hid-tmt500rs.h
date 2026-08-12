@@ -25,11 +25,19 @@
 /* Control constants */
 #define T500RS_CONTROL_DEFAULT 0x40
 
-/* Effect ID: T500RS always uses 0x00 for 0x01 uploads and 0x41 START/STOP.
- * Non-zero IDs mute constant force and make other effects unreliable
- * (see docs/T500RS_FFBEFFECTS.md). The init-time autocenter STOP is the only
- * exception, which targets a fixed ID 15. */
-#define T500RS_EFFECT_ID 0x00
+/* Per Windows USB captures of the official driver (see work/analysis/04_effect_id_bug.md),
+ * the effect_id byte of every 0x01 main-upload and every 0x41 START/STOP packet mirrors
+ * the hardware slot index the effect was uploaded to:
+ *
+ *   effect_id == (param_sub - 0x000e) / 0x001c
+ *
+ * Slot 0 (param_sub=0x000e, env_sub=0x001c) is the constant-force slot; every other
+ * slot is assigned sequentially to non-constant effects. The driver derives the hw
+ * slot from the effect type and effect->id via t500rs_effect_to_hw_id() and threads
+ * it through every 0x01/0x41 packet.
+ *
+ * The init-time autocenter teardown is the only exception, which targets a fixed
+ * slot 15 via T500RS_AUTOCENTER_STOP_ID. */
 #define T500RS_AUTOCENTER_STOP_ID 15
 
 /* Fixed constant-force subtypes. These must NOT be per-effect: using
@@ -118,7 +126,7 @@ extern const signed short t500rs_effects[];
  */
 struct t500rs_pkt_r01_main {
   u8 id; /* b0: T500RS_PKT_MAIN */
-  u8 effect_id; /* b1: always T500RS_EFFECT_ID (0x00) on T500RS */
+  u8 effect_id; /* b1: hardware slot index (0=constant, 1+=non-constant) */
 	u8 effect_type; /* b2: effect type (T500RS_EFFECT_*) */
 	u8 control; /* b3: always T500RS_CONTROL_DEFAULT (0x40) */
 	__le16 duration_ms; /* b4-b5: duration in ms (LE) */
@@ -202,9 +210,9 @@ struct t500rs_r03_const {
 /* 0x41 - START/STOP command (4 bytes) */
 struct t500rs_r41_cmd {
   u8 id; /* 0x41 */
-  u8 effect_id; /* always T500RS_EFFECT_ID (0x00); autocenter init STOP uses 15 */
+  u8 effect_id; /* hardware slot index (0=constant, 1+=non-constant); init STOP uses 15 */
   u8 command; /* 0x41 START, 0x00 STOP, 0x00 clear in init */
-  u8 arg; /* 0x01 */
+  u8 arg; /* 0xff for START, 0x01 for STOP (verified against C2 captures) */
 } __packed;
 
 /* 0x02 - Envelope packet (9 bytes) */

@@ -73,9 +73,10 @@ static inline s8 t500rs_scale_const_with_direction(int level, u16 direction)
 
 /*
  * T500RS encodes the effect "slot" in the parameter/envelope subtypes
- * (0x0e + 0x1c*n / 0x1c + 0x1c*n), NOT in the 0x01/0x41 effect_id field,
- * which is always T500RS_EFFECT_ID (0x00). There is therefore no logical->
- * hardware ID mapping; callers index subtypes directly via effect->id.
+ * (0x0e + 0x1c*n / 0x1c + 0x1c*n), AND in the 0x01/0x41 effect_id byte.
+ * The effect_id byte mirrors the slot index (0=constant, 1+=non-constant),
+ * matching the param_sub derivation in t500rs_index_to_subtypes() and the
+ * captured Windows behaviour (see work/analysis/04_effect_id_bug.md).
  */
 
 /* Map effect index to parameter/envelope subtypes as per protocol:
@@ -112,16 +113,15 @@ struct t500rs_device_entry {
 	 * Software-expiry tracker. The T500RS hardware never auto-stops an
 	 * effect: once STARTed it runs until an explicit 0x41 STOP. The tmff2
 	 * core relies on hardware auto-stop (which T500RS lacks), so we enforce
-	 * replay.length here. A single re-arming delayed_work scans active[] and
-	 * sends a global 0x41 STOP when an effect's time elapses.
+	 * replay.length here. A single re-arming delayed_work scans active[]
+	 * and sends a per-slot 0x41 STOP when each finite effect's time elapses.
 	 *
-	 * IMPORTANT: the T500RS 0x41 STOP is global (effect_id is always 0x00),
-	 * so it halts ALL playback, not one slot. Games that mix a sustained
-	 * force with short transient effects (e.g. DiRT Rally 2.0) would
-	 * otherwise lose their sustained force every time a transient ends.
-	 * We therefore track a per-slot 'playing' flag for every started effect
-	 * (finite and infinite) and only emit the global STOP once nothing is
-	 * left playing.
+	 * Per Windows USB captures (see work/analysis/04_effect_id_bug.md and
+	 * 10_second_pass_findings.md), STOP is per-slot: the 0x41 effect_id
+	 * byte addresses one slot at a time. There is no need for a "global
+	 * STOP" or a playing-flag guard, because each STOP only halts its own
+	 * effect.
+	 *
 	 * expiry_buffer is a dedicated DMA-safe buffer so the worker (which runs
 	 * outside the core FFB worker) never races send_buffer (mirrors the
 	 * set_range pattern).
@@ -130,7 +130,6 @@ struct t500rs_device_entry {
 	struct delayed_work expiry_work;
 	u8 *expiry_buffer;
 	struct t500rs_active_effect {
-		bool playing; /* started and not yet stopped (finite OR infinite) */
 		bool active; /* has a finite expiry deadline (drives expiry_work) */
 		unsigned long start_ms; /* jiffies_to_msecs(jiffies) at play */
 		unsigned long total_ms; /* (delay+length)*count; 0 == infinite */
@@ -160,8 +159,9 @@ struct t500rs_device_entry {
  * not in this 0x01 packet.
  *
  * This is a pure constructor: callers must validate effect_id/effect_type
- * beforehand (the MAIN sequence step derives them from validated effect
- * fields; effect_id is always T500RS_EFFECT_ID).
+ * beforehand (the MAIN sequence step derives both from validated effect
+ * fields; effect_id mirrors the hardware slot index via
+ * t500rs_effect_to_hw_id()).
  */
 static void t500rs_build_r01_main(struct t500rs_pkt_r01_main *p, u8 effect_id,
 				  u8 effect_type, u16 duration_ms, u16 delay_ms,
@@ -361,9 +361,10 @@ static void t500rs_build_r04_ramp(struct t500rs_pkt_r04_periodic_ramp *p,
 /* Forward declarations for functions used by helper functions */
 static int t500rs_send_hid(struct t500rs_device_entry *t500rs, u8 *data,
 			   size_t len);
-static int t500rs_send_stop(struct t500rs_device_entry *t500rs);
-static int t500rs_send_start(struct t500rs_device_entry *t500rs);
-static int t500rs_send_stop_now(struct t500rs_device_entry *t500rs, u8 *buf);
+static int t500rs_send_stop(struct t500rs_device_entry *t500rs, u8 effect_id);
+static int t500rs_send_start(struct t500rs_device_entry *t500rs, u8 effect_id);
+static int t500rs_send_stop_now(struct t500rs_device_entry *t500rs, u8 *buf,
+				u8 effect_id);
 static void t500rs_expiry_work(struct work_struct *work);
 static void t500rs_build_r03_constant(struct t500rs_r03_const *p, u8 code,
 				      s8 level);
@@ -801,13 +802,34 @@ const signed short t500rs_effects[] = { FF_CONSTANT, FF_SPRING,	    FF_DAMPER,
 					FF_GAIN,     FF_AUTOCENTER, -1 };
 
 /*
+ * Resolve the hardware effect slot index for a given effect.
+ *
+ * Per Windows USB captures (work/analysis/04_effect_id_bug.md, validated
+ * across all 8 0x01 and 10 0x41 packets in both community captures), the
+ * protocol mirrors the param_sub derivation:
+ *
+ *   slot 0   -> param_sub=0x000e, env_sub=0x001c  (constant force)
+ *   slot n>0 -> param_sub=0x000e+0x001c*n, env_sub=0x001c+0x001c*n
+ *
+ * The driver keeps constant force pinned to slot 0 (its subtypes are fixed
+ * in the firmware) and assigns every other effect slot n = effect->id + 1,
+ * so the hardware slot mirrors the per-effect subtype channel.
+ */
+static u8 t500rs_effect_to_hw_id(const struct ff_effect *effect)
+{
+	if (effect->type == FF_CONSTANT)
+		return 0;
+	return (u8)(effect->id + 1);
+}
+
+/*
  * Send a sequence of packets for effect upload.
  * Abstracts the hardcoded packet orders in upload functions.
  *
- * Per docs/T500RS_FFBEFFECTS.md, the 0x01 effect_id is always T500RS_EFFECT_ID
- * (0x00); the per-effect slot is encoded in the parameter/envelope subtypes.
- * Constant force uses fixed subtypes (T500RS_CONSTANT_PARAM_SUB/ENV_SUB);
- * every other effect derives subtypes from its logical id (effect->id + 1).
+ * The 0x01 effect_id byte and the 0x41 START/STOP effect_id byte both mirror
+ * the hardware slot derived above. Constant force uses fixed subtypes
+ * (T500RS_CONSTANT_PARAM_SUB/ENV_SUB); every other effect derives subtypes
+ * from its logical id (effect->id + 1).
  */
 static int t500rs_send_packet_sequence(struct t500rs_device_entry *t500rs,
 				       const struct tmff2_effect_state *state,
@@ -816,6 +838,7 @@ static int t500rs_send_packet_sequence(struct t500rs_device_entry *t500rs,
 {
 	const struct ff_effect *effect = &state->effect;
 	u8 *buf = t500rs->send_buffer;
+	u8 hw_id = t500rs_effect_to_hw_id(effect);
 	int ret;
 	u16 param_sub, env_sub;
 
@@ -834,7 +857,7 @@ static int t500rs_send_packet_sequence(struct t500rs_device_entry *t500rs,
 
 		switch (sequence[i]) {
 		case T500RS_SEQ_STOP:
-			ret = t500rs_send_stop(t500rs);
+			ret = t500rs_send_stop(t500rs, hw_id);
 			break;
 
 		case T500RS_SEQ_SYNC_42_05:
@@ -955,7 +978,7 @@ static int t500rs_send_packet_sequence(struct t500rs_device_entry *t500rs,
 
 			struct t500rs_pkt_r01_main *m =
 				(struct t500rs_pkt_r01_main *)buf;
-			t500rs_build_r01_main(m, T500RS_EFFECT_ID, effect_type,
+			t500rs_build_r01_main(m, hw_id, effect_type,
 					      duration_ms, delay_ms, param_sub,
 					      env_sub);
 
@@ -1044,12 +1067,13 @@ static int t500rs_send_hid(struct t500rs_device_entry *t500rs, u8 *data,
 }
 
 /*
- * Send STOP command (0x41, effect_id = T500RS_EFFECT_ID) into the supplied
+ * Send STOP command (0x41) for the given hardware slot into the supplied
  * buffer. Callers in the core FFB worker use t500rs_send_stop() (shared
  * send_buffer); the expiry worker uses this with its own DMA-safe buffer so
  * it never races the core worker.
  */
-static int t500rs_send_stop_now(struct t500rs_device_entry *t500rs, u8 *buf)
+static int t500rs_send_stop_now(struct t500rs_device_entry *t500rs, u8 *buf,
+				u8 effect_id)
 {
 	struct t500rs_r41_cmd *r41;
 
@@ -1060,32 +1084,32 @@ static int t500rs_send_stop_now(struct t500rs_device_entry *t500rs, u8 *buf)
 
 	r41 = (struct t500rs_r41_cmd *)buf;
 	r41->id = 0x41;
-	r41->effect_id = T500RS_EFFECT_ID;
+	r41->effect_id = effect_id;
 	r41->command = 0x00; /* STOP */
 	r41->arg = 0x01;
 	return t500rs_send_hid(t500rs, (u8 *)r41, sizeof(*r41));
 }
 
 /*
- * Send STOP command for the device. Per protocol the 0x41 effect_id is always
- * T500RS_EFFECT_ID (0x00); the wheel relies on subtypes to address slots, so
- * this stops the currently-playing effect(s).
+ * Send STOP command for the given hardware slot. Per protocol the 0x41
+ * effect_id addresses one slot at a time; this halts only that slot's
+ * playback, leaving all other slots intact.
  */
-static int t500rs_send_stop(struct t500rs_device_entry *t500rs)
+static int t500rs_send_stop(struct t500rs_device_entry *t500rs, u8 effect_id)
 {
 	if (!t500rs)
 		return -ENODEV;
 	if (!t500rs->send_buffer)
 		return -ENOMEM;
-	return t500rs_send_stop_now(t500rs, t500rs->send_buffer);
+	return t500rs_send_stop_now(t500rs, t500rs->send_buffer, effect_id);
 }
 
 /*
- * Send START command (0x41, effect_id = T500RS_EFFECT_ID). No duration/count
+ * Send START command (0x41) for the given hardware slot. No duration/count
  * field: the T500RS runs the effect until an explicit 0x41 STOP, which the
  * driver enforces in software via the expiry tracker.
  */
-static int t500rs_send_start(struct t500rs_device_entry *t500rs)
+static int t500rs_send_start(struct t500rs_device_entry *t500rs, u8 effect_id)
 {
 	struct t500rs_r41_cmd *r41;
 
@@ -1096,7 +1120,7 @@ static int t500rs_send_start(struct t500rs_device_entry *t500rs)
 
 	r41 = (struct t500rs_r41_cmd *)t500rs->send_buffer;
 	r41->id = 0x41;
-	r41->effect_id = T500RS_EFFECT_ID;
+	r41->effect_id = effect_id;
 	r41->command = 0x41; /* START */
 	r41->arg = 0x01;
 	return t500rs_send_hid(t500rs, (u8 *)r41, sizeof(*r41));
@@ -1114,8 +1138,9 @@ static int t500rs_upload_constant(struct t500rs_device_entry *t500rs,
 	T500RS_DBG(t500rs, "Upload constant: id=%d, level=%d, dir=%u\n",
 		   effect->id, level, effect->direction);
 
-	/* Send packet sequence for constant effect. The 0x01 effect_id is
-	 * always T500RS_EFFECT_ID (0x00); constant force uses fixed subtypes. */
+	/* Send packet sequence for constant effect. Constant force uses
+	 * fixed subtypes (T500RS_CONSTANT_PARAM_SUB/ENV_SUB) and hardware
+	 * slot 0. */
 	ret = t500rs_send_packet_sequence(
 		t500rs, state, t500rs_seq_constant,
 		sizeof(t500rs_seq_constant) / sizeof(t500rs_seq_constant[0]));
@@ -1386,21 +1411,6 @@ static int t500rs_upload_effect(void *data,
  * auto-stop (Linux FFB semantics) and are skipped. If nothing finite is
  * pending the worker is cancelled.
  */
-/*
- * Return true if any effect slot is currently playing (started and not yet
- * stopped/expired), finite or infinite. Caller must hold expiry_lock.
- * Used to guard the global 0x41 STOP so we never tear down a still-playing
- * effect (see struct comment: the T500RS STOP is global).
- */
-static bool t500rs_any_playing_locked(struct t500rs_device_entry *t500rs)
-{
-	for (int i = 0; i < T500RS_MAX_EFFECTS; i++) {
-		if (t500rs->active[i].playing)
-			return true;
-	}
-	return false;
-}
-
 static void t500rs_expiry_arm_locked(struct t500rs_device_entry *t500rs)
 {
 	unsigned long soonest = 0;
@@ -1433,10 +1443,8 @@ static void t500rs_expiry_arm_locked(struct t500rs_device_entry *t500rs)
 
 /*
  * Expiry worker. Scans active[]; any finite effect whose time has elapsed is
- * marked inactive. Because the T500RS 0x41 STOP is global (effect_id always
- * 0x00), we only send it once NO effect is left playing - otherwise a
- * finishing transient would tear down a still-playing sustained force (e.g.
- * the constant force DiRT Rally 2.0 keeps alive). See docs/T500RS_FFBEFFECTS.md.
+ * marked inactive and a per-slot 0x41 STOP is sent for it. Each STOP halts
+ * only its own slot, so concurrent effects are not disturbed.
  */
 static void t500rs_expiry_work(struct work_struct *work)
 {
@@ -1445,8 +1453,6 @@ static void t500rs_expiry_work(struct work_struct *work)
 			     expiry_work);
 	unsigned long flags;
 	unsigned long now = jiffies_to_msecs(jiffies);
-	bool any_expired = false;
-	bool still_playing;
 
 	spin_lock_irqsave(&t500rs->expiry_lock, flags);
 	for (int i = 0; i < T500RS_MAX_EFFECTS; i++) {
@@ -1454,20 +1460,17 @@ static void t500rs_expiry_work(struct work_struct *work)
 
 		if (!a->active || a->total_ms == 0)
 			continue;
-		if (now >= a->start_ms + a->total_ms) {
-			a->active = false;
-			a->playing = false;
-			any_expired = true;
-		}
+		if (now < a->start_ms + a->total_ms)
+			continue;
+
+		a->active = false;
+		/* Slot index derivation mirrors t500rs_effect_to_hw_id(): slot 0
+		 * is the constant-force slot; every other slot uses index+1. */
+		t500rs_send_stop_now(t500rs, t500rs->expiry_buffer,
+				     (u8)(i + 1));
 	}
 	t500rs_expiry_arm_locked(t500rs);
-	still_playing = t500rs_any_playing_locked(t500rs);
 	spin_unlock_irqrestore(&t500rs->expiry_lock, flags);
-
-	/* Only halt the device once nothing is left playing; the STOP is
-	 * global and would otherwise kill still-active effects. */
-	if (any_expired && !still_playing)
-		t500rs_send_stop_now(t500rs, t500rs->expiry_buffer);
 }
 
 /*
@@ -1505,7 +1508,7 @@ static int t500rs_play_effect(void *data,
 		return -EINVAL;
 	}
 
-	ret = t500rs_send_start(t500rs);
+	ret = t500rs_send_start(t500rs, t500rs_effect_to_hw_id(effect));
 	if (ret == 0) {
 		/* Match the core's auto-expiry math (hid-tmff2.c): total playing
 		 * time is (delay + length) * count. Infinite (length == 0) never
@@ -1515,9 +1518,6 @@ static int t500rs_play_effect(void *data,
 					state->count;
 
 		spin_lock_irqsave(&t500rs->expiry_lock, flags);
-		/* Mark the slot playing regardless of finiteness so the
-		 * guarded global STOP knows this effect is still live. */
-		t500rs->active[effect->id].playing = true;
 		if (total == 0) {
 			/* Infinite effect: never auto-stop. */
 			t500rs->active[effect->id].active = false;
@@ -1537,27 +1537,21 @@ static int t500rs_play_effect(void *data,
 }
 
 /*
- * Stop effect - deactivate the software expiry slot and, only when nothing
- * else is still playing, send the STOP command (0x41).
- *
- * The T500RS 0x41 STOP is global (effect_id is always 0x00), so it halts ALL
- * playback. Games that mix a sustained force with short transient effects
- * (e.g. DiRT Rally 2.0) stop their transients individually; issuing the
- * global STOP then would kill the sustained force too, leaving the wheel
- * feeling dead. We therefore only STOP the device once no slot remains
- * playing. No slot freeing is needed; effect_id is always 0x00.
+ * Stop effect - deactivate the software expiry slot and send a per-slot
+ * 0x41 STOP. Each STOP addresses only its own slot, so concurrent effects
+ * remain unaffected (see work/analysis/10_second_pass_findings.md).
  */
 static int t500rs_stop_effect(void *data,
 			      const struct tmff2_effect_state *state)
 {
 	struct t500rs_device_entry *t500rs = data;
+	const struct ff_effect *effect = &state->effect;
 	unsigned long flags;
-	bool still_playing;
 
 	/* Validate effect ID range */
-	if (state->effect.id >= T500RS_MAX_EFFECTS) {
+	if (effect->id >= T500RS_MAX_EFFECTS) {
 		hid_err(t500rs->hdev, "Effect ID %d exceeds maximum %d\n",
-			state->effect.id, T500RS_MAX_EFFECTS);
+			effect->id, T500RS_MAX_EFFECTS);
 		return -EINVAL;
 	}
 
@@ -1567,18 +1561,11 @@ static int t500rs_stop_effect(void *data,
 	}
 
 	spin_lock_irqsave(&t500rs->expiry_lock, flags);
-	t500rs->active[state->effect.id].active = false;
-	t500rs->active[state->effect.id].playing = false;
-	still_playing = t500rs_any_playing_locked(t500rs);
+	t500rs->active[effect->id].active = false;
 	t500rs_expiry_arm_locked(t500rs);
 	spin_unlock_irqrestore(&t500rs->expiry_lock, flags);
 
-	/* Only halt the device when nothing else is playing; the STOP is
-	 * global and would otherwise tear down still-active effects. */
-	if (still_playing)
-		return 0;
-
-	return t500rs_send_stop(t500rs);
+	return t500rs_send_stop(t500rs, t500rs_effect_to_hw_id(effect));
 }
 
 /*
