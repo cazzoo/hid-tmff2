@@ -114,6 +114,14 @@ struct t500rs_device_entry {
 	 * core relies on hardware auto-stop (which T500RS lacks), so we enforce
 	 * replay.length here. A single re-arming delayed_work scans active[] and
 	 * sends a global 0x41 STOP when an effect's time elapses.
+	 *
+	 * IMPORTANT: the T500RS 0x41 STOP is global (effect_id is always 0x00),
+	 * so it halts ALL playback, not one slot. Games that mix a sustained
+	 * force with short transient effects (e.g. DiRT Rally 2.0) would
+	 * otherwise lose their sustained force every time a transient ends.
+	 * We therefore track a per-slot 'playing' flag for every started effect
+	 * (finite and infinite) and only emit the global STOP once nothing is
+	 * left playing.
 	 * expiry_buffer is a dedicated DMA-safe buffer so the worker (which runs
 	 * outside the core FFB worker) never races send_buffer (mirrors the
 	 * set_range pattern).
@@ -122,7 +130,8 @@ struct t500rs_device_entry {
 	struct delayed_work expiry_work;
 	u8 *expiry_buffer;
 	struct t500rs_active_effect {
-		bool active;
+		bool playing; /* started and not yet stopped (finite OR infinite) */
+		bool active; /* has a finite expiry deadline (drives expiry_work) */
 		unsigned long start_ms; /* jiffies_to_msecs(jiffies) at play */
 		unsigned long total_ms; /* (delay+length)*count; 0 == infinite */
 	} active[T500RS_MAX_EFFECTS];
@@ -1377,6 +1386,21 @@ static int t500rs_upload_effect(void *data,
  * auto-stop (Linux FFB semantics) and are skipped. If nothing finite is
  * pending the worker is cancelled.
  */
+/*
+ * Return true if any effect slot is currently playing (started and not yet
+ * stopped/expired), finite or infinite. Caller must hold expiry_lock.
+ * Used to guard the global 0x41 STOP so we never tear down a still-playing
+ * effect (see struct comment: the T500RS STOP is global).
+ */
+static bool t500rs_any_playing_locked(struct t500rs_device_entry *t500rs)
+{
+	for (int i = 0; i < T500RS_MAX_EFFECTS; i++) {
+		if (t500rs->active[i].playing)
+			return true;
+	}
+	return false;
+}
+
 static void t500rs_expiry_arm_locked(struct t500rs_device_entry *t500rs)
 {
 	unsigned long soonest = 0;
@@ -1409,11 +1433,10 @@ static void t500rs_expiry_arm_locked(struct t500rs_device_entry *t500rs)
 
 /*
  * Expiry worker. Scans active[]; any finite effect whose time has elapsed is
- * marked inactive and the device receives a global 0x41 STOP. Because the
- * T500RS 0x41 effect_id is always 0x00, a single STOP halts playback; this is
- * correct for the common single-effect case. (Multi-simultaneous finite
- * effects sharing the global STOP need hardware validation - see
- * docs/T500RS_FFBEFFECTS.md.)
+ * marked inactive. Because the T500RS 0x41 STOP is global (effect_id always
+ * 0x00), we only send it once NO effect is left playing - otherwise a
+ * finishing transient would tear down a still-playing sustained force (e.g.
+ * the constant force DiRT Rally 2.0 keeps alive). See docs/T500RS_FFBEFFECTS.md.
  */
 static void t500rs_expiry_work(struct work_struct *work)
 {
@@ -1423,6 +1446,7 @@ static void t500rs_expiry_work(struct work_struct *work)
 	unsigned long flags;
 	unsigned long now = jiffies_to_msecs(jiffies);
 	bool any_expired = false;
+	bool still_playing;
 
 	spin_lock_irqsave(&t500rs->expiry_lock, flags);
 	for (int i = 0; i < T500RS_MAX_EFFECTS; i++) {
@@ -1432,13 +1456,17 @@ static void t500rs_expiry_work(struct work_struct *work)
 			continue;
 		if (now >= a->start_ms + a->total_ms) {
 			a->active = false;
+			a->playing = false;
 			any_expired = true;
 		}
 	}
 	t500rs_expiry_arm_locked(t500rs);
+	still_playing = t500rs_any_playing_locked(t500rs);
 	spin_unlock_irqrestore(&t500rs->expiry_lock, flags);
 
-	if (any_expired)
+	/* Only halt the device once nothing is left playing; the STOP is
+	 * global and would otherwise kill still-active effects. */
+	if (any_expired && !still_playing)
 		t500rs_send_stop_now(t500rs, t500rs->expiry_buffer);
 }
 
@@ -1487,6 +1515,9 @@ static int t500rs_play_effect(void *data,
 					state->count;
 
 		spin_lock_irqsave(&t500rs->expiry_lock, flags);
+		/* Mark the slot playing regardless of finiteness so the
+		 * guarded global STOP knows this effect is still live. */
+		t500rs->active[effect->id].playing = true;
 		if (total == 0) {
 			/* Infinite effect: never auto-stop. */
 			t500rs->active[effect->id].active = false;
@@ -1506,14 +1537,22 @@ static int t500rs_play_effect(void *data,
 }
 
 /*
- * Stop effect - send STOP command (0x41) and deactivate the software
- * expiry slot. No slot freeing needed; effect_id is always 0x00.
+ * Stop effect - deactivate the software expiry slot and, only when nothing
+ * else is still playing, send the STOP command (0x41).
+ *
+ * The T500RS 0x41 STOP is global (effect_id is always 0x00), so it halts ALL
+ * playback. Games that mix a sustained force with short transient effects
+ * (e.g. DiRT Rally 2.0) stop their transients individually; issuing the
+ * global STOP then would kill the sustained force too, leaving the wheel
+ * feeling dead. We therefore only STOP the device once no slot remains
+ * playing. No slot freeing is needed; effect_id is always 0x00.
  */
 static int t500rs_stop_effect(void *data,
 			      const struct tmff2_effect_state *state)
 {
 	struct t500rs_device_entry *t500rs = data;
 	unsigned long flags;
+	bool still_playing;
 
 	/* Validate effect ID range */
 	if (state->effect.id >= T500RS_MAX_EFFECTS) {
@@ -1529,8 +1568,15 @@ static int t500rs_stop_effect(void *data,
 
 	spin_lock_irqsave(&t500rs->expiry_lock, flags);
 	t500rs->active[state->effect.id].active = false;
+	t500rs->active[state->effect.id].playing = false;
+	still_playing = t500rs_any_playing_locked(t500rs);
 	t500rs_expiry_arm_locked(t500rs);
 	spin_unlock_irqrestore(&t500rs->expiry_lock, flags);
+
+	/* Only halt the device when nothing else is playing; the STOP is
+	 * global and would otherwise tear down still-active effects. */
+	if (still_playing)
+		return 0;
 
 	return t500rs_send_stop(t500rs);
 }
