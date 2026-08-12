@@ -1122,7 +1122,10 @@ static int t500rs_send_start(struct t500rs_device_entry *t500rs, u8 effect_id)
 	r41->id = 0x41;
 	r41->effect_id = effect_id;
 	r41->command = 0x41; /* START */
-	r41->arg = 0x01;
+	/* arg=0xff matches the dominant Windows pattern (rFactor2 C2 frames 2651,
+	 * 2659, 373753, 373823 all use 41 0X 41 ff). C1's '41 0X 41 01' is the
+	 * only known counter-example; 0xff is the safer default for START. */
+	r41->arg = 0xff;
 	return t500rs_send_hid(t500rs, (u8 *)r41, sizeof(*r41));
 }
 
