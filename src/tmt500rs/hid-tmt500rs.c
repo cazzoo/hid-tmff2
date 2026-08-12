@@ -1924,29 +1924,18 @@ static int t500rs_wheel_init(struct tmff2_device_entry *tmff2, int open_mode)
 		hid_warn(t500rs->hdev, "Init command 0x42 0x00 failed: %d\n",
 			 ret);
 
-	/* Report 0x40 - Enable FFB (4 bytes)
-	* Magic value seen in captures that enables FFB on the base.
-	* Mandatory: without this the base never enables force feedback, so
-	* every uploaded effect would be silently ignored.
-	*/
-	{
-		struct t500rs_pkt_r40_config *config =
-			(struct t500rs_pkt_r40_config *)init_buf;
-		config->id = 0x40;
-		config->subcmd = 0x11;
-		config->data1 = 0x42;
-		config->data2 = 0x7b;
-	}
-	ret = t500rs_send_hid(t500rs, init_buf, 4);
-	if (ret) {
-		hid_err(t500rs->hdev,
-			"Mandatory FFB-enable (0x40 0x11) failed: %d\n", ret);
-		return ret;
-	}
-
 	/* Report 0x40 - Disable built-in autocenter (4 bytes). Advisory:
 	 * if this fails the base keeps its default autocenter, which the
 	 * set_autocenter callback can still override later.
+	 *
+	 * Note: an earlier version of this driver sent '0x40 0x11 0x42 0x7b'
+	 * here, described as an "FFB-enable magic". Per community USB captures
+	 * (work/analysis/02_init_sequence_diffs.md and 10_second_pass_findings.md
+	 * §5), subcommand 0x11 is the RANGE command and Windows never sends it
+	 * at init. The bytes 0x42 0x7b = 0x7b42 LE = 31554 -> /60 = 526 degrees,
+	 * i.e. a non-standard range, not an FFB-enable marker. It has been
+	 * removed; if a real FFB-enable packet is needed it must be sourced
+	 * from a new capture, not this misidentified range write.
 	 */
 	{
 		struct t500rs_pkt_r40_config *config =
