@@ -3,6 +3,15 @@
  *  HID driver for Thrustmaster T500RS wheel base that provides Force feedback
  *
  *  Protocol documentation: docs/T500RS_FFBEFFECTS.md
+ *  Capture-derived protocol analysis: work/analysis/ (start at SUMMARY.md)
+ *
+ *  Reports observed in Windows captures that this driver deliberately does
+ *  NOT produce or parse (see work/analysis/06_unknown_reports.md):
+ *  - 0x0a (OUT, F1 rim only, 6x during init): attachment activation handshake
+ *  - 42 01 00 (OUT, 9/15/32-byte variants): protocol re-sync / reset
+ *  - 0x07 (IN, 230 Hz state report): handled by the stock HID parser
+ *  - 0x14 (IN, 6x during init): device-identification report
+ *  - vendor request 0x49 (host-polled during init): capability reply
  *
  *  Copyright (c) 2025 Casimir Bonnet <casimir.bonnet@gmail.com>
  */
@@ -197,6 +206,15 @@ static void t500rs_build_r01_main(struct t500rs_pkt_r01_main *p, u8 effect_id,
  *   device_phase = (os_ffb_phase * 256 / 36000) & 0xFF
  *   device_offset = os_ffb_offset / 256  (TODO(hw-verify): unconfirmed)
  *   period_ms    = direct copy (no frequency conversion)
+ *
+ * CAPTURE-VERIFY: no community capture contains a real periodic packet in
+ * this layout. Both captures' 32222 '0x04' packets all use code=0x0e with
+ * the constant-force DC layout (b2/b3/b5=0, b4=signed level, b6-b7=magic
+ * 0x2710) - see work/analysis/05_periodic_0x04_anomaly.md. The only
+ * reference for THIS layout is the unsourced example '04 2a 06 00 3f 0a
+ * 00 00' below. Verify by playing a sine via fftest (magnitude 16384,
+ * period 100ms) and capturing with usbmon: expected packet is
+ * '04 <code> 40 00 00 64 00 00'.
  */
 static void t500rs_build_r04_periodic(struct t500rs_pkt_r04_periodic_ramp *p,
 				      u8 code, u8 magnitude, s8 offset,
@@ -313,6 +331,9 @@ static inline s8 t500rs_scale_periodic_offset(s16 os_ffb_offset)
  * ramp parameters. The current implementation uses a simple average for
  * magnitude. Capture ramps with varied start/end levels and confirm the
  * device reproduces the intended slope before trusting this encoding.
+ * Test procedure: play ramps via fftest with (start,end) of (0,32767),
+ * (32767,0), (-16384,16384), each 500ms, and capture with usbmon.
+ * See work/analysis/03_packet_inventory.md and 09_action_items.md (P3-6).
  */
 static void t500rs_build_r04_ramp(struct t500rs_pkt_r04_periodic_ramp *p,
 				  u8 code, s16 start_level, s16 end_level,
@@ -460,6 +481,14 @@ static void t500rs_build_r05_condition(struct t500rs_pkt_r05_condition *p,
 	 * so compute in int and clamp the result to [0,10]: a negative
 	 * coefficient maps to 0 (no force) rather than wrapping to ~246, and
 	 * any overflow saturates at 10.
+	 *
+	 * CAPTURE-VERIFY: unvalidated against a known input/output pair. The
+	 * community captures only show the device-side bytes (C2 f2653:
+	 * right_coeff=left_coeff=10 with unknown game input), which is
+	 * consistent with this formula but does not prove it. Sweep
+	 * right_coeff over {0, 8192, 16384, 24576, 32767} with spring_level=100
+	 * via fftest and capture with usbmon; expected device bytes are
+	 * {0, 2-3, 5, 7-8, 10}. See work/analysis/07_condition_deadband_unverified.md.
 	 */
 	p->right_coeff = (u8)clamp_t(int,
 				((right_coeff * (int)level) / 100) * 10 / 32767,
@@ -474,11 +503,15 @@ static void t500rs_build_r05_condition(struct t500rs_pkt_r05_condition *p,
 	 */
 	p->center = cpu_to_le16((s16)(center / 20));
 
-	/* Deadband: doc is self-contradictory ("/10" in the byte-layout table
-	 * vs "/65" in the scaling table). "/65" matches the implied device max
-	 * of ~1008; capture C gives device value 450 but no input, so this
-	 * divisor is UNVERIFIED. TODO: capture a spring effect with a known
-	 * non-zero deadband to confirm.
+	/* Deadband: /65 is a guess between the doc's self-contradictory "/10"
+	 * and "/65" rows. CAPTURE-VERIFY: every 0x05 packet in both community
+	 * captures has deadband=0, so the divisor is completely unconstrained
+	 * by evidence. "/65" was chosen because 65535/65 = 1008 fits a u10
+	 * device field, whereas "/10" would give 6553 (overflows any field
+	 * smaller than u16). Verify by uploading springs with deadband
+	 * {100, 1000, 10000, 30000, 65535} via fftest and capturing with
+	 * usbmon; expected device words are ~{1, 15, 153, 461, 1008}. See
+	 * work/analysis/07_condition_deadband_unverified.md.
 	 */
 	p->deadband = cpu_to_le16((u16)(deadband / 65));
 
@@ -770,6 +803,14 @@ static void t500rs_build_r02_envelope(struct t500rs_pkt_r02_envelope *p,
 	*
 	* Windows driver always sends zeros for periodic/constant:
 	* 02 38 00 00 00 00 00 00 00
+	*
+	* CAPTURE-VERIFY: every 0x02 packet in both community captures is
+	* all-zero (5 packets across the two games), so the non-zero ramp
+	* path below has never been observed on the wire. The EPROTO claim
+	* and the ramp exception both need hardware confirmation: play a
+	* ramp with attack/fade (e.g. attack 100ms/50%, fade 100ms/50%) via
+	* fftest and capture with usbmon. See work/analysis/03_packet_inventory.md
+	* (0x02 section) and 09_action_items.md (P3-6).
 	*/
 	if (env && allow_nonzero) {
 		p->attack_len = cpu_to_le16(env->attack_length);
