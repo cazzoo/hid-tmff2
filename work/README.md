@@ -29,6 +29,7 @@ line) and intended as a permanent reference for future driver fixes.
 | 09 | `analysis/09_action_items.md` | Prioritised list of bugs/uncertainties to address (P1-1..P4-5) |
 | **10** | **`analysis/10_second_pass_findings.md`** | **Second-pass corrections + new findings. Read BEFORE pass-1 docs.** |
 | **11** | **`analysis/11_vendor_request_polling.md`** | **Third correction: vendor request `0x49` polling during init (was misidentified as IN report).** |
+| 12 | `analysis/12_hw_verification_procedure.md` | Step-by-step fftest + usbmon/tshark procedures to close P3-5 (periodic layout) and P3-6 (ramp envelope) on real hardware |
 
 > ⚠️ **Pass-1 docs (00-09) contain errors that passes 2 and 3 correct.**
 > Always consult files 10 and 11 first. Major corrections:

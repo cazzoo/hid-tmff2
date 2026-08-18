@@ -347,6 +347,9 @@ fftest /dev/input/eventXX
 # Compare to our struct
 ```
 
+**Full procedure:** `12_hw_verification_procedure.md` §1 (capture setup, fftest recipe
+with distinctive byte values, tshark decode, pass/fail matrix).
+
 If our layout is wrong, periodic effects will misbehave but won't crash — they'd
 produce wrong frequencies/magnitudes.
 
@@ -364,6 +367,9 @@ produce wrong frequencies/magnitudes.
 The doc claim "only ramps use real envelope values" is **plausible but unproven**.
 
 **Action:** hw-verify with `fftest` (ramp with attack/fade).
+
+**Full procedure:** `12_hw_verification_procedure.md` §2 (also covers the
+periodic/constant EPROTO folklore claim via an optional bonus test).
 
 **Risk:** None until reported.
 
