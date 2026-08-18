@@ -5,7 +5,15 @@
  * on some setups, and failed input leaves its variables uninitialized
  * (i.e. unknown period/magnitude). Every parameter here is explicit.
  *
- * Build:  gcc -O2 -Wall -o ffctl tools/ffctl.c
+ * Build:  gcc -O2 -Wall -o ffctl tools/ffctl.c -lm
+ *
+ * While an effect plays, a live slider shows the expected force at the
+ * wheel: handle on the left = pull left, right = push right. It mirrors
+ * the driver's synthesis math exactly (direction projection, waveform
+ * sampling, envelope shaping, and the parent's rumble -> sine/50ms
+ * conversion), so the handle is a prediction of the wire, not a sketch.
+ * At the 16 ms render rate a 20 Hz rumble aliases into side-flicker -
+ * that is expected.
  *
  * Examples:
  *   sudo ./ffctl /dev/input/event26 sine --period 2000 --duration 5000
@@ -28,6 +36,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <linux/input.h>
+#include <math.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -59,6 +68,7 @@ static void stop_and_erase(void)
 static void on_signal(int sig)
 {
 	(void)sig;
+	write(STDOUT_FILENO, "\n", 1);
 	stop_and_erase();
 	_exit(0);
 }
@@ -71,6 +81,134 @@ static void msleep(long ms)
 	};
 
 	nanosleep(&ts, NULL);
+}
+
+static long now_ms(void)
+{
+	struct timespec ts;
+
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	return ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+}
+
+/* Mirror of t500rs_synth_dir_project()/t500rs_scale_const_with_direction():
+ * the driver projects with fixp_sin16(direction * 360 / 0x10000) / 0x7fff -
+ * integer-degree truncation included - so a direction of 0 yields zero
+ * force and 16384 (90 deg) yields full force. */
+static double dir_project(double level, long direction)
+{
+	long deg = direction * 360 / 65536;
+
+	return level * sin(deg * M_PI / 180.0);
+}
+
+/* Mirror of t500rs_synth_envelope(): attack ramps attack_level -> full,
+ * fade falls to fade_level over the final fade_length. */
+static double apply_envelope(double sample, const struct ff_envelope *env,
+			     long ti_ms, long length_ms)
+{
+	double scale = 32767.0;
+
+	if (length_ms && ti_ms > length_ms)
+		ti_ms = length_ms;
+
+	if (env->attack_length && ti_ms < env->attack_length) {
+		scale = env->attack_level +
+			(32767.0 - env->attack_level) * ti_ms /
+				env->attack_length;
+	} else if (env->fade_length && length_ms) {
+		long fade_from = length_ms > env->fade_length ?
+				 length_ms - env->fade_length : 0;
+
+		if (ti_ms > fade_from)
+			scale = env->fade_level +
+				(32767.0 - env->fade_level) * (length_ms - ti_ms) /
+					(length_ms - fade_from);
+	}
+	return sample * scale / 32767.0;
+}
+
+/* Expected device stream level (-127..+127) at t_ms into playback,
+ * mirroring t500rs_synth_sample(). Negative = force left, positive =
+ * force right. Rumble mirrors the parent's tmff2_convert_rumble():
+ * a sine with period 50 ms, magnitude strong/3 + weak/6, direction
+ * forced to 16384. */
+static double expected_level(const struct ff_effect *e, const char *type,
+			     long t_ms)
+{
+	double sample, proj;
+	long length = e->replay.length;
+	long ti = length ? t_ms % length : t_ms;
+
+	if (!strcmp(type, "constant")) {
+		sample = e->u.constant.level;
+	} else if (!strcmp(type, "ramp")) {
+		sample = e->u.ramp.start_level +
+			 (double)(e->u.ramp.end_level -
+				  e->u.ramp.start_level) *
+				 ti / (length ? length : 1);
+		sample = apply_envelope(sample, &e->u.ramp.envelope, ti,
+					length);
+	} else if (!strcmp(type, "rumble")) {
+		double mag = e->u.rumble.strong_magnitude / 3 +
+			     e->u.rumble.weak_magnitude / 6;
+		double pos = fmod(t_ms * 256.0 / 50.0, 256.0);
+
+		return dir_project(mag * sin(pos * 2.0 * M_PI / 256.0),
+				   16384) * 127.0 / 32767.0;
+	} else {
+		double pos = fmod(ti * 256.0 / e->u.periodic.period, 256.0);
+		double mag = e->u.periodic.magnitude;
+
+		if (!strcmp(type, "sine"))
+			sample = mag * sin(pos * 2.0 * M_PI / 256.0);
+		else if (!strcmp(type, "square"))
+			sample = pos < 128 ? mag : -mag;
+		else if (!strcmp(type, "triangle"))
+			sample = pos < 128 ?
+				 -mag + 2 * mag * pos / 128 :
+				 3 * mag - 2 * mag * pos / 128;
+		else if (!strcmp(type, "sawup"))
+			sample = -mag + 2 * mag * pos / 255;
+		else
+			sample = mag - 2 * mag * pos / 255;
+
+		sample += e->u.periodic.offset;
+		sample = apply_envelope(sample, &e->u.periodic.envelope, ti,
+					length);
+	}
+
+	proj = dir_project(sample, e->direction);
+	if (proj > 32767)
+		proj = 32767;
+	if (proj < -32767)
+		proj = -32767;
+	return proj * 127.0 / 32767.0;
+}
+
+#define BAR_HALF 14
+
+static void render_bar(const struct ff_effect *e, const char *type,
+		       long t_ms)
+{
+	char bar[BAR_HALF * 2 + 4];
+	double lvl = expected_level(e, type, t_ms);
+	int idx = (int)lround(lvl / 127.0 * BAR_HALF);
+	char side = lvl < -0.5 ? 'L' : lvl > 0.5 ? 'R' : '-';
+	double hz = e->type == FF_PERIODIC ?
+			    1000.0 / e->u.periodic.period :
+		    e->type == FF_RUMBLE ? 20.0 : 0.0;
+
+	memset(bar, '-', sizeof(bar) - 1);
+	bar[0] = '[';
+	bar[BAR_HALF + 1] = '|';
+	bar[BAR_HALF * 2 + 2] = ']';
+	bar[BAR_HALF * 2 + 3] = '\0';
+	bar[BAR_HALF + 1 + idx] = 'O';
+
+	printf("\r%-9s %6.2fHz %7.2fs %s  %c %5.1f%% ", type, hz,
+	       t_ms / 1000.0, bar, side, fabs(lvl) / 127.0 * 100.0);
+	fflush(stdout);
 }
 
 static void usage(const char *prog)
@@ -229,13 +367,28 @@ int main(int argc, char **argv)
 	}
 
 	if (e.replay.length) {
-		printf("playing %ums of effective time... (Ctrl+C stops)\n",
-		       e.replay.length * (int)count);
-		msleep((long)e.replay.length * count);
+		long total = (long)e.replay.length * count;
+		long t0 = now_ms();
+
+		printf("playing %ldms of effective time... (Ctrl+C stops)\n",
+		       total);
+		for (;;) {
+			long t = now_ms() - t0;
+
+			if (t >= total)
+				break;
+			render_bar(&e, type, t);
+			msleep(16);
+		}
+		printf("\n");
 	} else {
+		long t0 = now_ms();
+
 		puts("playing (infinite)... Ctrl+C to stop");
-		for (;;)
-			pause();
+		for (;;) {
+			render_bar(&e, type, now_ms() - t0);
+			msleep(16);
+		}
 	}
 
 	stop_and_erase();
