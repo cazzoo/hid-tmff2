@@ -1,5 +1,12 @@
 # 13 — Periodic-effect family wedges the firmware (P3-5 verdict)
 
+> **RESOLUTION (2026-08-18, later):** periodic/ramp support was re-implemented
+> on the host-side synthesis model described in the erratum below — slot-0
+> sine MAIN byte-identical to C2 f2637 plus a `04 0e` level stream from a
+> software waveform engine. FF_PERIODIC (all waveforms), FF_RAMP and FF_RUMBLE
+> are advertised again; no per-slot periodic bytes are ever sent. The original
+> verdict below is kept for the record. **Hardware validation still pending.**
+
 **Date:** 2026-08-18 · **Wheel:** T500RS standard rim, `044f:b65e` · **Capture:**
 `raw_data/t500_verify_20260818.pcapng` (164 packets, tail truncated — tshark was
 killed after the wedge) · **Driver:** `796eade` + dynamic debug

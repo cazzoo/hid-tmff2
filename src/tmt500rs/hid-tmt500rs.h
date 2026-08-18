@@ -46,13 +46,18 @@
 #define T500RS_CONSTANT_PARAM_SUB 0x0e
 #define T500RS_CONSTANT_ENV_SUB 0x1c
 
-/* Effect type constants */
+/* Effect type constants — codes this driver actually puts on the wire.
+ *
+ * Host-side synthesis model (work/analysis/13_periodic_wedge.md erratum):
+ * the firmware has no periodic waveform engine. Windows declares periodic
+ * effects as a sine (0x22) MAIN on slot 0 with the constant-force channels
+ * and streams the synthesized waveform as 0x04 0x0e level updates. Only
+ * these four type codes are capture-proven; any other value in the 0x2x
+ * range (square 0x20, triangle 0x21, saw 0x23/0x24) is unsourced and
+ * MUST NOT be sent - see the wedge record before "fixing" this.
+ */
 #define T500RS_EFFECT_CONSTANT 0x00
-#define T500RS_EFFECT_SQUARE 0x20 
-#define T500RS_EFFECT_SINE 0x22
-#define T500RS_EFFECT_TRIANGLE 0x21
-#define T500RS_EFFECT_SAW_UP 0x23
-#define T500RS_EFFECT_SAW_DOWN 0x24
+#define T500RS_EFFECT_SINE 0x22 /* the only periodic MAIN type; all waveforms are synthesized onto it */
 #define T500RS_EFFECT_SPRING 0x40
 #define T500RS_EFFECT_DAMPER 0x41
 #define T500RS_EFFECT_FRICTION 0x41
@@ -82,12 +87,8 @@
  * Used internally by the sequencing system to manage packet order.
  */
 enum t500rs_seq_packet {
-	T500RS_SEQ_STOP,
-	T500RS_SEQ_SYNC_42_05,
-	T500RS_SEQ_SYNC_42_04,
 	T500RS_SEQ_ENVELOPE,
 	T500RS_SEQ_CONSTANT,
-	T500RS_SEQ_PERIODIC_RAMP,
 	T500RS_SEQ_CONDITION_X,
 	T500RS_SEQ_CONDITION_Y,
 	T500RS_SEQ_MAIN,
@@ -138,32 +139,30 @@ struct t500rs_pkt_r01_main {
 } __packed;
 
 /*
- * 0x04 - Periodic / Ramp parameters (8 bytes)
+ * 0x04 - Constant-channel DC level stream (8 bytes)
  *
- * Used for both periodic effects (sine, triangle, sawtooth) and ramp effects.
- * Code field must match the subtype specified in 0x01 packet bytes 9-10.
+ * The only 0x04 form the firmware accepts. Windows drivers synthesize
+ * periodic/ramp waveforms host-side and stream the combined signed level
+ * on the constant-force channel (code 0x0e) using this packet - 32 222 of
+ * them in capture C2 alone, with b4 sweeping all 256 values (signed).
+ * The trailing 0x2710 (LE) is a constant magic marker.
  *
- * Packet format (verified against USB captures, e.g.
- * docs/T500RS_FFBEFFECTS.md "04 2a 06 00 3f 0a 00 00"):
- * - b0: packet type (0x04)
- * - b1: subtype code (from 0x01 packet_code_1, typically 0x2a)
- * - b2: magnitude (0-127, scaled from Linux FFB 0-32767)
- * - b3: offset (signed -127 to +127, scaled from Linux FFB -32768 to +32767)
- * - b4: phase (0-255 for 360 degrees, scaled from Linux FFB 0-35999)
- * - b5-b6: period in milliseconds (LE, no Hz conversion!)
- * - b7: reserved (0x00)
+ * Reference: work/analysis/13_periodic_wedge.md (erratum) and
+ * 05_periodic_0x04_anomaly.md (Hypothesis B).
  *
- * For ramp effects: phase encodes direction (0x7f=up/0x00=down),
- * period=ramp duration, magnitude/offset encode start/end levels.
+ * A per-slot periodic-parameters variant (code != 0x0e, e.g. '04 2a ...')
+ * was tried once on real hardware and wedged the wheel until it dropped
+ * off the bus. Do not reinvent it.
  */
-struct t500rs_pkt_r04_periodic_ramp {
+struct t500rs_pkt_r04_stream {
 	u8 id; /* b0: T500RS_PKT_PERIODIC */
-	u8 code; /* b1: subtype code (from 0x01 packet_code_1) */
-	u8 magnitude; /* b2: 0..127 magnitude (scaled) */
-	s8 offset; /* b3: signed -127..+127 offset (scaled) */
-	u8 phase; /* b4: 0..255 phase (0-360 degrees) */
-	__le16 period_ms; /* b5-b6: period in milliseconds (LE) */
-	u8 reserved; /* b7: always 0x00 */
+	u8 code; /* b1: always 0x0e (constant-force channel) */
+	u8 zero1; /* b2: 0x00 */
+	u8 zero2; /* b3: 0x00 */
+	s8 level; /* b4: signed force level, the synthesized signal */
+	u8 zero3; /* b5: 0x00 */
+	u8 magic_lo; /* b6-b7: 0x2710 LE magic (b6 = 0x10) */
+	u8 magic_hi; /* b7 = 0x27 */
 } __packed;
 
 /*

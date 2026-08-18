@@ -353,12 +353,13 @@ with distinctive byte values, tshark decode, pass/fail matrix).
 If our layout is wrong, periodic effects will misbehave but won't crash — they'd
 produce wrong frequencies/magnitudes.
 
-**VERDICT (2026-08-18, `13_periodic_wedge.md`):** 🔴 far worse than misbehaviour —
-the firmware STALLs the sine MAIN packet (effect_type `0x22`) with `-EPROTO`,
-wedging the OUT endpoint until the wheel drops off the bus. The whole `0x2x`
-family is unadvertised in `t500rs_effects[]` until a capture-derived encoding
-exists. Closed as dangerous-by-default; reopening requires a Windows capture of
-a real periodic effect.
+**VERDICT (2026-08-18, `13_periodic_wedge.md`):** 🔴 our invented per-slot
+periodic declaration (MAIN type 0x22 on slot-1 channels + `04 2a` params)
+STALLs with `-EPROTO` and wedges the wheel. **Re-implemented the same day**
+per the erratum's host-side synthesis model: slot-0 sine MAIN (C2 f2637 form)
++ software waveform engine streaming `04 0e` levels; all waveforms and rumble
+supported, no per-slot periodic bytes on the wire. Hardware validation of the
+synthesis build pending.
 
 **Risk:** ~~Low priority until a user reports broken periodic effects.~~ Resolved: hw-verified crash, mitigated.
 
@@ -375,10 +376,11 @@ The doc claim "only ramps use real envelope values" is **plausible but unproven*
 
 **Action:** hw-verify with `fftest` (ramp with attack/fade).
 
-**BLOCKED (2026-08-18):** FF_RAMP is unadvertised following the periodic-wedge
-verdict (`13_periodic_wedge.md`) — the ramp path can no longer be exercised via
-the FF API. Unblocks only if/when periodic support is restored from a real
-capture.
+**BLOCKED → CLOSED BY CONSTRUCTION (2026-08-18):** with the host-side
+synthesis rework (`13_periodic_wedge.md` resolution), ramp envelopes are
+applied in software by the synth engine — no firmware envelope support is
+exercised or needed. The old "firmware rejects non-zero envelopes" folklore is
+retired in docs/T500RS_FFBEFFECTS.md §5.2.
 
 **Full procedure:** `12_hw_verification_procedure.md` §2 (also covers the
 periodic/constant EPROTO folklore claim via an optional bonus test).
