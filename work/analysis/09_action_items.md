@@ -353,7 +353,14 @@ with distinctive byte values, tshark decode, pass/fail matrix).
 If our layout is wrong, periodic effects will misbehave but won't crash — they'd
 produce wrong frequencies/magnitudes.
 
-**Risk:** Low priority until a user reports broken periodic effects.
+**VERDICT (2026-08-18, `13_periodic_wedge.md`):** 🔴 far worse than misbehaviour —
+the firmware STALLs the sine MAIN packet (effect_type `0x22`) with `-EPROTO`,
+wedging the OUT endpoint until the wheel drops off the bus. The whole `0x2x`
+family is unadvertised in `t500rs_effects[]` until a capture-derived encoding
+exists. Closed as dangerous-by-default; reopening requires a Windows capture of
+a real periodic effect.
+
+**Risk:** ~~Low priority until a user reports broken periodic effects.~~ Resolved: hw-verified crash, mitigated.
 
 ---
 
@@ -367,6 +374,11 @@ produce wrong frequencies/magnitudes.
 The doc claim "only ramps use real envelope values" is **plausible but unproven**.
 
 **Action:** hw-verify with `fftest` (ramp with attack/fade).
+
+**BLOCKED (2026-08-18):** FF_RAMP is unadvertised following the periodic-wedge
+verdict (`13_periodic_wedge.md`) — the ramp path can no longer be exercised via
+the FF API. Unblocks only if/when periodic support is restored from a real
+capture.
 
 **Full procedure:** `12_hw_verification_procedure.md` §2 (also covers the
 periodic/constant EPROTO folklore claim via an optional bonus test).

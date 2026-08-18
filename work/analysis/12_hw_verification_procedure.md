@@ -1,5 +1,12 @@
 # 12 — Hardware verification procedures (P3-5, P3-6)
 
+> **⚠️ RESULT (2026-08-18):** §1 was executed and produced the worst outcome —
+> 🔴 the firmware STALLs the sine MAIN packet and the wheel wedges + re-enumerates.
+> FF_PERIODIC/FF_RAMP are now unadvertised. **Do not re-run §1/§2 against current
+> driver builds expecting effect playback** — see `13_periodic_wedge.md` before
+> touching the periodic path again. The procedures below are kept for when a
+> capture-derived encoding exists to test.
+
 Step-by-step procedures to close the two remaining hardware-verification items with a
 single capture session on a real wheel. No code changes required — the driver as of
 `796eade` is hardware-stable; these tests only produce evidence.

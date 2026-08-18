@@ -835,12 +835,24 @@ static unsigned long t500rs_params = PARAM_SPRING_LEVEL | PARAM_DAMPER_LEVEL |
 				     PARAM_FRICTION_LEVEL | PARAM_GAIN |
 				     PARAM_RANGE;
 
-/* Supported effects. */
-const signed short t500rs_effects[] = { FF_CONSTANT, FF_SPRING,	    FF_DAMPER,
-					FF_FRICTION, FF_INERTIA,    FF_PERIODIC,
-					FF_SQUARE,   FF_SINE,	    FF_TRIANGLE,
-					FF_SAW_UP,   FF_SAW_DOWN,   FF_RAMP,
-					FF_GAIN,     FF_AUTOCENTER, -1 };
+/* Supported effects.
+ *
+ * FF_PERIODIC (all waveforms) and FF_RAMP are deliberately NOT
+ * advertised. Hardware evidence (work/analysis/13_periodic_wedge.md,
+ * capture t500_verify_20260818): a sine upload's MAIN packet with
+ * effect_type 0x22 is STALLed by the firmware (-EPROTO) and wedges the
+ * OUT endpoint until the wheel drops off the bus and re-enumerates.
+ * The whole 0x20-0x24 periodic/ramp effect_type family is unsourced
+ * (zero appearances in any Windows capture); only MAIN types 0x00
+ * (constant) and 0x40/0x41 (condition family) are capture-proven.
+ * The upload/update code paths for periodic/ramp remain as dead code
+ * until a real encoding is found; the FF core rejects uploads of
+ * unadvertised types, making the wedge unreachable via the API.
+ */
+const signed short t500rs_effects[] = { FF_CONSTANT, FF_SPRING,
+					FF_DAMPER,   FF_FRICTION,
+					FF_INERTIA,  FF_GAIN,
+					FF_AUTOCENTER, -1 };
 
 /*
  * Resolve the hardware effect slot index for a given effect.
