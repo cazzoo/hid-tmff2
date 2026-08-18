@@ -331,7 +331,9 @@ static int t500rs_synth_sample(struct t500rs_synth_effect *e,
 
 	if (e->is_ramp) {
 		u32 len = e->length_ms ? e->length_ms : 1;
-		u32 tc = min(t, len);
+		/* count>1 replays sweep again each iteration; an infinite
+		 * ramp (length 0) sweeps once via the len=1 clamp and holds. */
+		u32 tc = e->length_ms ? (t % e->length_ms) : min(t, len);
 		s64 frac = tc >= len ? 32767 : (s64)tc * 32767 / len;
 
 		sample = (int)(e->start_level +
@@ -339,7 +341,10 @@ static int t500rs_synth_sample(struct t500rs_synth_effect *e,
 				       32767);
 		sample = t500rs_synth_envelope(sample, &e->envelope, tc, len);
 	} else {
-		u32 pos = (((u64)t * 256) / e->period_ms +
+		/* Restart the waveform each iteration of a count>1 replay
+		 * (FF semantics); continuous when length == 0. */
+		u32 ti = e->length_ms ? (t % e->length_ms) : t;
+		u32 pos = (((u64)ti * 256) / e->period_ms +
 			   ((u64)e->phase_cd * 256) / 36000) & 0xff;
 		int mag = e->magnitude;
 
@@ -369,7 +374,7 @@ static int t500rs_synth_sample(struct t500rs_synth_effect *e,
 		}
 
 		sample += e->offset;
-		sample = t500rs_synth_envelope(sample, &e->envelope, t,
+		sample = t500rs_synth_envelope(sample, &e->envelope, ti,
 					       e->length_ms);
 	}
 

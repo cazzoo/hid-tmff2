@@ -5,7 +5,17 @@
 > sine MAIN byte-identical to C2 f2637 plus a `04 0e` level stream from a
 > software waveform engine. FF_PERIODIC (all waveforms), FF_RAMP and FF_RUMBLE
 > are advertised again; no per-slot periodic bytes are ever sent. The original
-> verdict below is kept for the record. **Hardware validation still pending.**
+> verdict below is kept for the record.
+>
+> **First b65e datapoint (2026-08-18, synthesis build):** the slot-0 sine
+> MAIN was **accepted** (no wedge, no EPROTO, no re-enumeration) and a
+> periodic effect played — the C2 f2637 form is valid on b65e firmware too.
+> Frequency *feel* is not yet verified: fftest's prompts were unusable in this
+> session, so the actually-uploaded period is unknown (a short period feels
+> like rumble by design; the parent's rumble conversion is a fixed 50 ms
+> sine = 20 Hz). Verify the scaling with `tools/ffctl` and an explicit period:
+> `--period 2000` must feel like a slow ~0.5 Hz wobble, `--period 200`
+> a coarse ~5 Hz rumble.
 
 **Date:** 2026-08-18 · **Wheel:** T500RS standard rim, `044f:b65e` · **Capture:**
 `raw_data/t500_verify_20260818.pcapng` (164 packets, tail truncated — tshark was
