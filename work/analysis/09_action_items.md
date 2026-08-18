@@ -157,7 +157,7 @@ implies this is optional.
 
 ---
 
-## 🟢 P3-3: Make init gain configurable
+## 🟢 P3-3: Make init gain configurable — ✅ DONE (798ba2b)
 
 **Evidence:** `02_init_sequence_diffs.md` — Windows uses 90%, we use 100%.
 
@@ -165,6 +165,17 @@ implies this is optional.
 use it at `hid-tmt500rs.c:1981` instead of hardcoded `0xff`.
 
 **Risk:** None — backwards-compatible default.
+
+**Status:** Implemented as specified. `default_gain` (0-100, default 100 →
+byte `0xff`, wire-identical to the historical init). Hardware-verified stable.
+
+**⚠️ Regression history:** the first implementation (76998f5, reverted)
+deviated from this spec by reusing the shared `gain` param (default 40000 →
+byte `0x9b`), silently changing the default init wire bytes; the user
+reported driver crashes (URB storm → device drop) with that build. The
+init-gain byte was the only guaranteed code delta between the crashing
+build and the stable re-implementation — treat the init 0x43 byte as
+effectively frozen at `0xff` unless a capture says otherwise.
 
 ---
 
