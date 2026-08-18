@@ -30,7 +30,7 @@ line) and intended as a permanent reference for future driver fixes.
 | **10** | **`analysis/10_second_pass_findings.md`** | **Second-pass corrections + new findings. Read BEFORE pass-1 docs.** |
 | **11** | **`analysis/11_vendor_request_polling.md`** | **Third correction: vendor request `0x49` polling during init (was misidentified as IN report).** |
 | 12 | `analysis/12_hw_verification_procedure.md` | Step-by-step fftest + usbmon/tshark procedures to close P3-5 (periodic layout) and P3-6 (ramp envelope) on real hardware |
-| **13** | **`analysis/13_periodic_wedge.md`** | **P3-5 verdict (🔴→✅): per-slot periodic declarations wedge the wheel; re-implemented as host-side synthesis (slot-0 sine MAIN + `04 0e` level stream). HW validation pending** |
+| **13** | **`analysis/13_periodic_wedge.md`** | **P3-5 closed ✅: per-slot periodic declarations wedge the wheel; re-implemented as host-side synthesis (slot-0 sine MAIN + `04 0e` level stream), hardware-verified on b65e incl. frequency scaling** |
 
 > ⚠️ **Pass-1 docs (00-09) contain errors that passes 2 and 3 correct.**
 > Always consult files 10 and 11 first. Major corrections:

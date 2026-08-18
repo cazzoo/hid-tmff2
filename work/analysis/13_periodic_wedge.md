@@ -10,12 +10,13 @@
 > **First b65e datapoint (2026-08-18, synthesis build):** the slot-0 sine
 > MAIN was **accepted** (no wedge, no EPROTO, no re-enumeration) and a
 > periodic effect played — the C2 f2637 form is valid on b65e firmware too.
-> Frequency *feel* is not yet verified: fftest's prompts were unusable in this
-> session, so the actually-uploaded period is unknown (a short period feels
-> like rumble by design; the parent's rumble conversion is a fixed 50 ms
-> sine = 20 Hz). Verify the scaling with `tools/ffctl` and an explicit period:
-> `--period 2000` must feel like a slow ~0.5 Hz wobble, `--period 200`
-> a coarse ~5 Hz rumble.
+>
+> **VERIFIED (2026-08-18, same day, ffctl):** frequency scaling confirmed
+> correct on hardware with explicit periods — `--period 2000` plays a slow
+> ~0.5 Hz wobble, shorter periods play proportionally faster rumble. The
+> earlier "feels like rumble" report was fftest's uninitialized scanf inputs,
+> not a driver bug. **P3-5 is closed ✅ — periodic/ramp/rumble work on b65e
+> via host-side synthesis.**
 
 **Date:** 2026-08-18 · **Wheel:** T500RS standard rim, `044f:b65e` · **Capture:**
 `raw_data/t500_verify_20260818.pcapng` (164 packets, tail truncated — tshark was
