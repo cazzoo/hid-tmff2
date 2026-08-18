@@ -48,6 +48,15 @@ module_param(gain, int, 0);
 MODULE_PARM_DESC(gain,
 		"Level of gain (0-65535)");
 
+/* T500 RS only: power-on gain in percent. Default 100 keeps the init
+ * 0x43 packet byte-identical to the historical hardcoded 0xff; Windows
+ * seeds 90% (work/analysis/02_init_sequence_diffs.md).
+ */
+int default_gain = 100;
+module_param(default_gain, int, 0);
+MODULE_PARM_DESC(default_gain,
+		"T500 RS init gain in percent (0-100, default 100)");
+
 static spinlock_t lock;
 
 static struct tmff2_device_entry *tmff2_from_hdev(struct hid_device *hdev)

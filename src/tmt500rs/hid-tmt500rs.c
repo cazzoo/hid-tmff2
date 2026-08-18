@@ -1992,13 +1992,18 @@ static int t500rs_wheel_init(struct tmff2_device_entry *tmff2, int open_mode)
 		hid_warn(t500rs->hdev,
 			 "Autocenter-disable (0x40 0x04) failed: %d\n", ret);
 
-	/* Report 0x43 - Set global gain (2 bytes). Advisory: start at maximum
-	 * device gain; the FFB gain callback will adjust later, and a failure
-	 * here just leaves whatever gain the base already has.
+	/* Report 0x43 - Set global gain (2 bytes). Advisory: seed the device
+	 * gain from the `default_gain` module param (percent, 0-100). The
+	 * default of 100 yields 0xff — byte-identical to the init sequence
+	 * this driver has always sent, so the wire format is unchanged unless
+	 * the user opts in (Windows seeds 90%, see
+	 * work/analysis/02_init_sequence_diffs.md). The set_gain callback
+	 * re-applies the shared `gain` param later; a failure here just
+	 * leaves whatever gain the base already has.
 	 */
 	memset(init_buf, 0, 2);
 	init_buf[0] = 0x43;
-	init_buf[1] = 0xFF;
+	init_buf[1] = (u8)(clamp_t(int, default_gain, 0, 100) * 255 / 100);
 	ret = t500rs_send_hid(t500rs, init_buf, 2);
 	if (ret)
 		hid_warn(t500rs->hdev,
