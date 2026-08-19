@@ -62,6 +62,12 @@ enabled in the game).
 **Goals**
 
 - Interactive device → effect → live-tweak → play/stop workflow, single binary.
+- **Single tool codebase (user decision 2026-08-19): fully replaces
+  `tools/ffctl.c`** — the Go binary provides BOTH the interactive TUI and a
+  scriptable one-shot mode (`ffpanel play <type> [params...]`, arg-compatible
+  with C ffctl) so hardware-verification procedures keep working verbatim.
+  The C file is deleted at M4; the parity harness (`parity/harness.c`) stays
+  as a test fixture only — it is not a maintained tool.
 - Live force monitor identical in math to the driver (bar + side + %).
 - Device-sign probe (M0 built into the UI) to close D1 reproducibly.
 - Gain and autocenter control (FF_GAIN / FF_AUTOCENTER pseudo-effects, same
@@ -73,6 +79,8 @@ enabled in the game).
 - Raw HID / usbmon integration (driver's domain).
 - Multiple simultaneous effects (games cover that; v1 = one effect + monitor).
 - Non-Linux platforms; GUI; config file editing UI (defaults only, persisted).
+- Keeping a C tool fork alive in parallel with the Go one (explicitly
+  rejected — one codebase).
 
 ## 3. UX flow (screens, keys)
 
@@ -186,7 +194,7 @@ at full level during the delay window), and `direction=1` projects to zero
 | M2 | Effect lab | Upload sine period 2000 → felt 0.5 Hz wobble; live magnitude tweak audibly/felt changes without re-upload glitch; 5 min of rapid tweaking → no `dmesg` errors |
 | M3 | Monitor + parity | Golden-vector tests pass (±1); bar matches C ffctl output on identical params; `i`-probe reproduces M0 finding |
 | D1 | Driver sign fix (conditional) | After negation: `--direction 16384` pushes right, `49152` pulls left, in-game torque feels correct without invert options |
-| M4 | Polish | Gain/autocenter work (set 50% → weaker forces); config persistence (`~/.config/ffpanel.json`: last device, sign finding, defaults); README |
+| M4 | Polish + ffctl retirement | Gain/autocenter work (set 50% → weaker forces); config persistence (`~/.config/ffpanel.json`: last device, sign finding, defaults); README; `tools/ffctl.c` deleted; `ffpanel play constant --direction 16384` reproduces the M0 probe identically; docs references updated in the same commit |
 
 ## 7. Risks & mitigations
 
@@ -208,7 +216,12 @@ at full level during the delay window), and `direction=1` projects to zero
 ```
 tools/ffpanel/
   go.mod, go.sum, vendor/
-  main.go            entry: flag dev override, program run, signal safety
+  main.go            entry: TUI by default; `ffpanel play <type> [args]` =
+                     one-shot scriptable mode (replaces C ffctl verbatim:
+                     same flags --period/--magnitude/--direction/..., same
+                     live bar, same Ctrl+C stop+erase semantics)
+  cli.go             arg parsing + one-shot runner (thin wrapper over the
+                     same input/synth code the TUI uses — one codebase)
   input_linux.go     discovery, caps, ioctl helpers, upload/update/play/erase
   synth.go           parity port (§5)
   synth_test.go      golden vectors
@@ -216,15 +229,21 @@ tools/ffpanel/
   ui/devices.go      device list screen
   ui/editor.go       editor + monitor screen
   ui/style.go        lipgloss styles
+  parity/            golden-vector harness (C, test fixture only)
   README.md          usage, screenshots, the direction-0 zero-force trap
 ```
 
-The C `tools/ffctl.c` stays (scriptable, zero deps) until M4, then optional
-retire — open question 3.
+`tools/ffctl.c` is deleted at M4; docs referencing `ffctl` invocations
+(`work/analysis/12_hw_verification_procedure.md`, `13_periodic_wedge.md`
+ffctl examples, M0 procedure in this plan) are updated to `ffpanel play ...`
+in the same commit. Users who want the old name can
+`ln -s ffpanel ffctl` — same flags.
 
-## 9. Open questions
+## 9. Decisions & open questions
 
-1. **Name**: `ffpanel` (proposed) vs keeping `ffctl` for the Go binary?
+1. **Name: `ffpanel`** (decided 2026-08-19). The one-shot mode is a
+   subcommand (`ffpanel play ...`); an `ffctl` symlink preserves old scripts.
 2. **M0 result**: does `--direction 16384` push right or pull left on your
    wheel? (Decides D1.)
-3. **Retire C ffctl** after parity, or keep both?
+3. ~~Retire C ffctl after parity, or keep both?~~ **Decided: retire at M4 —
+   single Go codebase for TUI + scriptable tests (user, 2026-08-19).**
