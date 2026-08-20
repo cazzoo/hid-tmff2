@@ -428,6 +428,19 @@ static int t500rs_synth_send_main(struct t500rs_device_entry *t500rs)
  * applying the last streamed sample after STOP/expiry (hardware-observed
  * residual rumble). The MAIN is declared infinite-duration, so nothing
  * else ever clears it.
+ *
+ * SIGN CONVENTION: this channel's byte is INVERTED relative to the
+ * 0x03 param channel and to UAPI semantics - hardware-established
+ * 2026-08-20 (work/analysis/14_direction_sign.md): a native 0x03
+ * constant with a negative level pushes the wheel RIGHT, while the
+ * same negative level streamed here pushes LEFT (ramp start direction,
+ * observed in two independent sessions). C2 corroborates: the stream's
+ * signed byte distribution has a mean-negative bias while carrying a
+ * self-aligning (centering) torque. The helper therefore negates the
+ * level before writing so the wire byte always carries UAPI sign
+ * semantics, keeping the stream consistent with the native channel.
+ * Callers keep tracking the SEMANTIC level for duplicate skipping;
+ * level 0 negates to itself.
  */
 static int t500rs_synth_stream_level(struct t500rs_device_entry *t500rs,
 				     u8 *buf, s8 level)
@@ -437,7 +450,7 @@ static int t500rs_synth_stream_level(struct t500rs_device_entry *t500rs,
 	memset(s, 0, sizeof(*s));
 	s->id = T500RS_PKT_PERIODIC;
 	s->code = T500RS_CONSTANT_PARAM_SUB;
-	s->level = level;
+	s->level = (s8)-level;
 	s->magic_lo = 0x10;
 	s->magic_hi = 0x27;
 	return t500rs_send_hid(t500rs, (u8 *)s, sizeof(*s));

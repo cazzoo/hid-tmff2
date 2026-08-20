@@ -63,6 +63,15 @@ add `work/analysis/14_direction_sign.md` with the M0 evidence. Commit only
 after M0 confirmation **and** an in-game sanity check (no invert-FF option
 enabled in the game).
 
+> **AMENDMENT (2026-08-20, M0 executed):** D1 as drafted is REJECTED —
+> the M0 evidence showed the inversion is specific to the `04 0e`
+> stream channel (the native `03` channel is UAPI-correct), so negating
+> the shared projection helpers would have broken native constants.
+> The corrected fix (negate at the stream write in
+> `t500rs_synth_stream_level()`) is implemented; see
+> `work/analysis/14_direction_sign.md` for the evidence and the
+> remaining in-game sanity gate.
+
 ## 2. Goals / non-goals
 
 **Goals**

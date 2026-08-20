@@ -1,56 +1,66 @@
-# 14 — Direction sign on the wire (M0 verdict)
+# 14 — Direction sign on the wire (M0 verdict, amended)
 
-> **M0 CONFIRMED (2026-08-20, ffpanel on hardware):** the expected-force
-> monitor shows the **opposite** side of what the wheel actually does —
-> user report from the ffpanel TUI: bar/`R` while the wheel pulls left
-> (and vice versa). Per the M0 decision tree
-> (`.sisyphus/plans/ffpanel.md` §1) this outcome means: **the device
-> wire sign is inverted relative to the UAPI projection convention.**
+> **M0 CONFIRMED (2026-08-20, ffpanel on hardware):** the wheel pulls
+> opposite to the UAPI prediction for **streamed** effects. Amended
+> verdict (same day, after cross-checking constant vs ramp): the
+> inversion is **channel-specific** — the `04 0e` level stream is
+> sign-inverted relative to the native `03` param channel — not a
+> global wire-sign flip. Fixed at the stream write; see below.
 
 **Date:** 2026-08-20 · **Tool:** `tools/ffpanel` (parity monitor,
-golden-vector backed) · **Driver:** projection math unchanged since
-`768afca` (`t500rs_synth_dir_project()` /
-`t500rs_scale_const_with_direction()`)
+golden-vector backed) · **Driver:** `src/tmt500rs/hid-tmt500rs.c`
 
-## What was tested
+## The evidence
 
-The monitor implements the UAPI expectation exactly: direction 16384
-(90°) ⇒ positive projected force ⇒ displayed `R`; 49152 (270°) ⇒ `L`.
-The driver streams the projected level on the wire as `03 0e` / `04 0e`
-bytes. The user felt the wheel pull to the side opposite the monitor's
-prediction — i.e. positive stream level pushes/pulls the other way.
+| Test | Path | Level | Wheel did | UAPI says |
+|------|------|-------|-----------|-----------|
+| constant, negative level | native `03 0e` | −38 (s8) | **RIGHT** | right ✓ |
+| ramp, start = −10000 (2 sessions) | synth `04 0e` stream | −38 (s8) | **LEFT** | right ✗ |
+| ramp, mid-sweep | stream | 0 | 0 | 0 ✓ |
 
-## Conclusion
+The same negative byte through the two channels produces opposite
+forces — impossible unless the channels' sign conventions differ. The
+constant test that M0 was originally based on (and today's re-test) ran
+**before any periodic upload in the boot**, i.e. on the native channel;
+every inverted-feeling observation (original ffctl report, ramp start)
+ran on the stream channel (a constant played after any periodic/ramp
+upload in the same boot also rides the stream — `synth_mode` is
+one-way).
 
-- The tool is **not** wrong: it mirrors the driver math 1:1 (427 golden
-  vectors) and the UAPI direction convention used by the whole hid-tmff2
-  family and upstream Logitech FF drivers.
-- The device-side meaning of a positive level was never established from
-  the C1/C2 pcaps (game intent at those instants is not recoverable);
-  this test establishes it: **positive level = leftward on this wheel**.
-- Tool default since 2026-08-20: the TUI and `play` bar display the
-  **hardware sign** (they negate the UAPI projection), so `L` on screen
-  = wheel pushed left, matching feel. `i` in the TUI toggles to the raw
-  UAPI convention for comparison; the choice persists in
-  `~/.config/ffpanel.json` (`display_uapi`).
+Corroboration from the C2 capture (`05_periodic_0x04_anomaly.md`,
+Hypothesis B): the stream byte is a signed s8 with a Gaussian
+distribution whose mean is slightly **negative** while carrying a
+self-aligning (centering) torque — consistent with a stream convention
+opposite to rightward-positive.
 
-## D1 (driver sign fix) — ready, gated on the in-game check
+Secondary observation — "ramp gets harsh-left when the display rises
+toward L": with the inverted stream, every level played mirrored; the
+ sharpest artifact is the count>1 restart (level snaps +38 → −38 →
+ wheel snaps hard). With count=1 the sweep is a pure mirror.
 
-Negate the projection in `t500rs_scale_const_with_direction()` and
-`t500rs_synth_dir_project()` (`src/tmt500rs/hid-tmt500rs.c`) so a
-positive projected force always means rightward on the wire. Per the
-plan, commit only after **both**:
+## The fix (implements the corrected D1)
 
-1. ✅ M0 confirmation (this file).
-2. ⬜ In-game sanity check: torque feels correct with **no** invert-FF
-   option enabled in the game (rules out a game-side convention).
+`t500rs_synth_stream_level()` (the single writer of `04 0e` level
+bytes) negates the level before writing, so the wire byte carries UAPI
+sign semantics and the stream matches the native channel:
 
-Coordinated-change checklist when D1 lands (one commit):
+- periodic/ramp/rumble direction becomes UAPI-correct (sine/rumble are
+  sign-symmetric — behavior unchanged; saw up/down swap to their
+  correct mirror; ramp sweeps in the predicted direction);
+- constants played while `synth_mode` is on also become correct
+  (they previously inherited the inversion through the stream).
 
-- negate the two projection functions in the driver;
-- update `docs/T500RS_FFBEFFECTS.md` §7 direction row;
-- re-copy the negated bodies into `tools/ffpanel/parity/harness.c`,
-  regenerate `parity/vectors.txt`, and flip `dirProject()` in
-  `tools/ffpanel/synth.go` until `go test ./...` passes — otherwise the
-  tool becomes a liar, which is the one thing it must never be;
-- update this file with the D1 commit hash.
+D1 **as originally drafted** (negate `t500rs_scale_const_with_direction()`
+and `t500rs_synth_dir_project()`) is **rejected**: it would have
+broken the native channel, which is UAPI-correct (M0-verified).
+
+The tool needs no math change: the parity contract models the semantic
+level (sample → project → clamp → s8), and the wire negation happens
+below that abstraction, inside the driver's packet writer.
+
+## Remaining gate
+
+Per the plan, the driver-side sign work is complete pending the
+in-game sanity check: torque feels correct with **no** invert-FF option
+enabled in the game. Update this file with the verdict (and the fix
+commit hash) when done.

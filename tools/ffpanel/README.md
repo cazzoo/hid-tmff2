@@ -100,13 +100,23 @@ direction 0.
 ### The wire-sign finding (M0) — indicator default
 
 Hardware-confirmed 2026-08-20: the wheel pulls opposite to the UAPI
-projection (`work/analysis/14_direction_sign.md`). The indicator
-therefore defaults to the **hardware sign** — `L` on screen means the
-wheel is pushed left, matching what you feel (the bar negates the raw
-UAPI projection). Press `i` to compare against the raw UAPI convention;
-the choice persists in `~/.config/ffpanel.json`. The one-shot `play`
-bar uses the hardware sign too. A driver-side negation (D1) is still
-pending its in-game sanity check.
+projection for **streamed** effects (`work/analysis/14_direction_sign.md`).
+Root cause: the driver's `04 0e` stream channel is sign-inverted
+relative to the native `03` param channel (your constant test ran
+native-mode; ramps/periodics — and constants played after any
+periodic upload in the same boot — rode the inverted stream). The
+driver now negates at the stream write, so both channels carry UAPI
+semantics.
+
+The indicator displays the **hardware sign** — `L` on screen means the
+wheel is pushed left, matching what you feel. Press `i` to compare
+against the raw UAPI projection; the choice persists in
+`~/.config/ffpanel.json`. The one-shot `play` bar uses the hardware
+sign too.
+
+Note on ramps: with count > 1 the level snaps end → start at each
+iteration boundary (FF semantics) — the wheel kicks at that moment by
+design; use count 1 for smooth single sweeps.
 
 ## Parity contract
 
