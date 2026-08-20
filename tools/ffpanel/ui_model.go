@@ -85,7 +85,11 @@ type model struct {
 	playFx    Fx
 	lastLevel int
 
-	signFlipped bool // [i] device-sign probe
+	uapiSign bool // [i] probe: false = hardware sign (default, M0-verified)
+
+	// real-time wheel position (EV_ABS drained from the reader fd)
+	wheelVal  int32
+	wheelSeen bool
 
 	overlay    int
 	overlayVal int
@@ -120,7 +124,7 @@ func newModel() model {
 	}
 	m.cfg = LoadConfig()
 	m.devs = ScanDevices()
-	m.signFlipped = m.cfg.DeviceSignFlipped
+	m.uapiSign = m.cfg.DisplayUapi
 	m.gainPct = 100
 	m.acPct = 0
 	m.status = "pick a force-feedback device"
@@ -328,7 +332,7 @@ func (m *model) shutdown() {
 		}
 		m.dev = nil
 	}
-	m.cfg.DeviceSignFlipped = m.signFlipped
+	m.cfg.DisplayUapi = m.uapiSign
 	_ = m.cfg.Save()
 }
 
@@ -350,17 +354,25 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tickMsg:
 		now := time.Time(msg)
 		m.applyUpdate(now)
+		if m.dev != nil {
+			if v, seen := m.dev.PollWheel(); seen {
+				m.wheelVal, m.wheelSeen = v, true
+			}
+		}
 		if m.playing && m.dev != nil {
 			t := uint64(now.Sub(m.playStart).Milliseconds())
 			lvl := StreamLevel(&m.playFx, t)
 			m.lastElapsed = float64(t) / 1000.0
+			m.lastLevel = displayLevel(&m.playFx, t, m.uapiSign)
 			if m.expired(now) && lvl == 0 {
 				m.playing = false
+				// Deterministic termination even if the driver's
+				// own synth expiry is late: explicit EV_FF 0 stop.
+				_ = m.dev.Stop()
 				m.setStatus(fmt.Sprintf(
-					"expired id=%d · last stream level %d",
+					"expired id=%d · last level %d",
 					m.dev.effectID, m.lastLevel))
 			}
-			m.lastLevel = lvl
 		}
 		return &m, tick()
 

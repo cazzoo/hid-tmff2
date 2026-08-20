@@ -110,13 +110,13 @@ func (m model) updateEditor(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case " ":
 		m.togglePlay()
 	case "i":
-		m.signFlipped = !m.signFlipped
-		m.cfg.DeviceSignFlipped = m.signFlipped
+		m.uapiSign = !m.uapiSign
+		m.cfg.DisplayUapi = m.uapiSign
 		_ = m.cfg.Save()
-		if m.signFlipped {
-			m.setStatus("monitor: device-sign INVERTED for display (persisted)")
+		if m.uapiSign {
+			m.setStatus("monitor: UAPI sign (pre-M0 convention, persisted)")
 		} else {
-			m.setStatus("monitor: device-sign as reported by UAPI math (persisted)")
+			m.setStatus("monitor: hardware sign — matches the wheel (persisted)")
 		}
 	case "u":
 		m.forceReupload()
@@ -148,17 +148,18 @@ func (m *model) nudge(dir, base int, keyID string) {
 }
 
 // accelMult returns the hold-time step multiplier: 1x for the first
-// 400 ms (a tap is a precise single step), then one more decade every
-// 1.2 s of continuous holding, capped at 1000x. Exponential step
-// growth = logarithmic value traversal: 0 -> 65535 needs ~7 held
-// steps at full acceleration instead of thousands.
+// 600 ms (a tap is a precise single step), then x10, then x100 after
+// 2.6 s of continuous holding — capped there. Exponential step growth
+// = logarithmic value traversal, but gently: the top step is 1000
+// (with shift), so even pinned keys sweep 0..65535 in ~2 s without
+// teleporting across the range.
 func accelMult(held time.Duration) int {
-	if held < 400*time.Millisecond {
+	if held < 600*time.Millisecond {
 		return 1
 	}
-	decades := int((held-400*time.Millisecond)/(1200*time.Millisecond)) + 1
-	if decades > 3 {
-		decades = 3
+	decades := int((held-600*time.Millisecond)/(2*time.Second)) + 1
+	if decades > 2 {
+		decades = 2
 	}
 	mult := 1
 	for i := 0; i < decades; i++ {
@@ -255,8 +256,10 @@ func (m model) viewEditor() string {
 	// monitor
 	b.WriteString("\n")
 	lvlLabel := "expected force"
-	if m.signFlipped {
-		lvlLabel = "expected force (device-sign inverted)"
+	if m.uapiSign {
+		lvlLabel = "expected force (UAPI sign)"
+	} else {
+		lvlLabel = "expected force (hardware sign)"
 	}
 	var lvl float64
 	elapsed := 0.0
@@ -265,7 +268,7 @@ func (m model) viewEditor() string {
 		if tMs < 0 {
 			tMs = 0
 		}
-		lvl = float64(displayLevel(&m.playFx, uint64(tMs), m.signFlipped))
+		lvl = float64(displayLevel(&m.playFx, uint64(tMs), m.uapiSign))
 		elapsed = float64(tMs) / 1000.0
 	} else if m.uploaded {
 		// frozen at the moment playback stopped/expired — not a
@@ -289,6 +292,35 @@ func (m model) viewEditor() string {
 	mon := fmt.Sprintf("%s\n  %s  %s   %s  %.1f%%   elapsed %.1fs",
 		lvlLabel,
 		barLine(lvl), side, stateWord(m), pct, elapsed)
+
+	// real-time wheel position, below the expected force
+	if m.wheelSeen && m.dev != nil {
+		min, max := m.dev.WheelRange()
+		pos := float64(m.wheelVal-min)/float64(max-min)*2.0 - 1.0
+		if pos < -1 {
+			pos = -1
+		}
+		if pos > 1 {
+			pos = 1
+		}
+		pside := "-"
+		if pos < -0.005 {
+			pside = "L"
+		} else if pos > 0.005 {
+			pside = "R"
+		}
+		ppct := pos
+		if ppct < 0 {
+			ppct = -ppct
+		}
+		mon += fmt.Sprintf("\n  %-14s %s  %s  %5.1f%%   raw %d",
+			"wheel position", barLine(pos*127), pside,
+			ppct*100, m.wheelVal)
+	} else {
+		mon += "\n  " + stDim.Render(
+			"wheel position   (waiting for ABS data — turn the wheel)")
+	}
+
 	b.WriteString(stMonitor.Render(mon))
 	b.WriteString("\n\n")
 
@@ -304,8 +336,8 @@ func (m model) viewEditor() string {
 	}
 
 	b.WriteString(stHelp.Render(
-		"  ↑/↓ row · ←/→ ±1 (shift ±10; hold to accelerate ×10/1.2s) · enter exact value\n" +
-			"  space play/stop · i device-sign probe · u force re-upload\n" +
+		"  ↑/↓ row · ←/→ ±1 (shift ±10; hold gently accelerates to ×100) · enter exact value\n" +
+			"  space play/stop · i sign convention (hardware/UAPI) · u force re-upload\n" +
 			"  g gain · a autocenter · esc back (stops+erases) · q quit (stops+erases)"))
 	b.WriteString("\n")
 	m.writeStatus(&b)
@@ -331,11 +363,14 @@ func slider10(pct int) string {
 	return "[" + strings.Repeat("█", n) + strings.Repeat("·", 10-n) + "]"
 }
 
-// displayLevel computes the monitor level, applying the [i] probe's
-// sign flip on top of the parity math.
-func displayLevel(fx *Fx, tMs uint64, flipped bool) int {
+// displayLevel computes the monitor level in the selected sign
+// convention. The hardware sign (default, M0-verified — see
+// work/analysis/14_direction_sign.md) negates the UAPI projection so
+// L on screen = wheel pushed left; the UAPI convention shows the raw
+// projection instead.
+func displayLevel(fx *Fx, tMs uint64, uapi bool) int {
 	l := StreamLevel(fx, tMs)
-	if flipped {
+	if !uapi {
 		return -l
 	}
 	return l

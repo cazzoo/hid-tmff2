@@ -46,6 +46,8 @@ const cliUsage = `usage: ffpanel play [device] <sine|square|triangle|sawup|sawdo
 Direction: hid-tmff2 projects forces with sin(direction * 360 / 65536),
 so direction 0 (north) produces ZERO force on these wheels. The default
 here is 16384 (90 degrees = full force along the wheel axis).
+The bar shows the HARDWARE sign (M0-verified: matches what the wheel
+does; see work/analysis/14_direction_sign.md).
 `
 
 var validKinds = map[string]bool{
@@ -196,8 +198,9 @@ func runPlay(argv []string) int {
 	}
 }
 
-// renderCLIBar prints ffctl's live bar: type, Hz, elapsed, handle
-// position (left = pull left, right = push right), side, percent.
+// renderCLIBar prints the live bar: type, Hz, elapsed, handle position,
+// side, percent. Side follows the hardware sign convention (default,
+// M0-verified — L = wheel pushed left), matching the TUI.
 func renderCLIBar(p *EffectParams, fx *Fx, tMs int64) {
 	const barHalf = 14
 	var bar [barHalf*2 + 4]byte
@@ -208,7 +211,7 @@ func renderCLIBar(p *EffectParams, fx *Fx, tMs int64) {
 	bar[barHalf+1] = '|'
 	bar[barHalf*2+2] = ']'
 
-	lvl := float64(StreamLevel(fx, uint64(tMs)))
+	lvl := float64(-StreamLevel(fx, uint64(tMs)))
 	idx := int(round(lvl / 127.0 * float64(barHalf)))
 	if idx < -barHalf {
 		idx = -barHalf

@@ -102,22 +102,68 @@ func TestRefreshPlayFxKeepsRunningCount(t *testing.T) {
 	}
 }
 
-// TestAccelMult pins the hold curve: 1x for taps (<400 ms), one decade
-// per additional 1.2 s of holding, capped at 1000x.
+// TestAccelMult pins the hold curve: 1x for taps (<600 ms), x10 until
+// 2.6 s, x100 from 2.6 s — capped there (subtle acceleration).
 func TestAccelMult(t *testing.T) {
 	for _, tc := range []struct {
 		held time.Duration
 		want int
 	}{
-		{0, 1}, {300 * time.Millisecond, 1},
-		{400 * time.Millisecond, 10}, {500 * time.Millisecond, 10},
-		{1 * time.Second, 10},
-		{1600 * time.Millisecond, 100},
-		{2800 * time.Millisecond, 1000},
-		{10 * time.Second, 1000},
+		{0, 1}, {500 * time.Millisecond, 1},
+		{599 * time.Millisecond, 1},
+		{600 * time.Millisecond, 10},
+		{2 * time.Second, 10},
+		{2599 * time.Millisecond, 10},
+		{2600 * time.Millisecond, 100},
+		{10 * time.Second, 100},
 	} {
 		if got := accelMult(tc.held); got != tc.want {
 			t.Errorf("accelMult(%v) = %d, want %d", tc.held, got, tc.want)
 		}
+	}
+}
+
+// TestDisplayLevelSigns pins the indicator convention: hardware sign
+// (default) negates the UAPI projection so L on screen = wheel pushed
+// left (M0 finding); the UAPI convention shows the raw projection.
+func TestDisplayLevelSigns(t *testing.T) {
+	p := DefaultParams("constant")
+	p.Magnitude = 20000
+	fx := p.ToFx()
+
+	raw := StreamLevel(&fx, 100) // positive: UAPI says "east/right"
+	if raw <= 0 {
+		t.Fatalf("expected a positive raw UAPI level, got %d", raw)
+	}
+	if got := displayLevel(&fx, 100, false); got != -raw {
+		t.Errorf("hardware default: got %d, want %d (negated)", got, -raw)
+	}
+	if got := displayLevel(&fx, 100, true); got != raw {
+		t.Errorf("uapi mode: got %d, want %d", got, raw)
+	}
+}
+
+// TestDecodeInputEvents pins the EV_ABS wheel-event decoder: last
+// matching sample wins, non-matching codes and sync events ignored.
+func TestDecodeInputEvents(t *testing.T) {
+	mk := func(typ, code uint16, val int32) []byte {
+		var e [24]byte
+		le.PutUint16(e[16:], typ)
+		le.PutUint16(e[18:], code)
+		le.PutUint32(e[20:], uint32(val))
+		return e[:]
+	}
+	buf := append(mk(evSyn, 0, 0), mk(evAbs, absX, -100)...)
+	buf = append(buf, mk(evAbs, 0x01, 999)...) // wrong code
+	buf = append(buf, mk(evAbs, absX, 1234)...)
+
+	if v, ok := decodeInputEvents(buf, absX); !ok || v != 1234 {
+		t.Fatalf("decodeInputEvents = (%d, %v), want (1234, true)", v, ok)
+	}
+	if _, ok := decodeInputEvents(buf, absWheel); ok {
+		t.Fatal("absWheel decode should find nothing")
+	}
+	if _, ok := decodeInputEvents(nil, absX); ok {
+		t.Fatal("empty buffer should decode nothing")
 	}
 }

@@ -27,7 +27,11 @@ import (
 
 // FF UAPI constants (include/uapi/linux/input-event-codes.h).
 const (
+	evSyn        = 0x00
+	evAbs        = 0x03
 	evFF         = 0x15
+	absX         = 0x00
+	absWheel     = 0x08
 	ffRumble     = 0x50
 	ffPeriodic   = 0x51
 	ffConstant   = 0x52
@@ -342,15 +346,25 @@ type Device struct {
 	effectID  int16
 	uploaded  bool
 	pseudoIDs []int16
+
+	// wheel-position reader: a separate non-blocking fd so the 16 ms
+	// tick can drain EV_ABS without ever blocking on the write fd.
+	rfd      int
+	absCode  uint16 // chosen wheel axis (absWheel preferred, absX fallback; 0xffff = none)
+	absValue int32
+	absSeen  bool
+	absMin   int32
+	absMax   int32
 }
 
-// Open opens the event node read-write (upload/play needs O_RDWR).
+// Open opens the event node read-write (upload/play needs O_RDWR) and a
+// companion non-blocking reader for wheel-position events.
 func Open(path string) (*Device, error) {
 	fd, err := unix.Open(path, unix.O_RDWR, 0)
 	if err != nil {
 		return nil, &os.PathError{Op: "open", Path: path, Err: err}
 	}
-	d := &Device{fd: fd}
+	d := &Device{fd: fd, rfd: -1, absCode: 0xffff}
 	for _, cand := range ScanDevices() {
 		if cand.Path == path {
 			d.Info = cand
@@ -359,6 +373,26 @@ func Open(path string) (*Device, error) {
 	}
 	if d.Info.Path == "" {
 		d.Info.Path = path
+	}
+	if rfd, err := unix.Open(path, unix.O_RDONLY|unix.O_NONBLOCK|unix.O_CLOEXEC, 0); err == nil {
+		d.rfd = rfd
+		var absBits [8]byte // ABS codes 0..63
+		if ioctl(rfd, eviocgbit(evAbs, 8), unsafe.Pointer(&absBits[0])) == nil {
+			if absBits[absWheel/8]&(1<<(absWheel%8)) != 0 {
+				d.absCode = absWheel
+			} else if absBits[absX/8]&(1<<(absX%8)) != 0 {
+				d.absCode = absX
+			}
+		}
+		if d.absCode != 0xffff {
+			// struct input_absinfo: value,min,max,fuzz,flat,res (s32 x6)
+			var ai [24]byte
+			req := uintptr(2<<30|24<<16|'E'<<8) + uintptr(0x40) + uintptr(d.absCode)
+			if ioctl(rfd, req, unsafe.Pointer(&ai[0])) == nil {
+				d.absMin = int32(le.Uint32(ai[4:]))
+				d.absMax = int32(le.Uint32(ai[8:]))
+			}
+		}
 	}
 	return d, nil
 }
@@ -380,8 +414,59 @@ func (d *Device) Close() error {
 		keep(d.eraseID(id))
 	}
 	d.pseudoIDs = nil
+	if d.rfd >= 0 {
+		keep(unix.Close(d.rfd))
+		d.rfd = -1
+	}
 	keep(unix.Close(d.fd))
 	return firstErr
+}
+
+// decodeInputEvents scans a buffer of 24-byte struct input_event images
+// (64-bit layout: timeval 16B, type u16@16, code u16@18, value s32@20)
+// and returns the LAST EV_ABS value for the wanted code.
+func decodeInputEvents(b []byte, wantCode uint16) (int32, bool) {
+	var val int32
+	found := false
+	for off := 0; off+24 <= len(b); off += 24 {
+		if le.Uint16(b[off+16:]) == evAbs && le.Uint16(b[off+18:]) == wantCode {
+			val = int32(le.Uint32(b[off+20:]))
+			found = true
+		}
+	}
+	return val, found
+}
+
+// PollWheel drains pending input events (non-blocking) and returns the
+// latest wheel-axis sample. seen is sticky: true once any ABS sample has
+// arrived, with the latest value.
+func (d *Device) PollWheel() (value int32, seen bool) {
+	if d.rfd < 0 || d.absCode == 0xffff {
+		return 0, false
+	}
+	buf := make([]byte, 24*128)
+	for {
+		n, err := unix.Read(d.rfd, buf)
+		if n > 0 {
+			if v, ok := decodeInputEvents(buf[:n], d.absCode); ok {
+				d.absValue = v
+				d.absSeen = true
+			}
+		}
+		if n < len(buf) || err != nil {
+			break
+		}
+	}
+	return d.absValue, d.absSeen
+}
+
+// WheelRange returns the advertised axis range (fallback ±32767 when
+// the device did not report a usable one).
+func (d *Device) WheelRange() (min, max int32) {
+	if d.absMax > d.absMin {
+		return d.absMin, d.absMax
+	}
+	return -32767, 32767
 }
 
 // Upload uploads a fresh effect (id -1) and remembers its id.

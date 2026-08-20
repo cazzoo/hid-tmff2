@@ -28,8 +28,11 @@ prediction — i.e. positive stream level pushes/pulls the other way.
 - The device-side meaning of a positive level was never established from
   the C1/C2 pcaps (game intent at those instants is not recoverable);
   this test establishes it: **positive level = leftward on this wheel**.
-- Interim tool behavior: press `i` in the TUI so the monitor display
-  matches reality (finding persisted to `~/.config/ffpanel.json`).
+- Tool default since 2026-08-20: the TUI and `play` bar display the
+  **hardware sign** (they negate the UAPI projection), so `L` on screen
+  = wheel pushed left, matching feel. `i` in the TUI toggles to the raw
+  UAPI convention for comparison; the choice persists in
+  `~/.config/ffpanel.json` (`display_uapi`).
 
 ## D1 (driver sign fix) — ready, gated on the in-game check
 

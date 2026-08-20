@@ -421,6 +421,29 @@ static int t500rs_synth_send_main(struct t500rs_device_entry *t500rs)
 }
 
 /*
+ * Stream one synthesized level byte on the constant-force channel
+ * (04 0e ... 10 27). Used per tick while the engine runs, and with
+ * level 0 whenever the engine goes idle: the channel byte outlives the
+ * slot-0 MAIN's scheduling, so without an explicit zero the wheel keeps
+ * applying the last streamed sample after STOP/expiry (hardware-observed
+ * residual rumble). The MAIN is declared infinite-duration, so nothing
+ * else ever clears it.
+ */
+static int t500rs_synth_stream_level(struct t500rs_device_entry *t500rs,
+				     u8 *buf, s8 level)
+{
+	struct t500rs_pkt_r04_stream *s = (struct t500rs_pkt_r04_stream *)buf;
+
+	memset(s, 0, sizeof(*s));
+	s->id = T500RS_PKT_PERIODIC;
+	s->code = T500RS_CONSTANT_PARAM_SUB;
+	s->level = level;
+	s->magic_lo = 0x10;
+	s->magic_hi = 0x27;
+	return t500rs_send_hid(t500rs, (u8 *)s, sizeof(*s));
+}
+
+/*
  * Synthesis worker: sums all playing constant/periodic/ramp
  * contributions, keeps hw slot 0 started only while something plays, and
  * streams the combined level as 0x04 0x0e packets (skipping duplicates).
@@ -435,7 +458,6 @@ static void t500rs_synth_work(struct work_struct *work)
 	unsigned long flags;
 	unsigned long now = jiffies_to_msecs(jiffies);
 	bool should_run, start = false, stop = false;
-	struct t500rs_pkt_r04_stream *s;
 	int total = 0;
 	s8 level;
 
@@ -489,6 +511,9 @@ static void t500rs_synth_work(struct work_struct *work)
 			hid_err(t500rs->hdev,
 				"synth: slot 0 STOP failed: %d\n", ret);
 		t500rs->synth_last_valid = false;
+		/* Clear the latched channel byte after the STOP so expiry
+		 * leaves zero force, not the last mid-waveform sample. */
+		t500rs_synth_stream_level(t500rs, t500rs->synth_buffer, 0);
 		return;
 	}
 
@@ -496,17 +521,9 @@ static void t500rs_synth_work(struct work_struct *work)
 		return;
 
 	if (!t500rs->synth_last_valid || t500rs->synth_last_level != level) {
-		int ret;
-
-		s = (struct t500rs_pkt_r04_stream *)t500rs->synth_buffer;
-		memset(s, 0, sizeof(*s));
-		s->id = T500RS_PKT_PERIODIC;
-		s->code = T500RS_CONSTANT_PARAM_SUB;
-		s->level = level;
-		s->magic_lo = 0x10;
-		s->magic_hi = 0x27;
-
-		ret = t500rs_send_hid(t500rs, (u8 *)s, sizeof(*s));
+		int ret = t500rs_synth_stream_level(t500rs,
+						    t500rs->synth_buffer,
+						    level);
 		if (ret) {
 			hid_err(t500rs->hdev,
 				"synth: level stream failed: %d\n", ret);
@@ -1679,6 +1696,10 @@ static int t500rs_stop_effect(void *data,
 				hid_err(t500rs->hdev,
 					"synth: slot 0 STOP failed: %d\n",
 					ret);
+			/* Clear the latched channel byte so stopping really
+			 * is zero force (see t500rs_synth_stream_level). */
+			ret = t500rs_synth_stream_level(t500rs,
+							t500rs->send_buffer, 0);
 		}
 		return ret;
 	}
