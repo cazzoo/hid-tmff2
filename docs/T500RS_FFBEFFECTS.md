@@ -306,6 +306,13 @@ reference:
 | Duration            | milliseconds        | milliseconds    | direct; `0xffff` = infinite    |
 | Constant level      | −32767...+32767     | −127...+127     | `level x 127 / 32767`          |
 | Synth stream level  | −32767...+32767     | −128...+127     | `level x 127 / 32767` (host-side) |
+
+> **Sign convention (M0, 2026-08-20):** the `0x03` constant channel and the
+> `0x04` stream channel both carry UAPI sign — a **positive** level byte means a
+> **rightward** (east) pull, negative means leftward. The driver negates the
+> projected level at both `t500rs_scale_const_with_direction` (native `0x03`)
+> and `t500rs_synth_stream_level` (stream `0x04`) because the bare hardware byte
+> was inverted relative to UAPI on this wheel (work/analysis/14_direction_sign.md).
 | Envelope level      | 0–32767             | (applied host-side, 0–100%) | `env / 32767` scale   |
 | Condition coeff.    | 0–32767             | 0–10            | `coeff x 10 / 32767`           |
 | Condition center/deadband | −32767...+32767 / 0–65535 | device units | / 65 *(still being verified)* |

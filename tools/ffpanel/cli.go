@@ -211,7 +211,7 @@ func renderCLIBar(p *EffectParams, fx *Fx, tMs int64) {
 	bar[barHalf+1] = '|'
 	bar[barHalf*2+2] = ']'
 
-	lvl := float64(-StreamLevel(fx, uint64(tMs)))
+	lvl := float64(StreamLevel(fx, uint64(tMs)))
 	idx := int(round(lvl / 127.0 * float64(barHalf)))
 	if idx < -barHalf {
 		idx = -barHalf

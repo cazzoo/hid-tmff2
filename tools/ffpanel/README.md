@@ -101,18 +101,19 @@ direction 0.
 
 Hardware-confirmed 2026-08-20: the wheel pulls opposite to the UAPI
 projection for **streamed** effects (`work/analysis/14_direction_sign.md`).
-Root cause: the driver's `04 0e` stream channel is sign-inverted
+Root cause: the driver's `04 0e` stream channel was sign-inverted
 relative to the native `03` param channel (your constant test ran
 native-mode; ramps/periodics — and constants played after any
 periodic upload in the same boot — rode the inverted stream). The
-driver now negates at the stream write, so both channels carry UAPI
-semantics.
+driver now negates at the stream write **and** at the native constant
+projection (`t500rs_scale_const_with_direction`), so both channels
+carry UAPI semantics: a positive level means a rightward (R) pull.
 
-The indicator displays the **hardware sign** — `L` on screen means the
-wheel is pushed left, matching what you feel. Press `i` to compare
-against the raw UAPI projection; the choice persists in
-`~/.config/ffpanel.json`. The one-shot `play` bar uses the hardware
-sign too.
+The indicator displays the **semantic sign** by default — a positive
+level reads `R`, matching what the wheel does. Press `i` to invert the
+display (legacy driver, pre sign-fix convention) for comparison; the
+choice persists in `~/.config/ffpanel.json` as `display_inverted`. The
+one-shot `play` bar uses the semantic sign too.
 
 Note on ramps: with count > 1 the level snaps end → start at each
 iteration boundary (FF semantics) — the wheel kicks at that moment by

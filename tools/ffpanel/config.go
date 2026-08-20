@@ -15,12 +15,14 @@ import (
 // Config is the on-disk state.
 type Config struct {
 	LastDevice string `json:"last_device,omitempty"`
-	// DisplayUapi selects the indicator convention: false (default) =
-	// hardware sign, matching what the wheel actually does (M0 finding,
-	// work/analysis/14_direction_sign.md); true = raw UAPI projection
-	// sign (pre-M0 convention, kept for the [i] probe comparison).
-	DisplayUapi bool          `json:"display_uapi,omitempty"`
-	Defaults    *EffectParams `json:"defaults,omitempty"`
+	// DisplayInverted selects the indicator convention: false (default)
+	// = semantic sign, matching what the wheel actually does (M0
+	// finding, work/analysis/14_direction_sign.md): a positive level
+	// reads as a rightward (R) pull. true = the indicator is negated
+	// (legacy driver, pre-sign-fix convention), kept only for
+	// comparison against an unfixed t500rs backend.
+	DisplayInverted bool          `json:"display_inverted,omitempty"`
+	Defaults        *EffectParams `json:"defaults,omitempty"`
 }
 
 // ConfigPath returns ~/.config/ffpanel.json (XDG_CONFIG_HOME honored).

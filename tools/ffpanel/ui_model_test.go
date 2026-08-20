@@ -123,23 +123,24 @@ func TestAccelMult(t *testing.T) {
 	}
 }
 
-// TestDisplayLevelSigns pins the indicator convention: hardware sign
-// (default) negates the UAPI projection so L on screen = wheel pushed
-// left (M0 finding); the UAPI convention shows the raw projection.
+// TestDisplayLevelSigns pins the indicator convention: the default
+// (semantic, M0-verified) shows the raw projection so a positive level
+// reads right (R) and matches the wheel; the inverted convention
+// negates it (legacy driver, pre-sign-fix).
 func TestDisplayLevelSigns(t *testing.T) {
 	p := DefaultParams("constant")
 	p.Magnitude = 20000
 	fx := p.ToFx()
 
-	raw := StreamLevel(&fx, 100) // positive: UAPI says "east/right"
+	raw := StreamLevel(&fx, 100) // positive: wheel pushed right
 	if raw <= 0 {
-		t.Fatalf("expected a positive raw UAPI level, got %d", raw)
+		t.Fatalf("expected a positive level, got %d", raw)
 	}
-	if got := displayLevel(&fx, 100, false); got != -raw {
-		t.Errorf("hardware default: got %d, want %d (negated)", got, -raw)
+	if got := displayLevel(&fx, 100, false); got != raw {
+		t.Errorf("semantic default: got %d, want %d", got, raw)
 	}
-	if got := displayLevel(&fx, 100, true); got != raw {
-		t.Errorf("uapi mode: got %d, want %d", got, raw)
+	if got := displayLevel(&fx, 100, true); got != -raw {
+		t.Errorf("inverted mode: got %d, want %d", got, -raw)
 	}
 }
 

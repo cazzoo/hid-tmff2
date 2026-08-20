@@ -85,7 +85,7 @@ type model struct {
 	playFx    Fx
 	lastLevel int
 
-	uapiSign bool // [i] probe: false = hardware sign (default, M0-verified)
+	invertDisplay bool // [i] probe: false = semantic sign (default, M0-verified)
 
 	// real-time wheel position (EV_ABS drained from the reader fd)
 	wheelVal  int32
@@ -124,7 +124,7 @@ func newModel() model {
 	}
 	m.cfg = LoadConfig()
 	m.devs = ScanDevices()
-	m.uapiSign = m.cfg.DisplayUapi
+	m.invertDisplay = m.cfg.DisplayInverted
 	m.gainPct = 100
 	m.acPct = 0
 	m.status = "pick a force-feedback device"
@@ -332,7 +332,7 @@ func (m *model) shutdown() {
 		}
 		m.dev = nil
 	}
-	m.cfg.DisplayUapi = m.uapiSign
+	m.cfg.DisplayInverted = m.invertDisplay
 	_ = m.cfg.Save()
 }
 
@@ -363,7 +363,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			t := uint64(now.Sub(m.playStart).Milliseconds())
 			lvl := StreamLevel(&m.playFx, t)
 			m.lastElapsed = float64(t) / 1000.0
-			m.lastLevel = displayLevel(&m.playFx, t, m.uapiSign)
+			m.lastLevel = displayLevel(&m.playFx, t, m.invertDisplay)
 			if m.expired(now) && lvl == 0 {
 				m.playing = false
 				// Deterministic termination even if the driver's

@@ -110,13 +110,13 @@ func (m model) updateEditor(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case " ":
 		m.togglePlay()
 	case "i":
-		m.uapiSign = !m.uapiSign
-		m.cfg.DisplayUapi = m.uapiSign
+		m.invertDisplay = !m.invertDisplay
+		m.cfg.DisplayInverted = m.invertDisplay
 		_ = m.cfg.Save()
-		if m.uapiSign {
-			m.setStatus("monitor: UAPI sign (pre-M0 convention, persisted)")
+		if m.invertDisplay {
+			m.setStatus("monitor: display INVERTED (legacy driver, pre sign-fix; persisted)")
 		} else {
-			m.setStatus("monitor: hardware sign — matches the wheel (persisted)")
+			m.setStatus("monitor: display matches the wheel (persisted)")
 		}
 	case "u":
 		m.forceReupload()
@@ -256,10 +256,8 @@ func (m model) viewEditor() string {
 	// monitor
 	b.WriteString("\n")
 	lvlLabel := "expected force"
-	if m.uapiSign {
-		lvlLabel = "expected force (UAPI sign)"
-	} else {
-		lvlLabel = "expected force (hardware sign)"
+	if m.invertDisplay {
+		lvlLabel = "expected force (display inverted)"
 	}
 	var lvl float64
 	elapsed := 0.0
@@ -268,7 +266,7 @@ func (m model) viewEditor() string {
 		if tMs < 0 {
 			tMs = 0
 		}
-		lvl = float64(displayLevel(&m.playFx, uint64(tMs), m.uapiSign))
+		lvl = float64(displayLevel(&m.playFx, uint64(tMs), m.invertDisplay))
 		elapsed = float64(tMs) / 1000.0
 	} else if m.uploaded {
 		// frozen at the moment playback stopped/expired — not a
@@ -337,7 +335,7 @@ func (m model) viewEditor() string {
 
 	b.WriteString(stHelp.Render(
 		"  ↑/↓ row · ←/→ ±1 (shift ±10; hold gently accelerates to ×100) · enter exact value\n" +
-			"  space play/stop · i sign convention (hardware/UAPI) · u force re-upload\n" +
+			"  space play/stop · i invert display (legacy driver) · u force re-upload\n" +
 			"  g gain · a autocenter · esc back (stops+erases) · q quit (stops+erases)"))
 	b.WriteString("\n")
 	m.writeStatus(&b)
@@ -364,13 +362,13 @@ func slider10(pct int) string {
 }
 
 // displayLevel computes the monitor level in the selected sign
-// convention. The hardware sign (default, M0-verified — see
-// work/analysis/14_direction_sign.md) negates the UAPI projection so
-// L on screen = wheel pushed left; the UAPI convention shows the raw
-// projection instead.
-func displayLevel(fx *Fx, tMs uint64, uapi bool) int {
+// convention. The default (semantic, M0-verified — see
+// work/analysis/14_direction_sign.md) shows the raw projection so a
+// positive level reads as a rightward (R) pull, matching the wheel;
+// the inverted convention negates that (legacy driver, pre-sign-fix).
+func displayLevel(fx *Fx, tMs uint64, inverted bool) int {
 	l := StreamLevel(fx, tMs)
-	if !uapi {
+	if inverted {
 		return -l
 	}
 	return l

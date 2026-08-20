@@ -59,6 +59,16 @@ static inline s8 t500rs_scale_const_level_s8(int level)
  * Mirrors t300rs_calculate_constant_level()'s projection semantics but
  * keeps the full T500RS range and uses t500rs_scale_const_level_s8() for
  * clamping and conversion.
+ *
+ * SIGN: the 0x03 param channel's byte is INVERTED relative to UAPI
+ * semantics on this hardware - hardware-established 2026-08-20 across
+ * two sessions (work/analysis/14_direction_sign.md): a positive
+ * projected level pushed the wheel LEFT and a negative one RIGHT
+ * (UAPI: east/16384 + positive level = rightward). The projection is
+ * therefore negated here so the wire byte carries UAPI sign, exactly
+ * like the 04 0e stream writer (t500rs_synth_stream_level) - after
+ * both fixes the two channels agree and positive always means
+ * rightward. Callers above this helper work in semantic levels.
  */
 static inline s8 t500rs_scale_const_with_direction(int level, u16 direction)
 {
@@ -66,7 +76,7 @@ static inline s8 t500rs_scale_const_with_direction(int level, u16 direction)
 
 	projected = (level * fixp_sin16(direction * 360 / 0x10000)) / 0x7fff;
 
-	return t500rs_scale_const_level_s8(projected);
+	return t500rs_scale_const_level_s8(-projected);
 }
 
 /*
