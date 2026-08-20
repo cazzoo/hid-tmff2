@@ -94,13 +94,13 @@ func (m model) updateEditor(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.rowCursor++
 		}
 	case "left", "-":
-		m.adjust(-1)
+		m.nudge(-1, 1, "left")
 	case "right", "+", "=":
-		m.adjust(1)
+		m.nudge(1, 1, "right")
 	case "shift+left":
-		m.adjust(-10)
+		m.nudge(-1, 10, "left")
 	case "shift+right":
-		m.adjust(10)
+		m.nudge(1, 10, "right")
 	case "enter":
 		row := m.rows[m.rowCursor]
 		m.input.SetValue(strconv.Itoa(row.get(&m.p)))
@@ -130,10 +130,41 @@ func (m model) updateEditor(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return &m, nil
 }
 
-func (m *model) adjust(delta int) {
+// nudge adjusts the selected row by dir*step. Terminal auto-repeat
+// delivers a stream of identical KeyMsgs while the key is held; the
+// step grows with hold duration (accelMult), so a held shift+arrow
+// sweeps the value range logarithmically instead of line-by-line.
+func (m *model) nudge(dir, base int, keyID string) {
+	now := time.Now()
+	if m.holdKey != keyID || now.Sub(m.holdLast) > 350*time.Millisecond {
+		m.holdKey = keyID
+		m.holdSince = now
+	}
+	m.holdLast = now
+	step := base * accelMult(now.Sub(m.holdSince))
 	row := m.rows[m.rowCursor]
-	row.set(&m.p, clamp(row.get(&m.p)+delta, row.min, row.max))
+	row.set(&m.p, clamp(row.get(&m.p)+dir*step, row.min, row.max))
 	m.paramsChanged()
+}
+
+// accelMult returns the hold-time step multiplier: 1x for the first
+// 400 ms (a tap is a precise single step), then one more decade every
+// 1.2 s of continuous holding, capped at 1000x. Exponential step
+// growth = logarithmic value traversal: 0 -> 65535 needs ~7 held
+// steps at full acceleration instead of thousands.
+func accelMult(held time.Duration) int {
+	if held < 400*time.Millisecond {
+		return 1
+	}
+	decades := int((held-400*time.Millisecond)/(1200*time.Millisecond)) + 1
+	if decades > 3 {
+		decades = 3
+	}
+	mult := 1
+	for i := 0; i < decades; i++ {
+		mult *= 10
+	}
+	return mult
 }
 
 const barHalf = 14
@@ -236,6 +267,10 @@ func (m model) viewEditor() string {
 		}
 		lvl = float64(displayLevel(&m.playFx, uint64(tMs), m.signFlipped))
 		elapsed = float64(tMs) / 1000.0
+	} else if m.uploaded {
+		// frozen at the moment playback stopped/expired — not a
+		// misleading "0.0s"
+		elapsed = m.lastElapsed
 	}
 	side := "-"
 	if lvl < -0.5 {
@@ -269,9 +304,9 @@ func (m model) viewEditor() string {
 	}
 
 	b.WriteString(stHelp.Render(
-		"  ↑/↓ row · ←/→ ±1 (shift ±10) · enter type value · space play/stop\n" +
-			"  i device-sign probe · u force re-upload · g gain · a autocenter\n" +
-			"  esc back (stops+erases) · q quit (stops+erases)"))
+		"  ↑/↓ row · ←/→ ±1 (shift ±10; hold to accelerate ×10/1.2s) · enter exact value\n" +
+			"  space play/stop · i device-sign probe · u force re-upload\n" +
+			"  g gain · a autocenter · esc back (stops+erases) · q quit (stops+erases)"))
 	b.WriteString("\n")
 	m.writeStatus(&b)
 	return b.String()

@@ -62,11 +62,18 @@ TUI. Root is normally required (O_RDWR on the event node); a udev rule
 - **editor+monitor**: `↑/↓` select a parameter, `←/→` adjust (`shift`
   ×10, `+`/`-` also work), `enter` types an exact value, `space`
   play/stop, `i` flips the device-sign probe, `u` forces a re-upload,
-  `g`/`a` gain/autocenter sliders, `esc` back, `q` quit.
+  `g`/`a` gain/autocenter sliders, `esc` back, `q` quit. Holding an
+  arrow key accelerates the step ×10 every 1.2 s (after a 400 ms
+  settle, capped at ×1000), so values sweep logarithmically — a tap is
+  still a precise ±1/±10.
 
 Parameter edits ride the driver's *update* path — a plain `EVIOCSFF`
 on the existing effect id after a 30 ms debounce (never erase+create,
-which would churn effect ids and slot-0 state). Gain/autocenter use
+which would churn effect ids and slot-0 state). One exception mirrors
+the kernel: **count is a property of the play event** (the `EV_FF`
+value), so editing it while playing does not change the running
+playback — the monitor keeps modeling the running count and the next
+`space` play picks up the new one. Gain/autocenter use
 the FF_GAIN/FF_AUTOCENTER pseudo-effects with the fftest convention
 (level = pct × 65535 / 100). Quitting stops playback, erases every
 uploaded id and closes the fd — no residual torque; the editor also
@@ -88,6 +95,14 @@ degrees — so **direction 0 (north) produces zero force** on these
 wheels and `direction 1` also truncates to zero. The default here is
 16384 (90°, full force along the wheel axis). The editor warns on
 direction 0.
+
+### The wire-sign finding (M0)
+
+Hardware-confirmed 2026-08-20: the wheel pulls opposite to the UAPI
+prediction (`work/analysis/14_direction_sign.md` has the evidence and
+the gated D1 driver-fix checklist). Until D1 lands, press `i` in the
+TUI so the monitor matches what you feel — the finding persists across
+runs in `~/.config/ffpanel.json`.
 
 ## Parity contract
 

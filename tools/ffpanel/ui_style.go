@@ -14,12 +14,12 @@ var (
 		Padding(0, 1)
 
 	stHeader = lipgloss.NewStyle().
-		Foreground(lipgloss.Color("252"))
+			Foreground(lipgloss.Color("252"))
 
 	stSelected = lipgloss.NewStyle().
-		Bold(true).
-		Foreground(lipgloss.Color("15")).
-		Background(lipgloss.Color("62"))
+			Bold(true).
+			Foreground(lipgloss.Color("15")).
+			Background(lipgloss.Color("62"))
 
 	stDim = lipgloss.NewStyle().
 		Foreground(lipgloss.Color("241"))
@@ -42,13 +42,13 @@ var (
 		Padding(0, 1)
 
 	stMonitor = lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(lipgloss.Color("89")).
-		Padding(0, 1)
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color("89")).
+			Padding(0, 1)
 
 	stCursor = lipgloss.NewStyle().
-		Foreground(lipgloss.Color("212")).
-		Bold(true)
+			Foreground(lipgloss.Color("212")).
+			Bold(true)
 
 	stLabel = lipgloss.NewStyle().
 		Width(15)

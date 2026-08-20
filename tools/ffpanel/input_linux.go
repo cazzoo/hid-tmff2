@@ -55,7 +55,7 @@ const (
 )
 
 func eviocgbit(ev byte, size uintptr) uintptr {
-	return uintptr(2<<30 | int(size)<<16 | 'E'<<8 | 0x20) + uintptr(ev)
+	return uintptr(2<<30|int(size)<<16|'E'<<8|0x20) + uintptr(ev)
 }
 
 var le = binary.LittleEndian
@@ -198,23 +198,23 @@ func ScanDevices() []DeviceInfo {
 // EffectParams is the tool-side effect representation shared by the
 // one-shot CLI and the TUI. Field defaults mirror the C ffctl.
 type EffectParams struct {
-	Kind         string // sine|square|triangle|sawup|sawdown|constant|ramp|rumble
-	Period       int    // ms, periodic only
-	Magnitude    int    // 0..32767; also constant level
-	Offset       int    // periodic offset
-	Phase        int    // centidegrees, periodic
-	Direction    int    // 0..65535; 0 = zero force here
-	Duration     int    // ms, 0 = until stopped
-	Count        int    // play repetitions
-	Delay        int    // start delay ms
-	Attack       int    // envelope attack ms
-	AttackLevel  int    // 0..32767
-	Fade         int    // envelope fade ms
-	FadeLevel    int    // 0..32767
-	Start        int    // ramp start level
-	End          int    // ramp end level
-	Strong       int    // rumble strong magnitude
-	Weak         int    // rumble weak magnitude
+	Kind        string // sine|square|triangle|sawup|sawdown|constant|ramp|rumble
+	Period      int    // ms, periodic only
+	Magnitude   int    // 0..32767; also constant level
+	Offset      int    // periodic offset
+	Phase       int    // centidegrees, periodic
+	Direction   int    // 0..65535; 0 = zero force here
+	Duration    int    // ms, 0 = until stopped
+	Count       int    // play repetitions
+	Delay       int    // start delay ms
+	Attack      int    // envelope attack ms
+	AttackLevel int    // 0..32767
+	Fade        int    // envelope fade ms
+	FadeLevel   int    // 0..32767
+	Start       int    // ramp start level
+	End         int    // ramp end level
+	Strong      int    // rumble strong magnitude
+	Weak        int    // rumble weak magnitude
 }
 
 // DefaultParams returns ffctl's defaults.
@@ -305,10 +305,18 @@ func (p *EffectParams) Marshal(id int16) [48]byte {
 }
 
 // ToFx converts to the monitor's parity model. Rumble goes through the
-// same rumble->sine conversion the parent driver applies at upload.
+// same rumble->sine conversion the parent driver applies at upload —
+// and, like the driver, keeps this effect's delay/length and takes the
+// repeat count from the play event, so the monitor must overlay p's
+// delay/count on top of the converted shape (RumbleConvert's own
+// count=1/delay=0 is what the parity vectors pin, not what a running
+// playback uses).
 func (p *EffectParams) ToFx() Fx {
 	if p.Kind == "rumble" {
-		return RumbleConvert(p.Strong, p.Weak, uint32(p.Duration))
+		fx := RumbleConvert(p.Strong, p.Weak, uint32(p.Duration))
+		fx.DelayMs = uint32(p.Delay)
+		fx.Count = uint32(p.Count)
+		return fx
 	}
 	return Fx{
 		Type:       p.Kind,

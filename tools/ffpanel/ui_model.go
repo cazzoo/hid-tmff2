@@ -95,6 +95,14 @@ type model struct {
 	dirty     bool
 	changedAt time.Time
 
+	// arrow-key hold tracking: repeated key events from the terminal's
+	// auto-repeat grow the step logarithmically (see accelMult).
+	holdKey   string
+	holdSince time.Time
+	holdLast  time.Time
+
+	lastElapsed float64 // frozen elapsed shown after stop/expiry
+
 	status string
 	err    error
 	width  int
@@ -217,9 +225,20 @@ func (m *model) applyUpdate(now time.Time) {
 		return
 	}
 	if m.playing {
-		m.playFx = m.p.ToFx()
+		m.refreshPlayFx()
 	}
 	m.setStatus(fmt.Sprintf("updated id=%d", m.dev.effectID))
+}
+
+// refreshPlayFx rebuilds the monitor model from the edited params,
+// preserving the running playback's repeat count: EVIOCSFF rewrites
+// the effect table, but the running count comes from the EV_FF play
+// event and cannot be updated mid-play (the driver sets e->count only
+// in its play callback). A fresh [space] play picks up the new count.
+func (m *model) refreshPlayFx() {
+	running := m.playFx.Count
+	m.playFx = m.p.ToFx()
+	m.playFx.Count = running
 }
 
 // togglePlay is [space]: first press uploads + plays (value = count),
@@ -334,6 +353,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.playing && m.dev != nil {
 			t := uint64(now.Sub(m.playStart).Milliseconds())
 			lvl := StreamLevel(&m.playFx, t)
+			m.lastElapsed = float64(t) / 1000.0
 			if m.expired(now) && lvl == 0 {
 				m.playing = false
 				m.setStatus(fmt.Sprintf(

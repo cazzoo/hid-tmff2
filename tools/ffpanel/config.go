@@ -14,8 +14,8 @@ import (
 
 // Config is the on-disk state.
 type Config struct {
-	LastDevice        string `json:"last_device,omitempty"`
-	DeviceSignFlipped bool   `json:"device_sign_flipped,omitempty"`
+	LastDevice        string        `json:"last_device,omitempty"`
+	DeviceSignFlipped bool          `json:"device_sign_flipped,omitempty"`
 	Defaults          *EffectParams `json:"defaults,omitempty"`
 }
 
