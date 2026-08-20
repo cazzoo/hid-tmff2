@@ -1,7 +1,12 @@
 # ffpanel — interactive FF control panel (Go + Bubble Tea): plan
 
-**Status:** draft v2 (self-reviewed — Momus agent unavailable, API-key infra
-failure) · **Repo:** hid-tmff2 · **Supersedes:** none (extends `tools/ffctl.c`)
+**Status:** implemented 2026-08-19 (M1–M4: TUI + one-shot `play` mode,
+golden-vector parity tests passing, gain/autocenter, config
+persistence, README, `tools/ffctl.c` deleted and docs retargeted —
+see `tools/ffpanel/`). M0/D1 remain hardware procedures to run on the
+wheel. · **Draft v2 was self-reviewed (Momus agent unavailable,
+API-key infra failure)** · **Repo:** hid-tmff2 · **Supersedes:**
+`tools/ffctl.c` (retired)
 
 ## 0. Context
 
@@ -36,12 +41,13 @@ Analysis:
 - Therefore exactly one of {UAPI expectation, device wire sign} is flipped.
   The C tool's bar implements the former; the driver streams the latter.
 
-**Procedure (2 min, existing binary):**
+**Procedure (2 min, single binary — ffctl is retired, ffpanel `play`
+reproduces it verbatim):**
 
 ```
-gcc -O2 -Wall -o ffctl tools/ffctl.c -lm
-sudo ./ffctl /dev/input/eventXX constant --direction 16384   # UAPI says: push RIGHT
-sudo ./ffctl /dev/input/eventXX constant --direction 49152   # UAPI says: pull LEFT
+cd tools/ffpanel && go build -o ffpanel .
+sudo ./ffpanel play /dev/input/eventXX constant --direction 16384   # UAPI says: push RIGHT
+sudo ./ffpanel play /dev/input/eventXX constant --direction 49152   # UAPI says: pull LEFT
 ```
 
 - **Both feel opposite** ⇒ device wire sign inverted ⇒ execute D1.

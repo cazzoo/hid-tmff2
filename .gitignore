@@ -9,4 +9,6 @@ modules.order
 .opencode
 comunity-captures/
 work/raw_data/
-ffctl
+/ffpanel
+/tools/ffpanel/ffpanel
+!tools/ffpanel/go.mod

@@ -16,7 +16,8 @@
 > ~0.5 Hz wobble, shorter periods play proportionally faster rumble. The
 > earlier "feels like rumble" report was fftest's uninitialized scanf inputs,
 > not a driver bug. **P3-5 is closed ✅ — periodic/ramp/rumble work on b65e
-> via host-side synthesis.**
+> via host-side synthesis.** (ffctl was later retired into
+> `ffpanel play` — `tools/ffpanel` — with identical flags.)
 
 **Date:** 2026-08-18 · **Wheel:** T500RS standard rim, `044f:b65e` · **Capture:**
 `raw_data/t500_verify_20260818.pcapng` (164 packets, tail truncated — tshark was
