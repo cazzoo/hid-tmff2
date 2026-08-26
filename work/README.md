@@ -46,6 +46,12 @@ line) and intended as a permanent reference for future driver fixes.
 
 > Updated 2026-08-12 after second pass. See `analysis/10_second_pass_findings.md` for
 > the validation/correction pass.
+>
+> **Status note (2026-08-26):** the 🔴 items below describe the driver as it was
+> at capture-analysis time. All four have since been fixed and hardware-verified:
+> per-slot `effect_id` (04), START arg `0xff` / per-slot STOP (§2), range-command
+> removal (§5), and the `04 0e` constant-via-periodic stream is the basis of the
+> synthesis engine (see `analysis/13`–`15` and docs/T500RS_FFBEFFECTS.md).
 
 1. **🔴 `effect_id` is not always `0x00`.** Validated across all 8 `0x01` + 10 `0x41`
    packets. The rule is `effect_id == slot_index`. Driver's hardcoded `0x00` is wrong.

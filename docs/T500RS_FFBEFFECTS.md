@@ -127,7 +127,7 @@ This declares an effect. Sent first.
 | Offset | Size | Field          | Meaning                                                        |
 |--------|------|----------------|----------------------------------------------------------------|
 | 0      | 1    | packet type    | `0x01`                                                         |
-| 1      | 1    | effect_id      | **Always `0x00`** (see paragraph 3)                                     |
+| 1      | 1    | effect_id      | Hardware slot: 0 for constant/periodic, n for conditions (see paragraph 3) |
 | 2      | 1    | effect type    | What kind of effect (see table below)                          |
 | 3      | 1    | control        | Always `0x40`                                                  |
 | 4–5    | 2    | duration       | How long it should run, in milliseconds                        |
@@ -188,7 +188,7 @@ Sets the actual push/pull of a constant effect.
 | 0      | 1    | packet type | `0x03`                                             |
 | 1      | 1    | code        | Low byte of the parameter subtype (`0x0e` for constant) |
 | 2      | 1    | reserved    | `0x00`                                             |
-| 3      | 1    | level       | Force, signed −127 to +127 (negative = other way)  |
+| 3      | 1    | level       | Force, signed −127 to +127 (positive = rightward pull) |
 
 ### 5.4 Level stream - `0x04` (8 bytes)
 
@@ -302,28 +302,34 @@ reference:
 
 | Quantity            | Computer range      | Wheel range     | Conversion (device = ...)        |
 |---------------------|---------------------|-----------------|-------------------------------|
-| Direction           | 0–65535 (0=forward) | 0–35999 (0.01°) | `dir x 36000 / 65536`          |
 | Duration            | milliseconds        | milliseconds    | direct; `0xffff` = infinite    |
 | Constant level      | −32767...+32767     | −127...+127     | `level x 127 / 32767`          |
 | Synth stream level  | −32767...+32767     | −128...+127     | `level x 127 / 32767` (host-side) |
-
-> **Sign convention (M0, 2026-08-20):** the `0x03` constant channel and the
-> `0x04` stream channel both carry UAPI sign — a **positive** level byte means a
-> **rightward** (east) pull, negative means leftward. The driver negates the
-> projected level at both `t500rs_scale_const_with_direction` (native `0x03`)
-> and `t500rs_synth_stream_level` (stream `0x04`) because the bare hardware byte
-> was inverted relative to UAPI on this wheel (work/analysis/14_direction_sign.md).
 | Envelope level      | 0–32767             | (applied host-side, 0–100%) | `env / 32767` scale   |
-| Condition coeff.    | 0–32767             | 0–10            | `coeff x 10 / 32767`           |
+| Condition coeff.    | 0–32767             | 0–10            | `coeff x level% x 10 / 32767`, rounded |
 | Condition center/deadband | −32767...+32767 / 0–65535 | device units | / 65 *(still being verified)* |
 | Condition saturation| 0–65535             | 0–100           | `sat x 100 / 65535`            |
 
-Periodic magnitude, phase, offset, period and ramp levels no longer appear in
-this table: they are consumed by the software synthesis engine and never
+Periodic magnitude, phase, offset, period and ramp levels no longer appear
+in this table: they are consumed by the software synthesis engine and never
 travel the wire as separate fields (see 5.4).
 
-A few of the condition-effect scalings are marked *still being verified* in the
-driver code - they work, but the exact divisors were not all confirmed against
+**Direction** never reaches the wheel as a number. A wheel has one force
+axis, so the driver folds the direction into the level's *sign*
+(`sin(dir) < 0` → negate the level) and always sends full magnitude. The
+level must not be scaled by `sin()`: games that encode the force sign as
+polar 0°/180° (rFactor 2 and other DirectInput titles) land exactly where
+`sin()` is zero and would be silenced.
+
+**Sign convention:** both level channels — the native `0x03` packet and
+the `0x04` stream — are UAPI-standard: a **positive** byte pulls the wheel
+**rightward**, a negative byte pulls leftward. The driver never negates on
+its own. One known exception is game-side: rFactor 2 uploads its effects
+sign-inverted, so it needs the in-game "FFB invert" (-100%) setting; a
+driver cannot detect or special-case a game.
+
+A few of the condition-effect scalings are marked *still being verified* in
+the driver code - they work, but the exact divisors were not all confirmed against
 hardware captures.
 
 ---
@@ -341,9 +347,8 @@ hardware captures.
   software timers enforce real durations for everything.
 - **The wheel never auto-stops.** Ending an effect is the driver's job, via the
   software-expiry timer (native effects) or the synthesis engine (periodic/ramp).
-- **Direction** is folded into the constant *level* and into the synthesis
-  engine's per-sample projection; it is not a separate field in the `0x01`
-  packet.
+- **Direction** is folded into the level's *sign* (±1, never a magnitude
+  scale); it is not a separate field in any packet.
 - **Live updates:** only the parameter packets (`0x03`/`0x04`/`0x05`) can be
   changed while an effect plays. Changing duration or delay requires re-uploading
   the whole effect.

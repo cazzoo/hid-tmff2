@@ -55,22 +55,13 @@ static inline s8 t500rs_scale_const_level_s8(int level)
 	return (s8)((level * 127LL) / 32767);
 }
 
-/* Apply effect direction to a constant level and convert to s8.
- *
- * SIGN: NOT negated. The M0 hardware cross-check that concluded this
- * channel was wire-inverted (work/analysis/14_direction_sign.md) ran on
- * a wheel already exercised by the stream channel in the same boot -
- * that tainting is the caveat documented in 14 itself. In-game verdict
- * (2026-08-21): with the M0 negation active, constant-force games (ACC,
- * Dirt Rally 2.0) felt mirrored; the pre-M0 un-negated byte is the
- * field-proven behavior for this channel, so the negation is removed
- * pending the re-test noted in 14/15.
- *
- * DIRECTION: sign-folded, not sin()-scaled - same rationale and
- * evidence as t500rs_synth_dir_project() (the rF2/PCars family encodes
- * torque sign as polar 0/180deg -> kernel direction 0x0000/0x8000,
- * where sin() == 0). Byte-identical to the old projection at the
- * hardware-verified 0x4000/0xC000 cardinals.
+/* Fold the effect direction into the level's sign and convert to s8.
+ * The wire byte is UAPI-standard: positive = rightward pull.
+ * A wheel has one force axis, so direction only picks left/right -
+ * never sin()-scale the magnitude: games that encode force sign as
+ * polar 0/180deg (kernel direction 0x0000/0x8000, e.g. the rFactor
+ * family) sit exactly where sin() == 0 and would be silenced.
+ * See docs/T500RS_FFBEFFECTS.md §7, work/analysis/15_rf2_synth_sign_fold.md.
  */
 static inline s8 t500rs_scale_const_with_direction(int level, u16 direction)
 {
@@ -273,30 +264,13 @@ static unsigned long t500rs_synth_tick_jiffies(void)
 }
 
 /*
- * Project an OS-scale level onto the wheel axis for an FF direction.
- *
- * SIGN-FOLD, not sin()-scaling (2026-08-20, rF2 fix — see
- * work/analysis/15_rf2_synth_sign_fold.md): a wheel has exactly one force
- * axis, so the direction encodes the SIGN of the torque, not a magnitude
- * scaling. Wine's evdev provider maps the game's polar angle straight
- * into ff_effect.direction (dlls/winebus.sys/bus_udev.c:
- * "direction[0] * 0x800 / 1125"), and several DirectInput titles (the
- * rFactor family, Project Cars 1/2, AMS) encode torque sign as polar
- * 0deg/180deg, which lands on kernel direction 0x0000/0x8000 - exactly
- * where sin() == 0. The old sin() projection therefore zeroed the ENTIRE
- * sample there; for rF2 that killed the main FFB channel outright,
- * because its sine effect carries the force in `offset` with
- * magnitude == 0 (see work/analysis/05_periodic_0x04_anomaly.md and the
- * C2 capture: zero 0x03 packets, 32k constant-via-periodic stream).
- *
- * Folding to +/-1 is byte-identical to the old projection at the M0-
- * hardware-verified directions 0x4000/0xC000 (sin == +/-0x7fff ->
- * +/-level) while every other direction now passes full magnitude,
- * matching the Windows driver's treatment of a one-axis device.
- *
- * NB: the actual waveform math (fixp_sin16 inside the FF_SINE case of
- * t500rs_synth_sample()) is unrelated to direction and must stay a true
- * sine.
+ * Fold the effect direction into a sample's sign: a wheel has one
+ * force axis, so direction picks left/right and must never scale the
+ * magnitude. sin()-scaling zeroes games that encode force sign as
+ * polar 0/180deg (kernel direction 0x0000/0x8000 - the rFactor
+ * family); folding is byte-identical to sin()-scaling at the
+ * cardinals 0x4000/0xC000. Evidence: work/analysis/
+ * 15_rf2_synth_sign_fold.md.
  */
 static int t500rs_synth_dir_project(int level, u16 direction)
 {
@@ -463,18 +437,11 @@ static int t500rs_synth_send_main(struct t500rs_device_entry *t500rs)
  * residual rumble). The MAIN is declared infinite-duration, so nothing
  * else ever clears it.
  *
- * SIGN CONVENTION: pass-through, UAPI-standard (positive wire byte =
- * rightward), identical to the native 0x03 channel. History: M0
- * (2026-08-20, work/analysis/14_direction_sign.md) negated this writer
- * from a lab ramp test; in-game testing (2026-08-26) showed that build
- * made standard-encoded games feel mirrored (ACC, Dirt Rally 2.0 -
- * constant effects riding the stream after synth_mode latched) while
- * rF2 alone was correct - i.e. rF2's own effect encoding is
- * sign-inverted relative to UAPI, and the negation was compensating
- * for the game, not for the wire (the C2 capture's mean-negative
- * centering bias corroborates). The negation is removed; rF2 uses its
- * in-game FFB invert (-100%). No per-game exception is possible in the
- * driver: the kernel FF API carries no game identity.
+ * SIGN: pass-through, UAPI-standard (positive byte = rightward), same
+ * as the native 0x03 channel. One exception lives game-side: rFactor 2
+ * uploads its effects sign-inverted and needs the in-game FFB invert
+ * (-100%); the driver cannot detect or special-case a game. Evidence:
+ * work/analysis/14_direction_sign.md, 15_rf2_synth_sign_fold.md.
  */
 static int t500rs_synth_stream_level(struct t500rs_device_entry *t500rs,
 				     u8 *buf, s8 level)
@@ -673,12 +640,9 @@ static void t500rs_build_r05_condition(struct t500rs_pkt_r05_condition *p,
 	 * coefficient maps to 0 (no force) rather than wrapping to ~246, and
 	 * any overflow saturates at 10.
 	 *
-	 * Rounding (not truncation): the 0..10 device scale is brutally
-	 * coarse - at the default damper_level=30 a game coefficient of
-	 * 20000/32767 truncated to 1/10, while rF2 drives dampers at 10/10
-	 * on Windows (C2 f2653). Round-to-nearest recovers one step
-	 * (20000*30/100 -> 2/10) without touching the range, whose ceiling
-	 * remains capture-unverified (see below).
+	 * Rounding (not truncation): the 0..10 scale is coarse, and
+	 * truncation needlessly weakens mid-range coefficients (20000 at
+	 * level 30 gives 1/10 truncated, 2/10 rounded).
 	 *
 	 * CAPTURE-VERIFY: unvalidated against a known input/output pair. The
 	 * community captures only show the device-side bytes (C2 f2653:
