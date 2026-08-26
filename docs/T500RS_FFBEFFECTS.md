@@ -72,9 +72,6 @@ not always `0x00`:
   assigned sequentially → their `0x01` uploads and `0x41` START/STOP packets
   carry that slot number (`41 01 41 ff` starts slot 1).
 
-Windows captures confirm non-zero IDs on every condition START/STOP
-(work/analysis/04_effect_id_bug.md). Hardware-validated 2026-08.18.
-
 ### Why the wheel never stops on its own
 
 Unlike some other wheels, the T500RS has no built-in timer: once an effect is
@@ -148,8 +145,8 @@ This declares an effect. Sent first.
 
 Codes 0x20-0x24 (square/triangle/saw) were once guessed to be waveform
 selectors; they are unsourced and per-slot periodic declarations wedge the
-firmware (work/analysis/13_periodic_wedge.md). Waveforms other than sine are
-produced entirely in software and never appear in a MAIN packet.
+firmware. Waveforms other than sine are produced entirely in software and
+never appear in a MAIN packet.
 
 **Duration note:** for constant and periodic effects the wheel ignores the
 duration and runs until stopped, so the driver sends `0xffff` ("infinite") and
@@ -172,12 +169,10 @@ out (fade).
 | 8      | 1    | reserved       | `0x00`                                   |
 
 **Note:** the Linux driver applies envelopes to periodic/ramp effects entirely
-in software (the synthesis engine shapes the streamed level), so no envelope
-constraint exists on the driver side for those. For effects the firmware runs
-natively (constant, condition), zero envelopes are sent - the historical claim
-that non-zero envelopes "make the wheel reject later packets" was never
-capture-verified and is treated as folklore (P3-6, work/analysis/
-09_action_items.md).
+in software (the synthesis engine shapes the streamed level). For effects the
+firmware runs natively (constant, condition), all-zero envelopes are sent -
+non-zero values for those types have never been observed on the wire, and the
+game's envelope is warned about and dropped.
 
 ### 5.3 Constant force - `0x03` (4 bytes)
 
@@ -209,21 +204,19 @@ the constant-force channel:
 | 6      | 1    | reserved   | `0x00`                                                   |
 | 7–8    | 2    | magic      | `0x2710` LE, constant marker                             |
 
-Evidence: capture C2 contains 32 222 of these packets in one race session,
-with the level byte sweeping all 256 values (work/analysis/
-05_periodic_0x04_anomaly.md, Hypothesis B; 13_periodic_wedge.md erratum).
+Windows drivers stream these packets continuously (dozens per second) while
+synthesized effects play; the level byte is the live signed force signal.
 
 **How this driver plays periodic effects:** the first periodic/ramp upload
 declares slot 0 as a sine (`0x22`) MAIN with the constant channels and an
-infinite duration - byte-identical to the only periodic MAIN ever captured
-(C2 f2637) - and from then on a software engine computes the waveform
+infinite duration, and from then on a software engine computes the waveform
 (square/triangle/saw included), applies attack/fade envelopes, sums in any
 playing constant force, and streams the combined level with this packet.
 Nothing per-effect is ever declared on the wire.
 
-> ⚠️ A per-slot periodic-parameters variant (`04 2a …`, code ≠ `0x0e`) was
-> attempted once on real hardware: the firmware STALLs it and the wheel stays
-> wedged until re-enumeration. Do not reinvent per-slot periodic packets.
+> ⚠️ A per-slot periodic-parameters variant (`04 2a …`, code ≠ `0x0e`)
+> STALLs on this firmware and leaves the wheel wedged until
+> re-enumeration. Do not reinvent per-slot periodic packets.
 
 ### 5.5 Condition - `0x05` (11 bytes, sent twice)
 
@@ -256,7 +249,7 @@ Starts or stops an effect.
 | 0      | 1    | packet type | `0x41`                              |
 | 1      | 1    | effect_id   | The hardware slot (0 for constant/periodic, n for conditions) |
 | 2      | 1    | command     | `0x41` = START, `0x00` = STOP        |
-| 3      | 1    | argument    | `0xff` for START, `0x01` for STOP (hardware-validated on b65e) |
+| 3      | 1    | argument    | `0xff` for START, `0x01` for STOP |
 
 ### 5.7 Control and sync commands (`0x40`, `0x42`)
 
@@ -307,7 +300,8 @@ reference:
 | Synth stream level  | −32767...+32767     | −128...+127     | `level x 127 / 32767` (host-side) |
 | Envelope level      | 0–32767             | (applied host-side, 0–100%) | `env / 32767` scale   |
 | Condition coeff.    | 0–32767             | 0–10            | `coeff x level% x 10 / 32767`, rounded |
-| Condition center/deadband | −32767...+32767 / 0–65535 | device units | / 65 *(still being verified)* |
+| Condition center    | −32767...+32767     | device units    | `center / 20`                  |
+| Condition deadband  | 0–65535             | device units    | `deadband / 65` *(divisor unconfirmed)* |
 | Condition saturation| 0–65535             | 0–100           | `sat x 100 / 65535`            |
 
 Periodic magnitude, phase, offset, period and ramp levels no longer appear
@@ -328,9 +322,8 @@ its own. One known exception is game-side: rFactor 2 uploads its effects
 sign-inverted, so it needs the in-game "FFB invert" (-100%) setting; a
 driver cannot detect or special-case a game.
 
-A few of the condition-effect scalings are marked *still being verified* in
-the driver code - they work, but the exact divisors were not all confirmed against
-hardware captures.
+Only the condition deadband divisor is unconfirmed - it works, but the
+exact scaling was never checked against a known input/output pair.
 
 ---
 
@@ -342,7 +335,7 @@ hardware captures.
   channel breaks level updates.
 - **Never send per-slot periodic packets** (`04 2a …` or a MAIN on condition
   channels with a `0x2x` type): the firmware STALLs them and the wheel wedges
-  until re-enumeration (work/analysis/13_periodic_wedge.md).
+  until re-enumeration.
 - **Duration:** send `0xffff` in MAINs for constant/periodic; the driver's
   software timers enforce real durations for everything.
 - **The wheel never auto-stops.** Ending an effect is the driver's job, via the

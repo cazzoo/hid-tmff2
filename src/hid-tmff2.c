@@ -50,7 +50,7 @@ MODULE_PARM_DESC(gain,
 
 /* T500 RS only: power-on gain in percent. Default 100 keeps the init
  * 0x43 packet byte-identical to the historical hardcoded 0xff; Windows
- * seeds 90% (work/analysis/02_init_sequence_diffs.md).
+ * seeds 90%.
  */
 int default_gain = 100;
 module_param(default_gain, int, 0);

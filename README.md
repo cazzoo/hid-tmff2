@@ -121,8 +121,7 @@ sudo yum install linuxconsoletools # Fedora-based
 > bind. Install the bundled `hid-tminit` dependency (built automatically by
 > `make`), or make sure mainline `hid-thrustmaster` is **not** blacklisted.
 > If the wheel shows up as `b65d` in `lsusb` and no force feedback device
-> appears, the init driver is missing. Capture-derived details in
-> [`work/analysis/01_boot_mode_switch.md`](./work/analysis/01_boot_mode_switch.md).
+> appears, the init driver is missing.
 
 > **NOTE:** When using Secure Boot and DKMS, you need to remember to add DKMS MOK certificate
 > otherwise the module won't be loaded and the wheel might function incorrectly/not at all.

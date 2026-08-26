@@ -3,10 +3,9 @@
  *  HID driver for Thrustmaster T500RS wheel base that provides Force feedback
  *
  *  Protocol documentation: docs/T500RS_FFBEFFECTS.md
- *  Capture-derived protocol analysis: work/analysis/ (start at SUMMARY.md)
  *
  *  Reports observed in Windows captures that this driver deliberately does
- *  NOT produce or parse (see work/analysis/06_unknown_reports.md):
+ *  NOT produce or parse:
  *  - 0x0a (OUT, F1 rim only, 6x during init): attachment activation handshake
  *  - 42 01 00 (OUT, 9/15/32-byte variants): protocol re-sync / reset
  *  - 0x07 (IN, 230 Hz state report): handled by the stock HID parser
@@ -61,7 +60,7 @@ static inline s8 t500rs_scale_const_level_s8(int level)
  * never sin()-scale the magnitude: games that encode force sign as
  * polar 0/180deg (kernel direction 0x0000/0x8000, e.g. the rFactor
  * family) sit exactly where sin() == 0 and would be silenced.
- * See docs/T500RS_FFBEFFECTS.md §7, work/analysis/15_rf2_synth_sign_fold.md.
+ * See docs/T500RS_FFBEFFECTS.md §7.
  */
 static inline s8 t500rs_scale_const_with_direction(int level, u16 direction)
 {
@@ -76,7 +75,7 @@ static inline s8 t500rs_scale_const_with_direction(int level, u16 direction)
  * (0x0e + 0x1c*n / 0x1c + 0x1c*n), AND in the 0x01/0x41 effect_id byte.
  * The effect_id byte mirrors the slot index (0=constant, 1+=non-constant),
  * matching the param_sub derivation in t500rs_index_to_subtypes() and the
- * captured Windows behaviour (see work/analysis/04_effect_id_bug.md).
+ * captured Windows behaviour.
  */
 
 /* Map effect index to parameter/envelope subtypes as per protocol:
@@ -116,11 +115,9 @@ struct t500rs_device_entry {
 	 * replay.length here. A single re-arming delayed_work scans active[]
 	 * and sends a per-slot 0x41 STOP when each finite effect's time elapses.
 	 *
-	 * Per Windows USB captures (see work/analysis/04_effect_id_bug.md and
-	 * 10_second_pass_findings.md), STOP is per-slot: the 0x41 effect_id
-	 * byte addresses one slot at a time. There is no need for a "global
-	 * STOP" or a playing-flag guard, because each STOP only halts its own
-	 * effect.
+	 * STOP is per-slot: the 0x41 effect_id byte addresses one slot at
+	 * a time. There is no need for a "global STOP" or a playing-flag
+	 * guard, because each STOP only halts its own effect.
 	 *
 	 * expiry_buffer is a dedicated DMA-safe buffer so the worker (which runs
 	 * outside the core FFB worker) never races send_buffer (mirrors the
@@ -138,12 +135,11 @@ struct t500rs_device_entry {
 
 	/*
 	 * Host-side periodic/ramp synthesis engine (the firmware has no
-	 * waveform generator - see work/analysis/13_periodic_wedge.md
-	 * erratum). Once any periodic/ramp effect is uploaded, this engine
-	 * owns hardware slot 0 and the constant-force channel (0x0e):
-	 * waveforms are computed in software and the combined level is
-	 * streamed as 0x04 0x0e packets, matching how the Windows driver
-	 * drives the wheel (C2 f2637 MAIN + 32k-packet stream).
+	 * waveform generator, see docs/T500RS_FFBEFFECTS.md §5.4). Once any
+	 * periodic/ramp effect is uploaded, this engine owns hardware slot 0
+	 * and the constant-force channel (0x0e): waveforms are computed in
+	 * software and the combined level is streamed as 0x04 0x0e packets,
+	 * matching how the Windows driver drives the wheel.
 	 *
 	 * synth_mode is one-way per probe: there is no backend erase
 	 * callback, so the slot-0 MAIN stays type 0x22 for the session and
@@ -198,7 +194,7 @@ struct t500rs_device_entry {
  * - envelope_sub: envelope subtype (used by 0x02), or second conditional
  * subtype
  *
- * Per Windows captures, effect_type values this driver sends:
+ * Effect type values this driver puts on the wire:
  * - 0x00 = Constant
  * - 0x22 = Sine (the synth engine's slot-0 declaration; every periodic
  *   and ramp effect is host-synthesized onto it)
@@ -250,12 +246,12 @@ static void t500rs_build_r02_envelope(struct t500rs_pkt_r02_envelope *p,
  * Host-side waveform synthesis.
  *
  * The T500RS firmware has no periodic/ramp waveform engine (see
- * work/analysis/13_periodic_wedge.md and its erratum): the Windows driver
- * declares a sine MAIN on slot 0 with the constant-force channels and
- * streams the synthesized signal as '04 0e 00 00 <level> 00 10 27'
- * packets. Everything below reproduces that model - all waveform math
- * happens in software at the synth tick, nothing per-effect ever reaches
- * the wire.
+ * docs/T500RS_FFBEFFECTS.md §5.4): the Windows driver declares a sine
+ * MAIN on slot 0 with the constant-force channels and streams the
+ * synthesized signal as '04 0e 00 00 <level> 00 10 27' packets.
+ * Everything below reproduces that model - all waveform math happens
+ * in software at the synth tick, nothing per-effect ever reaches the
+ * wire.
  */
 
 static unsigned long t500rs_synth_tick_jiffies(void)
@@ -269,8 +265,7 @@ static unsigned long t500rs_synth_tick_jiffies(void)
  * magnitude. sin()-scaling zeroes games that encode force sign as
  * polar 0/180deg (kernel direction 0x0000/0x8000 - the rFactor
  * family); folding is byte-identical to sin()-scaling at the
- * cardinals 0x4000/0xC000. Evidence: work/analysis/
- * 15_rf2_synth_sign_fold.md.
+ * cardinals 0x4000/0xC000. See docs/T500RS_FFBEFFECTS.md §7.
  */
 static int t500rs_synth_dir_project(int level, u16 direction)
 {
@@ -410,8 +405,7 @@ static void t500rs_synth_kick(struct t500rs_device_entry *t500rs)
 }
 
 /*
- * Declare slot 0 as a sine on the constant-force channels. Byte-identical
- * to the only periodic MAIN ever observed on the wire (C2 f2637):
+ * Declare slot 0 as a sine on the constant-force channels:
  *   01 00 22 40 ff ff 00 00 00 0e 00 1c 00 00 00
  * (infinite duration, zero delay - replay timing is enforced in software).
  * Must be called before entering synth_mode. Uses send_buffer, i.e. the
@@ -440,8 +434,8 @@ static int t500rs_synth_send_main(struct t500rs_device_entry *t500rs)
  * SIGN: pass-through, UAPI-standard (positive byte = rightward), same
  * as the native 0x03 channel. One exception lives game-side: rFactor 2
  * uploads its effects sign-inverted and needs the in-game FFB invert
- * (-100%); the driver cannot detect or special-case a game. Evidence:
- * work/analysis/14_direction_sign.md, 15_rf2_synth_sign_fold.md.
+ * (-100%); the driver cannot detect or special-case a game.
+ * See docs/T500RS_FFBEFFECTS.md §7.
  */
 static int t500rs_synth_stream_level(struct t500rs_device_entry *t500rs,
 				     u8 *buf, s8 level)
@@ -644,14 +638,9 @@ static void t500rs_build_r05_condition(struct t500rs_pkt_r05_condition *p,
 	 * truncation needlessly weakens mid-range coefficients (20000 at
 	 * level 30 gives 1/10 truncated, 2/10 rounded).
 	 *
-	 * CAPTURE-VERIFY: unvalidated against a known input/output pair. The
-	 * community captures only show the device-side bytes (C2 f2653:
-	 * right_coeff=left_coeff=10 with unknown game input), which is
-	 * consistent with this formula but does not prove it. Also unknown:
-	 * whether the firmware accepts values above 10 at all. Sweep
-	 * right_coeff over {0, 8192, 16384, 24576, 32767} with spring_level=100
-	 * via fftest and capture with usbmon; expected device bytes are
-	 * {0, 2-3, 5, 7-8, 10}. See work/analysis/07_condition_deadband_unverified.md.
+	 * The exact scaling was derived from the Windows traffic, not from
+	 * a known input/output pair, and values above 10 have never been
+	 * observed on the wire.
 	 */
 	p->right_coeff = (u8)clamp_t(int,
 			(((right_coeff * (int)level) / 100) * 10 + 32767 / 2) /
@@ -662,21 +651,12 @@ static void t500rs_build_r05_condition(struct t500rs_pkt_r05_condition *p,
 				32767,
 			0, 10);
 
-	/* Center: /20 confirmed by captures (e.g. center=-372 = -7439/20 in
-	 * docs/T500RS_FFBEFFECTS.md capture C, and center=250 = 5000/20 in
-	 * capture B). The doc's contradictory "/65" row is incorrect.
-	 */
+	/* Center: scaled by /20. */
 	p->center = cpu_to_le16((s16)(center / 20));
 
-	/* Deadband: /65 is a guess between the doc's self-contradictory "/10"
-	 * and "/65" rows. CAPTURE-VERIFY: every 0x05 packet in both community
-	 * captures has deadband=0, so the divisor is completely unconstrained
-	 * by evidence. "/65" was chosen because 65535/65 = 1008 fits a u10
-	 * device field, whereas "/10" would give 6553 (overflows any field
-	 * smaller than u16). Verify by uploading springs with deadband
-	 * {100, 1000, 10000, 30000, 65535} via fftest and capturing with
-	 * usbmon; expected device words are ~{1, 15, 153, 461, 1008}. See
-	 * work/analysis/07_condition_deadband_unverified.md.
+	/* Deadband: the divisor is unconfirmed (captures only ever show
+	 * deadband=0); /65 was chosen so 65535 maps to 1008, which fits
+	 * the device field.
 	 */
 	p->deadband = cpu_to_le16((u16)(deadband / 65));
 
@@ -867,20 +847,11 @@ static void t500rs_build_r02_envelope(struct t500rs_pkt_r02_envelope *p,
 	p->subtype = subtype;
 
 	/*
-	* Per T500RS_EFFECTS.md, the device firmware rejects
-	* non-zero envelope values for periodic and constant effects with
-	* EPROTO (-71). Only ramp effects can safely use envelopes.
-	*
-	* Windows driver always sends zeros for periodic/constant:
-	* 02 38 00 00 00 00 00 00 00
-	*
-	* CAPTURE-VERIFY: every 0x02 packet in both community captures is
-	* all-zero (5 packets across the two games), so the non-zero ramp
-	* path below has never been observed on the wire. The EPROTO claim
-	* and the ramp exception both need hardware confirmation: play a
-	* ramp with attack/fade (e.g. attack 100ms/50%, fade 100ms/50%) via
-	* fftest and capture with usbmon. See work/analysis/03_packet_inventory.md
-	* (0x02 section) and 09_action_items.md (P3-6).
+	* The Windows driver always sends all-zero envelopes for periodic
+	* and constant effects; non-zero values have never been observed on
+	* the wire for those types. Only ramp effects may carry a non-zero
+	* envelope (allow_nonzero); anything else the game asked for is
+	* warned about once and dropped.
 	*/
 	if (env && allow_nonzero) {
 		p->attack_len = cpu_to_le16(env->attack_length);
@@ -908,10 +879,10 @@ static unsigned long t500rs_params = PARAM_SPRING_LEVEL | PARAM_DAMPER_LEVEL |
 /* Supported effects.
  *
  * Periodic (all waveforms) and ramp effects are host-synthesized: the
- * firmware has no waveform engine (work/analysis/13_periodic_wedge.md
- * erratum), so these effects never get per-slot wire declarations - a
- * slot-0 sine MAIN is declared once and levels are streamed as 0x04 0x0e
- * packets by the synth engine. Advertising FF_PERIODIC also re-enables
+ * firmware has no waveform engine (docs/T500RS_FFBEFFECTS.md §5.4), so
+ * these effects never get per-slot wire declarations - a slot-0 sine
+ * MAIN is declared once and levels are streamed as 0x04 0x0e packets
+ * by the synth engine. Advertising FF_PERIODIC also re-enables
  * FF_RUMBLE: the parent converts rumble to a sine periodic (period 50 ms)
  * and gates the rumble capability bit on FF_PERIODIC being advertised.
  */
@@ -927,9 +898,8 @@ const signed short t500rs_effects[] = { FF_CONSTANT, FF_SPRING,
 /*
  * Resolve the hardware effect slot index for a given effect.
  *
- * Per Windows USB captures (work/analysis/04_effect_id_bug.md, validated
- * across all 8 0x01 and 10 0x41 packets in both community captures), the
- * protocol mirrors the param_sub derivation:
+ * The protocol mirrors the param_sub derivation
+ * (docs/T500RS_FFBEFFECTS.md §4):
  *
  *   slot 0   -> param_sub=0x000e, env_sub=0x001c  (constant force)
  *   slot n>0 -> param_sub=0x000e+0x001c*n, env_sub=0x001c+0x001c*n
@@ -1191,10 +1161,9 @@ static int t500rs_send_start_now(struct t500rs_device_entry *t500rs, u8 *buf,
 	r41->id = 0x41;
 	r41->effect_id = effect_id;
 	r41->command = 0x41; /* START */
-	/* arg=0xff matches the dominant Windows pattern (rFactor2 C2 frames 2651,
-	 * 2659, 373753, 373823 all use 41 0X 41 ff). C1's '41 0X 41 01' is the
-	 * only known counter-example; 0xff is the safer default for START.
-	 * Hardware-validated stable on b65e as of 2026-08-18. */
+	/* 0xff is the dominant Windows START argument; 0x01 is the only
+	 * counter-example ever observed. STOP always uses 0x01.
+	 */
 	r41->arg = 0xff;
 	return t500rs_send_hid(t500rs, (u8 *)r41, sizeof(*r41));
 }
@@ -1675,7 +1644,7 @@ static int t500rs_play_effect(void *data,
 /*
  * Stop effect - deactivate the software expiry slot and send a per-slot
  * 0x41 STOP. Each STOP addresses only its own slot, so concurrent effects
- * remain unaffected (see work/analysis/10_second_pass_findings.md).
+ * remain unaffected.
  */
 static int t500rs_stop_effect(void *data,
 			      const struct tmff2_effect_state *state)
@@ -2133,14 +2102,8 @@ static int t500rs_wheel_init(struct tmff2_device_entry *tmff2, int open_mode)
 	 * if this fails the base keeps its default autocenter, which the
 	 * set_autocenter callback can still override later.
 	 *
-	 * Note: an earlier version of this driver sent '0x40 0x11 0x42 0x7b'
-	 * here, described as an "FFB-enable magic". Per community USB captures
-	 * (work/analysis/02_init_sequence_diffs.md and 10_second_pass_findings.md
-	 * §5), subcommand 0x11 is the RANGE command and Windows never sends it
-	 * at init. The bytes 0x42 0x7b = 0x7b42 LE = 31554 -> /60 = 526 degrees,
-	 * i.e. a non-standard range, not an FFB-enable marker. It has been
-	 * removed; if a real FFB-enable packet is needed it must be sourced
-	 * from a new capture, not this misidentified range write.
+	 * Note: 0x40 subcommand 0x11 is the RANGE command
+	 * (docs/T500RS_FFBEFFECTS.md §5.7) and is never sent at init.
 	 */
 	{
 		struct t500rs_pkt_r40_config *config =
@@ -2160,8 +2123,7 @@ static int t500rs_wheel_init(struct tmff2_device_entry *tmff2, int open_mode)
 	 * gain from the `default_gain` module param (percent, 0-100). The
 	 * default of 100 yields 0xff — byte-identical to the init sequence
 	 * this driver has always sent, so the wire format is unchanged unless
-	 * the user opts in (Windows seeds 90%, see
-	 * work/analysis/02_init_sequence_diffs.md). The set_gain callback
+	 * the user opts in (Windows seeds 90%). The set_gain callback
 	 * re-applies the shared `gain` param later; a failure here just
 	 * leaves whatever gain the base already has.
 	 */

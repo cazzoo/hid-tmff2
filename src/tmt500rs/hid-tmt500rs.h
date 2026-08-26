@@ -25,8 +25,8 @@
 /* Control constants */
 #define T500RS_CONTROL_DEFAULT 0x40
 
-/* Per Windows USB captures of the official driver (see work/analysis/04_effect_id_bug.md),
- * the effect_id byte of every 0x01 main-upload and every 0x41 START/STOP packet mirrors
+/* Per Windows USB captures of the official driver, the effect_id byte of
+ * every 0x01 main-upload and every 0x41 START/STOP packet mirrors
  * the hardware slot index the effect was uploaded to:
  *
  *   effect_id == (param_sub - 0x000e) / 0x001c
@@ -48,13 +48,13 @@
 
 /* Effect type constants — codes this driver actually puts on the wire.
  *
- * Host-side synthesis model (work/analysis/13_periodic_wedge.md erratum):
- * the firmware has no periodic waveform engine. Windows declares periodic
- * effects as a sine (0x22) MAIN on slot 0 with the constant-force channels
- * and streams the synthesized waveform as 0x04 0x0e level updates. Only
- * these four type codes are capture-proven; any other value in the 0x2x
- * range (square 0x20, triangle 0x21, saw 0x23/0x24) is unsourced and
- * MUST NOT be sent - see the wedge record before "fixing" this.
+ * Host-side synthesis model (docs/T500RS_FFBEFFECTS.md §5.4): the
+ * firmware has no periodic waveform engine. Windows declares periodic
+ * effects as a sine (0x22) MAIN on slot 0 with the constant-force
+ * channels and streams the synthesized waveform as 0x04 0x0e level
+ * updates. Only these four type codes are known-good; any other value
+ * in the 0x2x range (square 0x20, triangle 0x21, saw 0x23/0x24) is
+ * unsourced and MUST NOT be sent.
  */
 #define T500RS_EFFECT_CONSTANT 0x00
 #define T500RS_EFFECT_SINE 0x22 /* the only periodic MAIN type; all waveforms are synthesized onto it */
@@ -102,16 +102,13 @@ extern const signed short t500rs_effects[];
  *
  * These structures define the wire format for T500RS force feedback packets.
  * All structures are packed to match the exact USB protocol format.
- *
- * Packet formats verified against Windows USB captures in:
- * docs/T500RS_USB_Protocol_Analysis.md
+ * Field-by-field reference: docs/T500RS_FFBEFFECTS.md
  */
 
 /*
  * 0x01 - Main upload packet (15 bytes)
  *
  * This packet initiates effect upload and specifies packet sequence.
- * Verified against Windows USB captures - all fields match observed traffic.
  *
  * Packet format:
  * - b0: packet type (0x01)
@@ -143,16 +140,11 @@ struct t500rs_pkt_r01_main {
  *
  * The only 0x04 form the firmware accepts. Windows drivers synthesize
  * periodic/ramp waveforms host-side and stream the combined signed level
- * on the constant-force channel (code 0x0e) using this packet - 32 222 of
- * them in capture C2 alone, with b4 sweeping all 256 values (signed).
- * The trailing 0x2710 (LE) is a constant magic marker.
- *
- * Reference: work/analysis/13_periodic_wedge.md (erratum) and
- * 05_periodic_0x04_anomaly.md (Hypothesis B).
+ * on the constant-force channel (code 0x0e) using this packet. The
+ * trailing 0x2710 (LE) is a constant magic marker.
  *
  * A per-slot periodic-parameters variant (code != 0x0e, e.g. '04 2a ...')
- * was tried once on real hardware and wedged the wheel until it dropped
- * off the bus. Do not reinvent it.
+ * wedges the wheel until it drops off the bus. Do not reinvent it.
  */
 struct t500rs_pkt_r04_stream {
 	u8 id; /* b0: T500RS_PKT_PERIODIC */
@@ -180,10 +172,9 @@ struct t500rs_pkt_r04_stream {
  * - b10: left saturation (0-100, controls effect strength)
  *
  * Scaling (from Linux FFB to device):
- * - Coefficients: (value * 10) / 32767 -> 0-10 u8
- * - Center: value / 20 -> s16 LE (capture-verified)
- * - Deadband: value / 65 -> u16 LE (UNVERIFIED; doc contradicts itself,
- *   see TODO in t500rs_build_r05_condition)
+ * - Coefficients: (value * level% * 10) / 32767 -> 0-10 u8, rounded
+ * - Center: value / 20 -> s16 LE
+ * - Deadband: value / 65 -> u16 LE (divisor unconfirmed)
  * - Saturation: 0-100 (no scaling)
  */
 struct t500rs_pkt_r05_condition {
@@ -193,7 +184,7 @@ struct t500rs_pkt_r05_condition {
 	u8 right_coeff; /* Right/positive coefficient (0-10 scale) */
 	u8 left_coeff; /* Left/negative coefficient (0-10 scale) */
 	__le16 center; /* Center offset (s16 LE, scaled by /20) */
-	__le16 deadband; /* Deadband width (u16 LE, scaled by /65, UNVERIFIED) */
+	__le16 deadband; /* Deadband width (u16 LE, scaled by /65; divisor unconfirmed) */
 	u8 right_sat; /* Right saturation (0-100) */
 	u8 left_sat; /* Left saturation (0-100) */
 } __packed;
@@ -211,7 +202,7 @@ struct t500rs_r41_cmd {
   u8 id; /* 0x41 */
   u8 effect_id; /* hardware slot index (0=constant, 1+=non-constant); init STOP uses 15 */
   u8 command; /* 0x41 START, 0x00 STOP, 0x00 clear in init */
-  u8 arg; /* 0xff for START, 0x01 for STOP (verified against C2 captures) */
+  u8 arg; /* 0xff for START, 0x01 for STOP */
 } __packed;
 
 /* 0x02 - Envelope packet (9 bytes) */
