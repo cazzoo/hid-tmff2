@@ -59,7 +59,39 @@ below that abstraction, inside the driver's packet writers.
 
 ## Remaining gate
 
+> **FINAL IN-GAME VERDICT (2026-08-26) — both M0 negations removed; both
+> channels are UAPI-standard pass-through.**
+>
+> Test history (three builds, same hardware):
+>
+> 1. M0 negated build (stream + native negated): rF2 correct at +100%;
+>   ACC / Dirt Rally 2.0 mirrored.
+> 2. Native negation removed only: rF2 still correct at +100%; ACC/DR2
+>   **still mirrored** — decisive: those runs rode the *stream* (synth_mode
+>   latches for the whole probe once rF2 runs), so the native revert never
+>   executed. The surviving stream negation was the inverter.
+> 3. Conclusion: the stream channel is NOT wire-inverted. rF2 alone was
+>   correct through the negated stream ⇒ **rF2's own effect encoding is
+>   sign-inverted relative to UAPI** (matching the C2 mean-negative
+>   centering-bias observation). The M0 lab ramp test was misleading the
+>   other way (and the native "cross-check" was the tainted same-boot
+>   reading already flagged above).
+>
+> Final wire model: `03 0e` (native) and `04 0e` (stream) both pass the
+> semantic level through — positive byte = rightward. rF2 sets its in-game
+> FFB invert (-100%); every standard-encoded game (ACC, DR2, AC, …) is
+> correct at default sign on both paths, in any launch order.
+>
+> A driver-side per-game exception is not implementable: the kernel FF API
+> carries no game identity (a "negate magnitude-0/offset≠0 periodic"
+> heuristic was considered and rejected as unmaintainable).
+
 Per the plan, the driver-side sign work is complete pending the
 in-game sanity check: torque feels correct with **no** invert-FF option
 enabled in the game. Update this file with the verdict (and the fix
 commit hash) when done.
+
+> **2026-08-21:** the rF2 in-game run doubles as the gate for
+> `15_rf2_synth_sign_fold.md` — the direction projection was sign-folded
+> (byte-identical at 0x4000/0xC000), so one rF2 session closes both this
+> gate and that one. See 15 for the procedure.

@@ -56,27 +56,28 @@ static inline s8 t500rs_scale_const_level_s8(int level)
 }
 
 /* Apply effect direction to a constant level and convert to s8.
- * Mirrors t300rs_calculate_constant_level()'s projection semantics but
- * keeps the full T500RS range and uses t500rs_scale_const_level_s8() for
- * clamping and conversion.
  *
- * SIGN: the 0x03 param channel's byte is INVERTED relative to UAPI
- * semantics on this hardware - hardware-established 2026-08-20 across
- * two sessions (work/analysis/14_direction_sign.md): a positive
- * projected level pushed the wheel LEFT and a negative one RIGHT
- * (UAPI: east/16384 + positive level = rightward). The projection is
- * therefore negated here so the wire byte carries UAPI sign, exactly
- * like the 04 0e stream writer (t500rs_synth_stream_level) - after
- * both fixes the two channels agree and positive always means
- * rightward. Callers above this helper work in semantic levels.
+ * SIGN: NOT negated. The M0 hardware cross-check that concluded this
+ * channel was wire-inverted (work/analysis/14_direction_sign.md) ran on
+ * a wheel already exercised by the stream channel in the same boot -
+ * that tainting is the caveat documented in 14 itself. In-game verdict
+ * (2026-08-21): with the M0 negation active, constant-force games (ACC,
+ * Dirt Rally 2.0) felt mirrored; the pre-M0 un-negated byte is the
+ * field-proven behavior for this channel, so the negation is removed
+ * pending the re-test noted in 14/15.
+ *
+ * DIRECTION: sign-folded, not sin()-scaled - same rationale and
+ * evidence as t500rs_synth_dir_project() (the rF2/PCars family encodes
+ * torque sign as polar 0/180deg -> kernel direction 0x0000/0x8000,
+ * where sin() == 0). Byte-identical to the old projection at the
+ * hardware-verified 0x4000/0xC000 cardinals.
  */
 static inline s8 t500rs_scale_const_with_direction(int level, u16 direction)
 {
-	int projected;
+	if (fixp_sin16(direction * 360 / 0x10000) < 0)
+		level = -level;
 
-	projected = (level * fixp_sin16(direction * 360 / 0x10000)) / 0x7fff;
-
-	return t500rs_scale_const_level_s8(-projected);
+	return t500rs_scale_const_level_s8(level);
 }
 
 /*
@@ -271,12 +272,35 @@ static unsigned long t500rs_synth_tick_jiffies(void)
 	return msecs_to_jiffies(clamp(timer_msecs, 2, 100));
 }
 
-/* Project an OS-scale level onto the wheel axis for an FF direction,
- * mirroring t500rs_scale_const_with_direction(). */
+/*
+ * Project an OS-scale level onto the wheel axis for an FF direction.
+ *
+ * SIGN-FOLD, not sin()-scaling (2026-08-20, rF2 fix — see
+ * work/analysis/15_rf2_synth_sign_fold.md): a wheel has exactly one force
+ * axis, so the direction encodes the SIGN of the torque, not a magnitude
+ * scaling. Wine's evdev provider maps the game's polar angle straight
+ * into ff_effect.direction (dlls/winebus.sys/bus_udev.c:
+ * "direction[0] * 0x800 / 1125"), and several DirectInput titles (the
+ * rFactor family, Project Cars 1/2, AMS) encode torque sign as polar
+ * 0deg/180deg, which lands on kernel direction 0x0000/0x8000 - exactly
+ * where sin() == 0. The old sin() projection therefore zeroed the ENTIRE
+ * sample there; for rF2 that killed the main FFB channel outright,
+ * because its sine effect carries the force in `offset` with
+ * magnitude == 0 (see work/analysis/05_periodic_0x04_anomaly.md and the
+ * C2 capture: zero 0x03 packets, 32k constant-via-periodic stream).
+ *
+ * Folding to +/-1 is byte-identical to the old projection at the M0-
+ * hardware-verified directions 0x4000/0xC000 (sin == +/-0x7fff ->
+ * +/-level) while every other direction now passes full magnitude,
+ * matching the Windows driver's treatment of a one-axis device.
+ *
+ * NB: the actual waveform math (fixp_sin16 inside the FF_SINE case of
+ * t500rs_synth_sample()) is unrelated to direction and must stay a true
+ * sine.
+ */
 static int t500rs_synth_dir_project(int level, u16 direction)
 {
-	return (int)(((s64)level * fixp_sin16(direction * 360 / 0x10000)) /
-		     0x7fff);
+	return fixp_sin16(direction * 360 / 0x10000) < 0 ? -level : level;
 }
 
 /*
@@ -439,18 +463,18 @@ static int t500rs_synth_send_main(struct t500rs_device_entry *t500rs)
  * residual rumble). The MAIN is declared infinite-duration, so nothing
  * else ever clears it.
  *
- * SIGN CONVENTION: this channel's byte is INVERTED relative to the
- * 0x03 param channel and to UAPI semantics - hardware-established
- * 2026-08-20 (work/analysis/14_direction_sign.md): a native 0x03
- * constant with a negative level pushes the wheel RIGHT, while the
- * same negative level streamed here pushes LEFT (ramp start direction,
- * observed in two independent sessions). C2 corroborates: the stream's
- * signed byte distribution has a mean-negative bias while carrying a
- * self-aligning (centering) torque. The helper therefore negates the
- * level before writing so the wire byte always carries UAPI sign
- * semantics, keeping the stream consistent with the native channel.
- * Callers keep tracking the SEMANTIC level for duplicate skipping;
- * level 0 negates to itself.
+ * SIGN CONVENTION: pass-through, UAPI-standard (positive wire byte =
+ * rightward), identical to the native 0x03 channel. History: M0
+ * (2026-08-20, work/analysis/14_direction_sign.md) negated this writer
+ * from a lab ramp test; in-game testing (2026-08-26) showed that build
+ * made standard-encoded games feel mirrored (ACC, Dirt Rally 2.0 -
+ * constant effects riding the stream after synth_mode latched) while
+ * rF2 alone was correct - i.e. rF2's own effect encoding is
+ * sign-inverted relative to UAPI, and the negation was compensating
+ * for the game, not for the wire (the C2 capture's mean-negative
+ * centering bias corroborates). The negation is removed; rF2 uses its
+ * in-game FFB invert (-100%). No per-game exception is possible in the
+ * driver: the kernel FF API carries no game identity.
  */
 static int t500rs_synth_stream_level(struct t500rs_device_entry *t500rs,
 				     u8 *buf, s8 level)
@@ -460,7 +484,7 @@ static int t500rs_synth_stream_level(struct t500rs_device_entry *t500rs,
 	memset(s, 0, sizeof(*s));
 	s->id = T500RS_PKT_PERIODIC;
 	s->code = T500RS_CONSTANT_PARAM_SUB;
-	s->level = (s8)-level;
+	s->level = level;
 	s->magic_lo = 0x10;
 	s->magic_hi = 0x27;
 	return t500rs_send_hid(t500rs, (u8 *)s, sizeof(*s));
@@ -649,20 +673,30 @@ static void t500rs_build_r05_condition(struct t500rs_pkt_r05_condition *p,
 	 * coefficient maps to 0 (no force) rather than wrapping to ~246, and
 	 * any overflow saturates at 10.
 	 *
+	 * Rounding (not truncation): the 0..10 device scale is brutally
+	 * coarse - at the default damper_level=30 a game coefficient of
+	 * 20000/32767 truncated to 1/10, while rF2 drives dampers at 10/10
+	 * on Windows (C2 f2653). Round-to-nearest recovers one step
+	 * (20000*30/100 -> 2/10) without touching the range, whose ceiling
+	 * remains capture-unverified (see below).
+	 *
 	 * CAPTURE-VERIFY: unvalidated against a known input/output pair. The
 	 * community captures only show the device-side bytes (C2 f2653:
 	 * right_coeff=left_coeff=10 with unknown game input), which is
-	 * consistent with this formula but does not prove it. Sweep
+	 * consistent with this formula but does not prove it. Also unknown:
+	 * whether the firmware accepts values above 10 at all. Sweep
 	 * right_coeff over {0, 8192, 16384, 24576, 32767} with spring_level=100
 	 * via fftest and capture with usbmon; expected device bytes are
 	 * {0, 2-3, 5, 7-8, 10}. See work/analysis/07_condition_deadband_unverified.md.
 	 */
 	p->right_coeff = (u8)clamp_t(int,
-				((right_coeff * (int)level) / 100) * 10 / 32767,
-				0, 10);
+			(((right_coeff * (int)level) / 100) * 10 + 32767 / 2) /
+				32767,
+			0, 10);
 	p->left_coeff = (u8)clamp_t(int,
-				((left_coeff * (int)level) / 100) * 10 / 32767,
-				0, 10);
+			(((left_coeff * (int)level) / 100) * 10 + 32767 / 2) /
+				32767,
+			0, 10);
 
 	/* Center: /20 confirmed by captures (e.g. center=-372 = -7439/20 in
 	 * docs/T500RS_FFBEFFECTS.md capture C, and center=250 = 5000/20 in
@@ -1345,8 +1379,12 @@ static int t500rs_upload_periodic(struct t500rs_device_entry *t500rs,
 	e->length_ms = effect->replay.length;
 	spin_unlock_irqrestore(&t500rs->synth_lock, flags);
 
-	T500RS_DBG(t500rs, "Periodic effect %d uploaded (synth)\n",
-		   effect->id);
+	T500RS_DBG(t500rs,
+		   "Periodic effect %d uploaded (synth): dir=%u waveform=%u mag=%u off=%d phase=%u period=%u len=%u delay=%u\n",
+		   effect->id, effect->direction, effect->u.periodic.waveform,
+		   effect->u.periodic.magnitude, effect->u.periodic.offset,
+		   effect->u.periodic.phase, effect->u.periodic.period,
+		   effect->replay.length, effect->replay.delay);
 	return 0;
 }
 
@@ -1793,8 +1831,17 @@ static int t500rs_update_effect(void *data,
 		e->phase_cd = effect->u.periodic.phase;
 		e->period_ms = effect->u.periodic.period;
 		e->direction = effect->direction;
+		e->envelope = effect->u.periodic.envelope;
+		e->delay_ms = effect->replay.delay;
+		e->length_ms = effect->replay.length;
 		spin_unlock_irqrestore(&t500rs->synth_lock, flags);
 		t500rs_synth_kick(t500rs);
+		T500RS_DBG(t500rs,
+			   "Periodic effect %d updated (synth): dir=%u mag=%u off=%d phase=%u period=%u len=%u\n",
+			   effect->id, effect->direction,
+			   effect->u.periodic.magnitude,
+			   effect->u.periodic.offset, effect->u.periodic.phase,
+			   effect->u.periodic.period, effect->replay.length);
 		return 0;
 	}
 
@@ -1809,6 +1856,8 @@ static int t500rs_update_effect(void *data,
 		e->end_level = effect->u.ramp.end_level;
 		e->length_ms = effect->replay.length;
 		e->direction = effect->direction;
+		e->envelope = effect->u.ramp.envelope;
+		e->delay_ms = effect->replay.delay;
 		spin_unlock_irqrestore(&t500rs->synth_lock, flags);
 		t500rs_synth_kick(t500rs);
 		return 0;
