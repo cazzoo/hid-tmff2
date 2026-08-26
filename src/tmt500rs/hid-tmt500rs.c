@@ -60,7 +60,7 @@ static inline s8 t500rs_scale_const_level_s8(int level)
  * never sin()-scale the magnitude: games that encode force sign as
  * polar 0/180deg (kernel direction 0x0000/0x8000, e.g. the rFactor
  * family) sit exactly where sin() == 0 and would be silenced.
- * See docs/T500RS_FFBEFFECTS.md §7.
+ * See docs/T500RS_FFBEFFECTS.md section 7.
  */
 static inline s8 t500rs_scale_const_with_direction(int level, u16 direction)
 {
@@ -135,7 +135,7 @@ struct t500rs_device_entry {
 
 	/*
 	 * Host-side periodic/ramp synthesis engine (the firmware has no
-	 * waveform generator, see docs/T500RS_FFBEFFECTS.md §5.4). Once any
+	 * waveform generator, see docs/T500RS_FFBEFFECTS.md section 5.4). Once any
 	 * periodic/ramp effect is uploaded, this engine owns hardware slot 0
 	 * and the constant-force channel (0x0e): waveforms are computed in
 	 * software and the combined level is streamed as 0x04 0x0e packets,
@@ -246,7 +246,7 @@ static void t500rs_build_r02_envelope(struct t500rs_pkt_r02_envelope *p,
  * Host-side waveform synthesis.
  *
  * The T500RS firmware has no periodic/ramp waveform engine (see
- * docs/T500RS_FFBEFFECTS.md §5.4): the Windows driver declares a sine
+ * docs/T500RS_FFBEFFECTS.md section 5.4): the Windows driver declares a sine
  * MAIN on slot 0 with the constant-force channels and streams the
  * synthesized signal as '04 0e 00 00 <level> 00 10 27' packets.
  * Everything below reproduces that model - all waveform math happens
@@ -265,7 +265,7 @@ static unsigned long t500rs_synth_tick_jiffies(void)
  * magnitude. sin()-scaling zeroes games that encode force sign as
  * polar 0/180deg (kernel direction 0x0000/0x8000 - the rFactor
  * family); folding is byte-identical to sin()-scaling at the
- * cardinals 0x4000/0xC000. See docs/T500RS_FFBEFFECTS.md §7.
+ * cardinals 0x4000/0xC000. See docs/T500RS_FFBEFFECTS.md section 7.
  */
 static int t500rs_synth_dir_project(int level, u16 direction)
 {
@@ -435,7 +435,7 @@ static int t500rs_synth_send_main(struct t500rs_device_entry *t500rs)
  * as the native 0x03 channel. One exception lives game-side: rFactor 2
  * uploads its effects sign-inverted and needs the in-game FFB invert
  * (-100%); the driver cannot detect or special-case a game.
- * See docs/T500RS_FFBEFFECTS.md §7.
+ * See docs/T500RS_FFBEFFECTS.md section 7.
  */
 static int t500rs_synth_stream_level(struct t500rs_device_entry *t500rs,
 				     u8 *buf, s8 level)
@@ -879,7 +879,7 @@ static unsigned long t500rs_params = PARAM_SPRING_LEVEL | PARAM_DAMPER_LEVEL |
 /* Supported effects.
  *
  * Periodic (all waveforms) and ramp effects are host-synthesized: the
- * firmware has no waveform engine (docs/T500RS_FFBEFFECTS.md §5.4), so
+ * firmware has no waveform engine (docs/T500RS_FFBEFFECTS.md section 5.4), so
  * these effects never get per-slot wire declarations - a slot-0 sine
  * MAIN is declared once and levels are streamed as 0x04 0x0e packets
  * by the synth engine. Advertising FF_PERIODIC also re-enables
@@ -899,7 +899,7 @@ const signed short t500rs_effects[] = { FF_CONSTANT, FF_SPRING,
  * Resolve the hardware effect slot index for a given effect.
  *
  * The protocol mirrors the param_sub derivation
- * (docs/T500RS_FFBEFFECTS.md §4):
+ * (docs/T500RS_FFBEFFECTS.md section 4):
  *
  *   slot 0   -> param_sub=0x000e, env_sub=0x001c  (constant force)
  *   slot n>0 -> param_sub=0x000e+0x001c*n, env_sub=0x001c+0x001c*n
@@ -2103,7 +2103,7 @@ static int t500rs_wheel_init(struct tmff2_device_entry *tmff2, int open_mode)
 	 * set_autocenter callback can still override later.
 	 *
 	 * Note: 0x40 subcommand 0x11 is the RANGE command
-	 * (docs/T500RS_FFBEFFECTS.md §5.7) and is never sent at init.
+	 * (docs/T500RS_FFBEFFECTS.md section 5.7) and is never sent at init.
 	 */
 	{
 		struct t500rs_pkt_r40_config *config =
@@ -2121,7 +2121,7 @@ static int t500rs_wheel_init(struct tmff2_device_entry *tmff2, int open_mode)
 
 	/* Report 0x43 - Set global gain (2 bytes). Advisory: seed the device
 	 * gain from the `default_gain` module param (percent, 0-100). The
-	 * default of 100 yields 0xff — byte-identical to the init sequence
+	 * default of 100 yields 0xff - byte-identical to the init sequence
 	 * this driver has always sent, so the wire format is unchanged unless
 	 * the user opts in (Windows seeds 90%). The set_gain callback
 	 * re-applies the shared `gain` param later; a failure here just

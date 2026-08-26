@@ -46,9 +46,9 @@
 #define T500RS_CONSTANT_PARAM_SUB 0x0e
 #define T500RS_CONSTANT_ENV_SUB 0x1c
 
-/* Effect type constants — codes this driver actually puts on the wire.
+/* Effect type constants - codes this driver actually puts on the wire.
  *
- * Host-side synthesis model (docs/T500RS_FFBEFFECTS.md §5.4): the
+ * Host-side synthesis model (docs/T500RS_FFBEFFECTS.md section 5.4): the
  * firmware has no periodic waveform engine. Windows declares periodic
  * effects as a sine (0x22) MAIN on slot 0 with the constant-force
  * channels and streams the synthesized waveform as 0x04 0x0e level

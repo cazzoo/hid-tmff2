@@ -67,9 +67,9 @@ The `effect_id` byte mirrors the **hardware slot** the effect runs on - it is
 not always `0x00`:
 
 - Constant force (and every periodic/ramp effect, see paragraph 5.4) runs on
-  **slot 0** → `effect_id = 0x00`.
+  **slot 0** -> `effect_id = 0x00`.
 - Condition effects (spring/damper/friction/inertia) get slots `1, 2, 3, ...`
-  assigned sequentially → their `0x01` uploads and `0x41` START/STOP packets
+  assigned sequentially -> their `0x01` uploads and `0x41` START/STOP packets
   carry that slot number (`41 01 41 ff` starts slot 1).
 
 ### Why the wheel never stops on its own
@@ -105,7 +105,7 @@ Think of a subtype as a **channel number**:
   For example, slot 1 gets `0x2a` and `0x38`. The wheel only cares about these
   numbers matching between the `0x01` packet and the later parameter packets.
 
-These two subtype values are written into bytes 9–12 of the `0x01` packet, and
+These two subtype values are written into bytes 9-12 of the `0x01` packet, and
 the parameter packets echo back the same numbers so the wheel knows which effect
 they belong to.
 
@@ -127,12 +127,12 @@ This declares an effect. Sent first.
 | 1      | 1    | effect_id      | Hardware slot: 0 for constant/periodic, n for conditions (see paragraph 3) |
 | 2      | 1    | effect type    | What kind of effect (see table below)                          |
 | 3      | 1    | control        | Always `0x40`                                                  |
-| 4–5    | 2    | duration       | How long it should run, in milliseconds                        |
-| 6–7    | 2    | delay          | Pause before it starts, in milliseconds                        |
+| 4-5    | 2    | duration       | How long it should run, in milliseconds                        |
+| 6-7    | 2    | delay          | Pause before it starts, in milliseconds                        |
 | 8      | 1    | reserved       | `0x00`                                                         |
-| 9–10   | 2    | parameter sub  | The channel for this effect (see paragraph 4)                           |
-| 11–12  | 2    | envelope sub   | The second channel for this effect (see paragraph 4)                    |
-| 13–14  | 2    | reserved       | `0x0000`                                                       |
+| 9-10   | 2    | parameter sub  | The channel for this effect (see paragraph 4)                           |
+| 11-12  | 2    | envelope sub   | The second channel for this effect (see paragraph 4)                    |
+| 13-14  | 2    | reserved       | `0x0000`                                                       |
 
 **Effect type codes (byte 2) - the only values ever put on the wire:**
 
@@ -162,10 +162,10 @@ out (fade).
 |--------|------|----------------|------------------------------------------|
 | 0      | 1    | packet type    | `0x02`                                   |
 | 1      | 1    | subtype        | The envelope channel from the `0x01` packet |
-| 2–3    | 2    | attack length  | Fade-in time, milliseconds               |
-| 4      | 1    | attack level   | Fade-in strength, 0–255                  |
-| 5–6    | 2    | fade length    | Fade-out time, milliseconds              |
-| 7      | 1    | fade level     | Fade-out strength, 0–255                 |
+| 2-3    | 2    | attack length  | Fade-in time, milliseconds               |
+| 4      | 1    | attack level   | Fade-in strength, 0-255                  |
+| 5-6    | 2    | fade length    | Fade-out time, milliseconds              |
+| 7      | 1    | fade level     | Fade-out strength, 0-255                 |
 | 8      | 1    | reserved       | `0x00`                                   |
 
 **Note:** the Linux driver applies envelopes to periodic/ramp effects entirely
@@ -183,7 +183,7 @@ Sets the actual push/pull of a constant effect.
 | 0      | 1    | packet type | `0x03`                                             |
 | 1      | 1    | code        | Low byte of the parameter subtype (`0x0e` for constant) |
 | 2      | 1    | reserved    | `0x00`                                             |
-| 3      | 1    | level       | Force, signed −127 to +127 (positive = rightward pull) |
+| 3      | 1    | level       | Force, signed -127 to +127 (positive = rightward pull) |
 
 ### 5.4 Level stream - `0x04` (8 bytes)
 
@@ -199,10 +199,10 @@ the constant-force channel:
 |--------|------|------------|----------------------------------------------------------|
 | 0      | 1    | packet type| `0x04`                                                   |
 | 1      | 1    | code       | Always `0x0e` (the constant-force channel)               |
-| 2–4    | 3    | reserved   | `0x00`                                                   |
-| 5      | 1    | level      | Signed force, −128 to +127 - the synthesized signal      |
+| 2-4    | 3    | reserved   | `0x00`                                                   |
+| 5      | 1    | level      | Signed force, -128 to +127 - the synthesized signal      |
 | 6      | 1    | reserved   | `0x00`                                                   |
-| 7–8    | 2    | magic      | `0x2710` LE, constant marker                             |
+| 7-8    | 2    | magic      | `0x2710` LE, constant marker                             |
 
 Windows drivers stream these packets continuously (dozens per second) while
 synthesized effects play; the level byte is the live signed force signal.
@@ -214,7 +214,7 @@ infinite duration, and from then on a software engine computes the waveform
 playing constant force, and streams the combined level with this packet.
 Nothing per-effect is ever declared on the wire.
 
-> ⚠️ A per-slot periodic-parameters variant (`04 2a …`, code ≠ `0x0e`)
+> **Warning:** A per-slot periodic-parameters variant (`04 2a ...`, code != `0x0e`)
 > STALLs on this firmware and leaves the wheel wedged until
 > re-enumeration. Do not reinvent per-slot periodic packets.
 
@@ -229,12 +229,12 @@ is normally all zeros.
 | 0      | 1    | packet type    | `0x05`                                      |
 | 1      | 1    | code           | Subtype (first packet uses parameter sub, second uses envelope sub) |
 | 2      | 1    | reserved       | `0x00`                                      |
-| 3      | 1    | right coeff    | Stiffness to the right, 0–10                 |
-| 4      | 1    | left coeff     | Stiffness to the left, 0–10                  |
-| 5–6    | 2    | center         | Where "centre" sits (offset)                 |
-| 7–8    | 2    | deadband       | A zone around centre with no force           |
-| 9      | 1    | right sat      | Max force to the right, 0–100                |
-| 10     | 1    | left sat       | Max force to the left, 0–100                 |
+| 3      | 1    | right coeff    | Stiffness to the right, 0-10                 |
+| 4      | 1    | left coeff     | Stiffness to the left, 0-10                  |
+| 5-6    | 2    | center         | Where "centre" sits (offset)                 |
+| 7-8    | 2    | deadband       | A zone around centre with no force           |
+| 9      | 1    | right sat      | Max force to the right, 0-100                |
+| 10     | 1    | left sat       | Max force to the left, 0-100                 |
 
 In plain terms: *coefficients* control how strongly the effect responds, *center*
 and *deadband* define where the neutral point is, and *saturation* caps the
@@ -289,20 +289,20 @@ and the parameter packets differ.
 ## 7. Converting values (a plain guide)
 
 Programs on the computer work with large numbers (for example a force from
-−32767 to +32767). The wheel expects small numbers (roughly −127 to +127), so the
+-32767 to +32767). The wheel expects small numbers (roughly -127 to +127), so the
 driver scales everything down. You rarely need the exact math, but here it is for
 reference:
 
 | Quantity            | Computer range      | Wheel range     | Conversion (device = ...)        |
 |---------------------|---------------------|-----------------|-------------------------------|
 | Duration            | milliseconds        | milliseconds    | direct; `0xffff` = infinite    |
-| Constant level      | −32767...+32767     | −127...+127     | `level x 127 / 32767`          |
-| Synth stream level  | −32767...+32767     | −128...+127     | `level x 127 / 32767` (host-side) |
-| Envelope level      | 0–32767             | (applied host-side, 0–100%) | `env / 32767` scale   |
-| Condition coeff.    | 0–32767             | 0–10            | `coeff x level% x 10 / 32767`, rounded |
-| Condition center    | −32767...+32767     | device units    | `center / 20`                  |
-| Condition deadband  | 0–65535             | device units    | `deadband / 65` *(divisor unconfirmed)* |
-| Condition saturation| 0–65535             | 0–100           | `sat x 100 / 65535`            |
+| Constant level      | -32767...+32767     | -127...+127     | `level x 127 / 32767`          |
+| Synth stream level  | -32767...+32767     | -128...+127     | `level x 127 / 32767` (host-side) |
+| Envelope level      | 0-32767             | (applied host-side, 0-100%) | `env / 32767` scale   |
+| Condition coeff.    | 0-32767             | 0-10            | `coeff x level% x 10 / 32767`, rounded |
+| Condition center    | -32767...+32767     | device units    | `center / 20`                  |
+| Condition deadband  | 0-65535             | device units    | `deadband / 65` *(divisor unconfirmed)* |
+| Condition saturation| 0-65535             | 0-100           | `sat x 100 / 65535`            |
 
 Periodic magnitude, phase, offset, period and ramp levels no longer appear
 in this table: they are consumed by the software synthesis engine and never
@@ -310,13 +310,13 @@ travel the wire as separate fields (see 5.4).
 
 **Direction** never reaches the wheel as a number. A wheel has one force
 axis, so the driver folds the direction into the level's *sign*
-(`sin(dir) < 0` → negate the level) and always sends full magnitude. The
+(`sin(dir) < 0` -> negate the level) and always sends full magnitude. The
 level must not be scaled by `sin()`: games that encode the force sign as
-polar 0°/180° (rFactor 2 and other DirectInput titles) land exactly where
+polar 0/180 degrees (rFactor 2 and other DirectInput titles) land exactly where
 `sin()` is zero and would be silenced.
 
-**Sign convention:** both level channels — the native `0x03` packet and
-the `0x04` stream — are UAPI-standard: a **positive** byte pulls the wheel
+**Sign convention:** both level channels - the native `0x03` packet and
+the `0x04` stream - are UAPI-standard: a **positive** byte pulls the wheel
 **rightward**, a negative byte pulls leftward. The driver never negates on
 its own. One known exception is game-side: rFactor 2 uploads its effects
 sign-inverted, so it needs the in-game "FFB invert" (-100%) setting; a
@@ -333,14 +333,14 @@ exact scaling was never checked against a known input/output pair.
   conditions). Hardcoding `0x00` everywhere breaks per-slot STOPs.
 - **Constant force uses fixed subtypes** (`0x0e` / `0x1c`). Giving it a per-effect
   channel breaks level updates.
-- **Never send per-slot periodic packets** (`04 2a …` or a MAIN on condition
+- **Never send per-slot periodic packets** (`04 2a ...` or a MAIN on condition
   channels with a `0x2x` type): the firmware STALLs them and the wheel wedges
   until re-enumeration.
 - **Duration:** send `0xffff` in MAINs for constant/periodic; the driver's
   software timers enforce real durations for everything.
 - **The wheel never auto-stops.** Ending an effect is the driver's job, via the
   software-expiry timer (native effects) or the synthesis engine (periodic/ramp).
-- **Direction** is folded into the level's *sign* (±1, never a magnitude
+- **Direction** is folded into the level's *sign* (+/-1, never a magnitude
   scale); it is not a separate field in any packet.
 - **Live updates:** only the parameter packets (`0x03`/`0x04`/`0x05`) can be
   changed while an effect plays. Changing duration or delay requires re-uploading
