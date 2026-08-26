@@ -8,7 +8,7 @@ Module.symvers
 modules.order
 .opencode
 comunity-captures/
-work/raw_data/
+work/
 /ffpanel
 /tools/ffpanel/ffpanel
 !tools/ffpanel/go.mod
