@@ -10,5 +10,4 @@ modules.order
 comunity-captures/
 work/
 /ffpanel
-/tools/ffpanel/ffpanel
-!tools/ffpanel/go.mod
+tools/
