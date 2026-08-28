@@ -23,6 +23,15 @@
 #include <linux/spinlock.h>
 #include <linux/workqueue.h>
 
+/* T500 RS only: power-on gain in percent. Default 100 keeps the init
+ * 0x43 packet byte-identical to the historical hardcoded 0xff; Windows
+ * seeds 90%.
+ */
+int default_gain = 100;
+module_param(default_gain, int, 0);
+MODULE_PARM_DESC(default_gain,
+		"T500 RS init gain in percent (0-100, default 100)");
+
 /* Packet sequence templates for each effect type.
  *
  * Periodic and ramp effects have NO upload sequence: they are synthesized
