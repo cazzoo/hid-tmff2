@@ -32,7 +32,12 @@ module_param(default_gain, int, 0);
 MODULE_PARM_DESC(default_gain,
 		"T500 RS init gain in percent (0-100, default 100)");
 
-/* Packet sequence templates for each effect type. */
+/* Packet sequence templates for each effect type.
+ *
+ * Periodic and ramp effects have NO upload sequence: they are synthesized
+ * host-side (see the synth engine near t500rs_synth_work) and only ever
+ * touch the wire through the slot-0 MAIN and the 0x04 0x0e level stream.
+ */
 static const enum t500rs_seq_packet t500rs_seq_constant[] = {
 	T500RS_SEQ_ENVELOPE,
 	T500RS_SEQ_CONSTANT,
@@ -67,6 +72,13 @@ static inline s8 t500rs_scale_const_with_direction(int level, u16 direction)
 
 	return t500rs_scale_const_level_s8(level);
 }
+
+/*
+ * T500RS encodes the effect "slot" in the parameter/envelope subtypes
+ * (0x0e + 0x1c*n / 0x1c + 0x1c*n), AND in the 0x01/0x41 effect_id byte.
+ * The effect_id byte mirrors the slot index (0=constant, 1+=non-constant),
+ * matching the captured Windows behaviour.
+ */
 
 /* Debug logging helper: pass struct t500rs_device_entry * explicitly */
 #define T500RS_DBG(dev, fmt, ...) hid_dbg((dev)->hdev, fmt, ##__VA_ARGS__)
@@ -104,6 +116,54 @@ struct t500rs_device_entry {
 		unsigned long total_ms; /* (delay+length)*count; 0 == infinite */
 	} active[T500RS_MAX_EFFECTS];
 
+	/*
+	 * Host-side periodic/ramp synthesis engine (the firmware has no
+	 * waveform generator, see docs/T500RS_FFBEFFECTS.md section 5.4). Once any
+	 * periodic/ramp effect is uploaded, this engine owns hardware slot 0
+	 * and the constant-force channel (0x0e): waveforms are computed in
+	 * software and the combined level is streamed as 0x04 0x0e packets,
+	 * matching how the Windows driver drives the wheel.
+	 *
+	 * synth_mode is one-way per probe: there is no backend erase
+	 * callback, so the slot-0 MAIN stays type 0x22 for the session and
+	 * even constant effects flow through the stream afterwards. That is
+	 * functionally identical from the game's point of view.
+	 *
+	 * Mirrors the expiry-work pattern: dedicated lock, delayed work and
+	 * DMA-safe buffer so the synth tick never races the core FFB worker
+	 * (send_buffer) or the expiry worker (expiry_buffer).
+	 */
+	spinlock_t synth_lock;
+	struct delayed_work synth_work;
+	u8 *synth_buffer;
+	bool synth_mode; /* a periodic/ramp effect has been uploaded */
+	bool slot0_running; /* current START state of hw slot 0 while synth_mode */
+	bool synth_last_valid; /* a level has been streamed since last start */
+	s8 synth_last_level; /* last streamed level, for duplicate skipping */
+	struct t500rs_synth_effect {
+		bool used; /* parameters uploaded */
+		bool playing;
+		bool is_ramp;
+		u16 waveform; /* FF_SINE .. FF_SAW_DOWN (periodic only) */
+		int magnitude; /* 0..32767 */
+		int offset; /* -32768..32767 */
+		u32 phase_cd; /* 0..35999, 1/100 deg */
+		u32 period_ms; /* one waveform cycle */
+		int start_level, end_level; /* ramp */
+		u16 direction;
+		struct ff_envelope envelope; /* applied host-side */
+		u32 delay_ms;
+		u32 length_ms; /* 0 == infinite */
+		u32 count;
+		unsigned long start_ms;
+	} synth[T500RS_MAX_EFFECTS];
+	/* Constant-force shadow while synth_mode (slot 0 is owned by the
+	 * engine, so constant levels join the stream instead of 0x03). */
+	bool const_playing;
+	int const_level;
+	u16 const_direction;
+	unsigned long const_start_ms;
+	unsigned long const_total_ms; /* 0 == infinite */
 };
 
 /*
@@ -113,11 +173,13 @@ struct t500rs_device_entry {
  * - effect_id: 16-bit LE hardware effect slot (0..15 for now)
  * - duration_ms: duration in milliseconds
  * - delay_ms: delay before effect starts
- * - param_sub: parameter subtype (used by 0x03/0x04/0x05)
+ * - param_sub: parameter subtype (used by 0x03/0x04)
  * - envelope_sub: envelope subtype (used by 0x02)
  *
  * Effect type values this driver puts on the wire:
  * - 0x00 = Constant
+ * - 0x22 = Sine (the synth engine's slot-0 declaration; every periodic
+ *   and ramp effect is host-synthesized onto it)
  *
  * NOTE: Direction is sent separately in a 0x03 packet for constant force,
  * not in this 0x01 packet.
@@ -159,6 +221,330 @@ static void t500rs_build_r03_constant(struct t500rs_r03_const *p, u8 code,
 static void t500rs_build_r02_envelope(struct t500rs_pkt_r02_envelope *p,
 				      u8 subtype, const struct ff_envelope *env,
 				      bool allow_nonzero);
+
+/*
+ * Host-side waveform synthesis.
+ *
+ * The T500RS firmware has no periodic/ramp waveform engine (see
+ * docs/T500RS_FFBEFFECTS.md section 5.4): the Windows driver declares a sine
+ * MAIN on slot 0 with the constant-force channels and streams the
+ * synthesized signal as '04 0e 00 00 <level> 00 10 27' packets.
+ * Everything below reproduces that model - all waveform math happens
+ * in software at the synth tick, nothing per-effect ever reaches the
+ * wire.
+ */
+
+static unsigned long t500rs_synth_tick_jiffies(void)
+{
+	return msecs_to_jiffies(clamp(timer_msecs, 2, 100));
+}
+
+/*
+ * Fold the effect direction into a sample's sign: a wheel has one
+ * force axis, so direction picks left/right and must never scale the
+ * magnitude. sin()-scaling zeroes games that encode force sign as
+ * polar 0/180deg (kernel direction 0x0000/0x8000 - the rFactor
+ * family); folding is byte-identical to sin()-scaling at the
+ * cardinals 0x4000/0xC000. See docs/T500RS_FFBEFFECTS.md section 7.
+ */
+static int t500rs_synth_dir_project(int level, u16 direction)
+{
+	return fixp_sin16(direction * 360 / 0x10000) < 0 ? -level : level;
+}
+
+/*
+ * Apply attack/fade shaping per Linux FF envelope semantics: the level
+ * rises from envelope.attack_level to full over attack_length, then falls
+ * to envelope.fade_level over the final fade_length of the effect. Envelope
+ * levels are 0..32767; the result is scaled by /32767.
+ */
+static int t500rs_synth_envelope(int sample, const struct ff_envelope *env,
+				 u32 t_ms, u32 len_ms)
+{
+	int scale = 32767;
+	u32 fade_from = 0;
+
+	if (len_ms && t_ms > len_ms)
+		t_ms = len_ms;
+
+	if (env->attack_length && t_ms < env->attack_length) {
+		scale = env->attack_level +
+			((32767 - env->attack_level) * (int)t_ms) /
+				(int)env->attack_length;
+	} else if (env->fade_length && len_ms) {
+		fade_from = len_ms > env->fade_length ?
+			    len_ms - env->fade_length : 0;
+		if (t_ms > fade_from)
+			scale = env->fade_level +
+				((32767 - env->fade_level) *
+				 (int)(len_ms - t_ms)) /
+					(int)(len_ms - fade_from);
+	}
+
+	return (int)(((s64)sample * scale) / 32767);
+}
+
+/*
+ * Compute one playing effect's contribution at time `now` (msecs from
+ * jiffies), in OS units, direction-projected and envelope-shaped. Returns
+ * 0 while the effect is still in its delay window. A finite effect that
+ * has run past (delay + length) * count is expired here: playing is
+ * cleared and 0 returned - the synth engine owns periodic/ramp expiry.
+ */
+static int t500rs_synth_sample(struct t500rs_synth_effect *e,
+			       unsigned long now)
+{
+	u64 elapsed = now - e->start_ms;
+	u32 t;
+	int sample;
+
+	if (elapsed < e->delay_ms)
+		return 0;
+
+	t = (u32)(elapsed - e->delay_ms);
+
+	if (e->length_ms) {
+		u64 total = (u64)e->length_ms * e->count;
+
+		if ((u64)t >= total) {
+			e->playing = false;
+			return 0;
+		}
+	}
+
+	if (e->is_ramp) {
+		u32 len = e->length_ms ? e->length_ms : 1;
+		/* count>1 replays sweep again each iteration; an infinite
+		 * ramp (length 0) sweeps once via the len=1 clamp and holds. */
+		u32 tc = e->length_ms ? (t % e->length_ms) : min(t, len);
+		s64 frac = tc >= len ? 32767 : (s64)tc * 32767 / len;
+
+		sample = (int)(e->start_level +
+			       ((s64)(e->end_level - e->start_level) * frac) /
+				       32767);
+		sample = t500rs_synth_envelope(sample, &e->envelope, tc, len);
+	} else {
+		/* Restart the waveform each iteration of a count>1 replay
+		 * (FF semantics); continuous when length == 0. */
+		u32 ti = e->length_ms ? (t % e->length_ms) : t;
+		u32 pos = (((u64)ti * 256) / e->period_ms +
+			   ((u64)e->phase_cd * 256) / 36000) & 0xff;
+		int mag = e->magnitude;
+
+		switch (e->waveform) {
+		case FF_SQUARE:
+			sample = pos < 128 ? mag : -mag;
+			break;
+		case FF_TRIANGLE:
+			sample = pos < 128 ?
+				 -mag + (2 * mag * (int)pos) / 128 :
+				 3 * mag - (2 * mag * (int)pos) / 128;
+			break;
+		case FF_SAW_UP:
+			sample = (int)(-mag +
+				       ((s64)2 * mag * pos) / 255);
+			break;
+		case FF_SAW_DOWN:
+			sample = (int)(mag -
+				       ((s64)2 * mag * pos) / 255);
+			break;
+		case FF_SINE:
+		default:
+			sample = (int)(((s64)mag *
+					fixp_sin16((int)pos * 360 / 256)) /
+				       0x7fff);
+			break;
+		}
+
+		sample += e->offset;
+		sample = t500rs_synth_envelope(sample, &e->envelope, ti,
+					       e->length_ms);
+	}
+
+	return t500rs_synth_dir_project(sample, e->direction);
+}
+
+/* Caller must hold synth_lock. */
+static bool t500rs_synth_should_run_locked(struct t500rs_device_entry *t500rs)
+{
+	if (t500rs->const_playing)
+		return true;
+
+	for (int i = 0; i < T500RS_MAX_EFFECTS; i++)
+		if (t500rs->synth[i].playing)
+			return true;
+
+	return false;
+}
+
+/* Run one synth tick immediately if the engine is active. */
+static void t500rs_synth_kick(struct t500rs_device_entry *t500rs)
+{
+	if (t500rs->synth_mode)
+		mod_delayed_work(system_wq, &t500rs->synth_work, 0);
+}
+
+/*
+ * Declare slot 0 as a sine on the constant-force channels:
+ *   01 00 22 40 ff ff 00 00 00 0e 00 1c 00 00 00
+ * (infinite duration, zero delay - replay timing is enforced in software).
+ * Must be called before entering synth_mode. Uses send_buffer, i.e. the
+ * core FFB worker context.
+ */
+static int t500rs_synth_send_main(struct t500rs_device_entry *t500rs)
+{
+	struct t500rs_pkt_r01_main *m =
+		(struct t500rs_pkt_r01_main *)t500rs->send_buffer;
+
+	t500rs_build_r01_main(m, 0, T500RS_EFFECT_SINE, 0xffff, 0,
+			      T500RS_CONSTANT_PARAM_SUB,
+			      T500RS_CONSTANT_ENV_SUB);
+	return t500rs_send_hid(t500rs, (u8 *)m, sizeof(*m));
+}
+
+/*
+ * Stream one synthesized level byte on the constant-force channel
+ * (04 0e ... 10 27). Used per tick while the engine runs, and with
+ * level 0 whenever the engine goes idle: the channel byte outlives the
+ * slot-0 MAIN's scheduling, so without an explicit zero the wheel keeps
+ * applying the last streamed sample after STOP/expiry (hardware-observed
+ * residual rumble). The MAIN is declared infinite-duration, so nothing
+ * else ever clears it.
+ *
+ * SIGN: pass-through, UAPI-standard (positive byte = rightward), same
+ * as the native 0x03 channel. One exception lives game-side: rFactor 2
+ * uploads its effects sign-inverted and needs the in-game FFB invert
+ * (-100%); the driver cannot detect or special-case a game.
+ * See docs/T500RS_FFBEFFECTS.md section 7.
+ */
+static int t500rs_synth_stream_level(struct t500rs_device_entry *t500rs,
+				     u8 *buf, s8 level)
+{
+	struct t500rs_pkt_r04_stream *s = (struct t500rs_pkt_r04_stream *)buf;
+
+	memset(s, 0, sizeof(*s));
+	s->id = T500RS_PKT_PERIODIC;
+	s->code = T500RS_CONSTANT_PARAM_SUB;
+	s->level = level;
+	s->magic_lo = 0x10;
+	s->magic_hi = 0x27;
+	return t500rs_send_hid(t500rs, (u8 *)s, sizeof(*s));
+}
+
+/*
+ * Synthesis worker: sums all playing constant/periodic/ramp
+ * contributions, keeps hw slot 0 started only while something plays, and
+ * streams the combined level as 0x04 0x0e packets (skipping duplicates).
+ * Re-arms itself only while slot 0 is running; play/upload callbacks
+ * re-kick it afterwards.
+ */
+static void t500rs_synth_work(struct work_struct *work)
+{
+	struct t500rs_device_entry *t500rs =
+		container_of(to_delayed_work(work), struct t500rs_device_entry,
+			     synth_work);
+	unsigned long flags;
+	unsigned long now = jiffies_to_msecs(jiffies);
+	bool should_run, start = false, stop = false;
+	int total = 0;
+	s8 level;
+
+	spin_lock_irqsave(&t500rs->synth_lock, flags);
+
+	if (t500rs->const_playing) {
+		if (t500rs->const_total_ms &&
+		    now - t500rs->const_start_ms >= t500rs->const_total_ms) {
+			t500rs->const_playing = false;
+		} else {
+			total += t500rs_synth_dir_project(
+				t500rs->const_level, t500rs->const_direction);
+		}
+	}
+
+	for (int i = 0; i < T500RS_MAX_EFFECTS; i++) {
+		struct t500rs_synth_effect *e = &t500rs->synth[i];
+
+		if (e->used && e->playing)
+			total += t500rs_synth_sample(e, now);
+	}
+
+	should_run = t500rs_synth_should_run_locked(t500rs);
+	if (should_run && !t500rs->slot0_running) {
+		t500rs->slot0_running = true;
+		start = true;
+	} else if (!should_run && t500rs->slot0_running) {
+		t500rs->slot0_running = false;
+		stop = true;
+	}
+
+	if (total > 32767)
+		total = 32767;
+	else if (total < -32767)
+		total = -32767;
+	level = t500rs_scale_const_level_s8(total);
+
+	spin_unlock_irqrestore(&t500rs->synth_lock, flags);
+
+	if (start) {
+		int ret = t500rs_send_start_now(t500rs, t500rs->synth_buffer, 0);
+
+		if (ret)
+			hid_err(t500rs->hdev,
+				"synth: slot 0 START failed: %d\n", ret);
+		t500rs->synth_last_valid = false;
+	} else if (stop) {
+		int ret = t500rs_send_stop_now(t500rs, t500rs->synth_buffer, 0);
+
+		if (ret)
+			hid_err(t500rs->hdev,
+				"synth: slot 0 STOP failed: %d\n", ret);
+		t500rs->synth_last_valid = false;
+		/* Clear the latched channel byte after the STOP so expiry
+		 * leaves zero force, not the last mid-waveform sample. */
+		t500rs_synth_stream_level(t500rs, t500rs->synth_buffer, 0);
+		return;
+	}
+
+	if (!should_run)
+		return;
+
+	if (!t500rs->synth_last_valid || t500rs->synth_last_level != level) {
+		int ret = t500rs_synth_stream_level(t500rs,
+						    t500rs->synth_buffer,
+						    level);
+		if (ret) {
+			hid_err(t500rs->hdev,
+				"synth: level stream failed: %d\n", ret);
+		} else {
+			t500rs->synth_last_level = level;
+			t500rs->synth_last_valid = true;
+		}
+	}
+
+	mod_delayed_work(system_wq, &t500rs->synth_work,
+			 t500rs_synth_tick_jiffies());
+}
+
+/* Saturation scaling constants */
+#define T500RS_SATURATION_DEVICE_MAX 100
+#define T500RS_SATURATION_LINUX_MAX 65535
+
+/**
+ * t500rs_scale_saturation - Scale saturation from Linux FFB to device range
+ * @saturation: Linux FFB saturation value (0-65535)
+ *
+ * Returns: Scaled saturation value (0-100)
+ *
+ * Uses 32-bit arithmetic to prevent overflow and ensures accurate scaling.
+ * The result is clamped to 0-100 range.
+ */
+static inline u8 t500rs_scale_saturation(u16 saturation)
+{
+	return (u8)min_t(u32,
+		((u32)saturation * T500RS_SATURATION_DEVICE_MAX) /
+		T500RS_SATURATION_LINUX_MAX,
+		T500RS_SATURATION_DEVICE_MAX);
+}
 
 /*
  * Build and send a 0x03 constant force packet.
@@ -226,10 +612,23 @@ static int t500rs_send_envelope_packet(struct t500rs_device_entry *t500rs,
 	if (!t500rs || !buf || !effect)
 		return -EINVAL;
 
-	/* Constant force must send an all-zero envelope: the firmware
-	 * handles only zero envelope fields for it. */
-	envelope = &effect->u.constant.envelope;
-	allow_envelope = false;
+	/* Determine envelope availability based on effect type */
+	switch (effect->type) {
+	case FF_RAMP:
+		envelope = &effect->u.ramp.envelope;
+		allow_envelope = true;
+		break;
+	case FF_CONSTANT:
+	case FF_PERIODIC:
+		envelope = &effect->u.periodic.envelope;
+		allow_envelope = false; /* Firmware bug: must send zeros */
+		break;
+	default:
+		/* No envelope for this effect type */
+		envelope = NULL;
+		allow_envelope = false;
+		break;
+	}
 
 	/* Build and send envelope packet */
 	env = (struct t500rs_pkt_r02_envelope *)buf;
@@ -318,17 +717,36 @@ static void t500rs_build_r02_envelope(struct t500rs_pkt_r02_envelope *p,
 /* Supported parameters */
 static unsigned long t500rs_params = PARAM_GAIN | PARAM_RANGE;
 
-/* Supported effects. */
-const signed short t500rs_effects[] = { FF_CONSTANT,
+/* Supported effects.
+ *
+ * Periodic (all waveforms) and ramp effects are host-synthesized: the
+ * firmware has no waveform engine (docs/T500RS_FFBEFFECTS.md section 5.4), so
+ * these effects never get per-slot wire declarations - a slot-0 sine
+ * MAIN is declared once and levels are streamed as 0x04 0x0e packets
+ * by the synth engine. Advertising FF_PERIODIC also re-enables
+ * FF_RUMBLE: the parent converts rumble to a sine periodic (period 50 ms)
+ * and gates the rumble capability bit on FF_PERIODIC being advertised.
+ */
+const signed short t500rs_effects[] = { FF_CONSTANT, FF_PERIODIC,
+					FF_SQUARE,     FF_SINE,
+					FF_TRIANGLE,   FF_SAW_UP,
+					FF_SAW_DOWN,   FF_RAMP,
 					FF_GAIN,       FF_AUTOCENTER,
 					-1 };
 
 /*
  * Resolve the hardware effect slot index for a given effect.
  *
+ * The protocol mirrors the param_sub derivation
+ * (docs/T500RS_FFBEFFECTS.md section 4):
+ *
+ *   slot 0   -> param_sub=0x000e, env_sub=0x001c  (constant force)
+ *   slot n>0 -> param_sub=0x000e+0x001c*n, env_sub=0x001c+0x001c*n
+ *
  * Constant force is pinned to slot 0 (its subtypes are fixed in the
- * firmware: param_sub=0x000e, env_sub=0x001c - see
- * docs/T500RS_FFBEFFECTS.md section 4).
+ * firmware). Periodic and ramp effects also resolve to slot 0: they share
+ * the constant-force channel and are separated in software by the synth
+ * engine, never on the wire.
  */
 static u8 t500rs_effect_to_hw_id(const struct ff_effect *effect)
 {
@@ -377,7 +795,17 @@ static int t500rs_send_packet_sequence(struct t500rs_device_entry *t500rs,
 		}
 
 		case T500RS_SEQ_MAIN: {
-			u8 effect_type = T500RS_EFFECT_CONSTANT;
+			u8 effect_type;
+			switch (effect->type) {
+			case FF_CONSTANT:
+				effect_type = T500RS_EFFECT_CONSTANT;
+				break;
+			default:
+				/* Periodic/ramp effects never reach the packet
+				 * sequencer - they are host-synthesized. */
+				return -EINVAL;
+			}
+
 			u16 duration_ms = effect->replay.length ?
 						  effect->replay.length :
 						  0xffff;
@@ -551,12 +979,23 @@ static int t500rs_upload_constant(struct t500rs_device_entry *t500rs,
 				  const struct tmff2_effect_state *state)
 {
 	const struct ff_effect *effect = &state->effect;
+	unsigned long flags;
 	int ret;
 	int level = effect->u.constant.level;
 
 	/* Note: Gain is applied in play_effect, not here */
 	T500RS_DBG(t500rs, "Upload constant: id=%d, level=%d, dir=%u\n",
 		   effect->id, level, effect->direction);
+
+	/* Slot 0 owned by the synth engine: the level joins the streamed
+	 * signal instead of being declared separately. */
+	if (t500rs->synth_mode) {
+		spin_lock_irqsave(&t500rs->synth_lock, flags);
+		t500rs->const_level = level;
+		t500rs->const_direction = effect->direction;
+		spin_unlock_irqrestore(&t500rs->synth_lock, flags);
+		return 0;
+	}
 
 	/* Send packet sequence for constant effect. Constant force uses
 	 * fixed subtypes (T500RS_CONSTANT_PARAM_SUB/ENV_SUB) and hardware
@@ -571,6 +1010,106 @@ static int t500rs_upload_constant(struct t500rs_device_entry *t500rs,
 	}
 
 	T500RS_DBG(t500rs, "Constant effect %d uploaded\n", effect->id);
+	return 0;
+}
+
+/*
+ * Upload periodic effect (sine, square, triangle, saw).
+ *
+ * No wire declaration exists for periodic effects: the firmware has no
+ * waveform engine. The first periodic/ramp upload declares slot 0 as a
+ * sine MAIN (t500rs_synth_send_main, C2-proven) and from then on the
+ * waveform is computed by the synth engine and streamed as 0x04 0x0e
+ * levels. Parameters are stored in the per-effect synth slot.
+ */
+static int t500rs_upload_periodic(struct t500rs_device_entry *t500rs,
+				  const struct tmff2_effect_state *state)
+{
+	const struct ff_effect *effect = &state->effect;
+	struct t500rs_synth_effect *e = &t500rs->synth[effect->id];
+	unsigned long flags;
+	int ret;
+
+	if (effect->u.periodic.period == 0) {
+		hid_err(t500rs->hdev,
+			"Periodic effect period cannot be zero\n");
+		return -EINVAL;
+	}
+
+	if (!t500rs->synth_mode) {
+		ret = t500rs_synth_send_main(t500rs);
+		if (ret) {
+			hid_err(t500rs->hdev,
+				"Failed to declare synth slot 0: %d\n", ret);
+			return ret;
+		}
+		t500rs->synth_mode = true;
+	}
+
+	spin_lock_irqsave(&t500rs->synth_lock, flags);
+	e->used = true;
+	e->is_ramp = false;
+	e->waveform = effect->u.periodic.waveform;
+	e->magnitude = effect->u.periodic.magnitude;
+	e->offset = effect->u.periodic.offset;
+	e->phase_cd = effect->u.periodic.phase;
+	e->period_ms = effect->u.periodic.period;
+	e->direction = effect->direction;
+	e->envelope = effect->u.periodic.envelope;
+	e->delay_ms = effect->replay.delay;
+	e->length_ms = effect->replay.length;
+	spin_unlock_irqrestore(&t500rs->synth_lock, flags);
+
+	T500RS_DBG(t500rs,
+		   "Periodic effect %d uploaded (synth): dir=%u waveform=%u mag=%u off=%d phase=%u period=%u len=%u delay=%u\n",
+		   effect->id, effect->direction, effect->u.periodic.waveform,
+		   effect->u.periodic.magnitude, effect->u.periodic.offset,
+		   effect->u.periodic.phase, effect->u.periodic.period,
+		   effect->replay.length, effect->replay.delay);
+	return 0;
+}
+
+/*
+ * Upload ramp effect - host-synthesized like periodic. The level sweeps
+ * start_level -> end_level over replay.length (then holds until the total
+ * expires); envelopes are applied in software by the synth engine.
+ */
+static int t500rs_upload_ramp(struct t500rs_device_entry *t500rs,
+			      const struct tmff2_effect_state *state)
+{
+	const struct ff_effect *effect = &state->effect;
+	struct t500rs_synth_effect *e = &t500rs->synth[effect->id];
+	unsigned long flags;
+	int ret;
+
+	if (effect->replay.length == 0) {
+		hid_err(t500rs->hdev, "Ramp effect duration cannot be zero\n");
+		return -EINVAL;
+	}
+
+	if (!t500rs->synth_mode) {
+		ret = t500rs_synth_send_main(t500rs);
+		if (ret) {
+			hid_err(t500rs->hdev,
+				"Failed to declare synth slot 0: %d\n", ret);
+			return ret;
+		}
+		t500rs->synth_mode = true;
+	}
+
+	spin_lock_irqsave(&t500rs->synth_lock, flags);
+	e->used = true;
+	e->is_ramp = true;
+	e->start_level = effect->u.ramp.start_level;
+	e->end_level = effect->u.ramp.end_level;
+	e->period_ms = 0;
+	e->direction = effect->direction;
+	e->envelope = effect->u.ramp.envelope;
+	e->delay_ms = effect->replay.delay;
+	e->length_ms = effect->replay.length;
+	spin_unlock_irqrestore(&t500rs->synth_lock, flags);
+
+	T500RS_DBG(t500rs, "Ramp effect %d uploaded (synth)\n", effect->id);
 	return 0;
 }
 
@@ -600,9 +1139,30 @@ static int t500rs_upload_effect(void *data,
 	 * Specifically NOT checked (all either impossible for the field's
 	 * type or already covered by helper clamping):
 	 *  - constant.level  (__s16; helper clamps to [-32767,32767])
+	 *  - periodic.magnitude (__u16; helper clamps projected value)
+	 *  - periodic.offset (__s16; full range handled by /256 scaling)
+	 *  - ramp start/end_level (__s16; builder uses abs()/division)
 	 *  - replay.delay (__u16; cannot exceed 65535)
 	 */
-	if (effect->type != FF_CONSTANT) {
+	switch (effect->type) {
+	case FF_CONSTANT:
+	case FF_RAMP:
+		break;
+
+	case FF_PERIODIC:
+		/* phase is documented in the UAPI as 0..35999 (1/100 deg);
+		 * reject a malformed value rather than silently clamping it
+		 * (clamping would subtly shift the phase).
+		 */
+		if (effect->u.periodic.phase > 35999) {
+			hid_err(t500rs->hdev,
+				"Periodic phase %u exceeds maximum 35999\n",
+				effect->u.periodic.phase);
+			return -EINVAL;
+		}
+		break;
+
+	default:
 		hid_err(t500rs->hdev, "Unsupported effect type: %d\n",
 			effect->type);
 		return -EINVAL;
@@ -610,10 +1170,25 @@ static int t500rs_upload_effect(void *data,
 
 	/* Direction is provided by the Linux FF subsystem as 0..65535 (u16);
 	 * projection onto the wheel axis happens in
-	 * t500rs_scale_const_with_direction(), so accept the full u16
-	 * range here. */
+	 * t500rs_scale_const_with_direction() for native constant force and
+	 * in the synth engine's per-sample projection otherwise, so accept
+	 * the full u16 range here. */
 
-	ret = t500rs_upload_constant(t500rs, state);
+	switch (effect->type) {
+	case FF_CONSTANT:
+		ret = t500rs_upload_constant(t500rs, state);
+		break;
+	case FF_PERIODIC:
+		ret = t500rs_upload_periodic(t500rs, state);
+		break;
+	case FF_RAMP:
+		ret = t500rs_upload_ramp(t500rs, state);
+		break;
+	default:
+		hid_err(t500rs->hdev, "Unsupported effect type: %d\n",
+			effect->type);
+		return -EINVAL;
+	}
 
 	if (ret < 0) {
 		hid_err(t500rs->hdev,
@@ -714,11 +1289,60 @@ static int t500rs_play_effect(void *data,
 	/* Validate effect type is supported */
 	switch (effect->type) {
 	case FF_CONSTANT:
+	case FF_PERIODIC:
+	case FF_RAMP:
 		break;
 	default:
 		hid_err(t500rs->hdev, "Unsupported effect type for play: %d\n",
 			effect->type);
 		return -EINVAL;
+	}
+
+	/* Synth-owned effects (and constants while the synth engine owns
+	 * slot 0) never START their own hardware slot: the engine gates
+	 * slot 0 on "anything playing" and software-enforces expiry. */
+	if (effect->type == FF_PERIODIC || effect->type == FF_RAMP ||
+	    (effect->type == FF_CONSTANT && t500rs->synth_mode)) {
+		unsigned long total = (unsigned long)(effect->replay.delay +
+						      effect->replay.length) *
+				      state->count;
+		bool need_start = false;
+
+		ret = 0;
+		spin_lock_irqsave(&t500rs->synth_lock, flags);
+		if (effect->type == FF_CONSTANT) {
+			t500rs->const_playing = true;
+			t500rs->const_level = effect->u.constant.level;
+			t500rs->const_direction = effect->direction;
+			t500rs->const_start_ms = jiffies_to_msecs(jiffies);
+			t500rs->const_total_ms = total;
+		} else {
+			struct t500rs_synth_effect *e =
+				&t500rs->synth[effect->id];
+
+			e->playing = true;
+			e->count = state->count;
+			e->start_ms = jiffies_to_msecs(jiffies);
+		}
+		if (!t500rs->slot0_running &&
+		    t500rs_synth_should_run_locked(t500rs)) {
+			t500rs->slot0_running = true;
+			need_start = true;
+		}
+		spin_unlock_irqrestore(&t500rs->synth_lock, flags);
+
+		if (need_start) {
+			ret = t500rs_send_start(t500rs, 0);
+			if (ret)
+				hid_err(t500rs->hdev,
+					"synth: slot 0 START failed: %d\n",
+					ret);
+		}
+		t500rs_synth_kick(t500rs);
+
+		T500RS_DBG(t500rs, "Started synth effect %d (total=%lu ms)\n",
+			   effect->id, total);
+		return ret;
 	}
 
 	ret = t500rs_send_start(t500rs, t500rs_effect_to_hw_id(effect));
@@ -775,6 +1399,39 @@ static int t500rs_stop_effect(void *data,
 		return -ENOMEM;
 	}
 
+	/* Synth-owned effects: clear the playing flag and STOP slot 0 only
+	 * when nothing else is playing either. */
+	if (effect->type == FF_PERIODIC || effect->type == FF_RAMP ||
+	    (effect->type == FF_CONSTANT && t500rs->synth_mode)) {
+		bool need_stop = false;
+		int ret = 0;
+
+		spin_lock_irqsave(&t500rs->synth_lock, flags);
+		if (effect->type == FF_CONSTANT)
+			t500rs->const_playing = false;
+		else
+			t500rs->synth[effect->id].playing = false;
+		if (t500rs->slot0_running &&
+		    !t500rs_synth_should_run_locked(t500rs)) {
+			t500rs->slot0_running = false;
+			need_stop = true;
+		}
+		spin_unlock_irqrestore(&t500rs->synth_lock, flags);
+
+		if (need_stop) {
+			ret = t500rs_send_stop(t500rs, 0);
+			if (ret)
+				hid_err(t500rs->hdev,
+					"synth: slot 0 STOP failed: %d\n",
+					ret);
+			/* Clear the latched channel byte so stopping really
+			 * is zero force (see t500rs_synth_stream_level). */
+			ret = t500rs_synth_stream_level(t500rs,
+							t500rs->send_buffer, 0);
+		}
+		return ret;
+	}
+
 	spin_lock_irqsave(&t500rs->expiry_lock, flags);
 	t500rs->active[effect->id].active = false;
 	t500rs_expiry_arm_locked(t500rs);
@@ -786,7 +1443,7 @@ static int t500rs_stop_effect(void *data,
 /*
  * Update effect - send parameter updates without re-uploading
  *
- * Note: Only parameter-specific packets (0x03) are updated.
+ * Note: Only parameter-specific packets (0x03, 0x04, 0x05) are updated.
  * Duration and delay changes (from 0x01 packet) require full re-upload.
  * This limitation is acceptable as duration/delay modifications are rare
  * in gaming applications and the hardware may not support runtime updates
@@ -798,6 +1455,7 @@ static int t500rs_update_effect(void *data,
 	struct t500rs_device_entry *t500rs = data;
 	const struct ff_effect *effect = &state->effect;
 	const struct ff_effect *old = &state->old;
+	unsigned long flags;
 	u8 *buf;
 
 	if (!t500rs)
@@ -813,10 +1471,63 @@ static int t500rs_update_effect(void *data,
 		    effect->direction == old->direction)
 			return 0;
 
+		if (t500rs->synth_mode) {
+			spin_lock_irqsave(&t500rs->synth_lock, flags);
+			t500rs->const_level = effect->u.constant.level;
+			t500rs->const_direction = effect->direction;
+			spin_unlock_irqrestore(&t500rs->synth_lock, flags);
+			t500rs_synth_kick(t500rs);
+			return 0;
+		}
+
 		/* Constant force uses fixed subtypes (see docs/T500RS_FFBEFFECTS.md). */
 		return t500rs_send_constant_packet(
 			t500rs, buf, (u8)T500RS_CONSTANT_PARAM_SUB,
 			effect->u.constant.level, effect->direction);
+	}
+
+	case FF_PERIODIC: {
+		struct t500rs_synth_effect *e = &t500rs->synth[effect->id];
+
+		if (effect->u.periodic.period == 0)
+			return -EINVAL;
+
+		spin_lock_irqsave(&t500rs->synth_lock, flags);
+		e->magnitude = effect->u.periodic.magnitude;
+		e->offset = effect->u.periodic.offset;
+		e->phase_cd = effect->u.periodic.phase;
+		e->period_ms = effect->u.periodic.period;
+		e->direction = effect->direction;
+		e->envelope = effect->u.periodic.envelope;
+		e->delay_ms = effect->replay.delay;
+		e->length_ms = effect->replay.length;
+		spin_unlock_irqrestore(&t500rs->synth_lock, flags);
+		t500rs_synth_kick(t500rs);
+		T500RS_DBG(t500rs,
+			   "Periodic effect %d updated (synth): dir=%u mag=%u off=%d phase=%u period=%u len=%u\n",
+			   effect->id, effect->direction,
+			   effect->u.periodic.magnitude,
+			   effect->u.periodic.offset, effect->u.periodic.phase,
+			   effect->u.periodic.period, effect->replay.length);
+		return 0;
+	}
+
+	case FF_RAMP: {
+		struct t500rs_synth_effect *e = &t500rs->synth[effect->id];
+
+		if (effect->replay.length == 0)
+			return -EINVAL;
+
+		spin_lock_irqsave(&t500rs->synth_lock, flags);
+		e->start_level = effect->u.ramp.start_level;
+		e->end_level = effect->u.ramp.end_level;
+		e->length_ms = effect->replay.length;
+		e->direction = effect->direction;
+		e->envelope = effect->u.ramp.envelope;
+		e->delay_ms = effect->replay.delay;
+		spin_unlock_irqrestore(&t500rs->synth_lock, flags);
+		t500rs_synth_kick(t500rs);
+		return 0;
 	}
 
 	default:
@@ -977,6 +1688,7 @@ static int t500rs_wheel_init(struct tmff2_device_entry *tmff2, int open_mode)
 
 	/* Sanity check protocol packet sizes against documentation */
 	BUILD_BUG_ON(sizeof(struct t500rs_pkt_r01_main) != 15);
+	BUILD_BUG_ON(sizeof(struct t500rs_pkt_r04_stream) != 8);
 
 	/* Validate input parameters */
 	if (!tmff2) {
@@ -1028,9 +1740,24 @@ static int t500rs_wheel_init(struct tmff2_device_entry *tmff2, int open_mode)
 		goto err_expiry_alloc;
 	}
 
+	/* Dedicated DMA-safe buffer for the synthesis worker (same
+	 * no-race rationale as expiry_buffer above). */
+	t500rs->synth_buffer = kzalloc(t500rs->buffer_length, GFP_KERNEL);
+	if (!t500rs->synth_buffer) {
+		hid_err(tmff2->hdev,
+			"Failed to allocate synth buffer (%zu bytes)\n",
+			t500rs->buffer_length);
+		ret = -ENOMEM;
+		goto err_synth_alloc;
+	}
+
 	spin_lock_init(&t500rs->expiry_lock);
 	INIT_DELAYED_WORK(&t500rs->expiry_work, t500rs_expiry_work);
 	memset(t500rs->active, 0, sizeof(t500rs->active));
+
+	spin_lock_init(&t500rs->synth_lock);
+	INIT_DELAYED_WORK(&t500rs->synth_work, t500rs_synth_work);
+	memset(t500rs->synth, 0, sizeof(t500rs->synth));
 
 	/* Store device data in tmff2 BEFORE any operations that might fail */
 	tmff2->data = t500rs;
@@ -1078,11 +1805,13 @@ static int t500rs_wheel_init(struct tmff2_device_entry *tmff2, int open_mode)
 
 	/* Defensive state reset: a module reload (rmmod/insmod) does not
 	 * reset the firmware - only a USB replug does. Effects left playing
-	 * by a previous session survive into this probe and desync the new
-	 * session (observed: after a reload, LFS under Wine had no forces
-	 * until the wheel was unplugged/replugged). Bring the wheel to a
-	 * known state: STOP every hardware slot. Advisory - on failure the
-	 * residue stays, which is exactly the pre-reset behavior.
+	 * by a previous session, a stale slot-0 sine MAIN and a non-zero
+	 * constant-channel stream level survive into this probe and desync
+	 * the new session (observed: after a reload, LFS under Wine had no
+	 * forces until the wheel was unplugged/replugged). Bring the wheel
+	 * to a known state: STOP every hardware slot and zero the stream
+	 * level. Advisory - on failure the residue stays, which is exactly
+	 * the pre-reset behavior.
 	 */
 	for (i = 0; i < T500RS_MAX_HW_EFFECTS; i++) {
 		ret = t500rs_send_stop(t500rs, i);
@@ -1090,6 +1819,11 @@ static int t500rs_wheel_init(struct tmff2_device_entry *tmff2, int open_mode)
 			hid_warn(t500rs->hdev,
 				 "Init slot STOP %d failed: %d\n", i, ret);
 	}
+
+	ret = t500rs_synth_stream_level(t500rs, t500rs->send_buffer, 0);
+	if (ret)
+		hid_warn(t500rs->hdev,
+			 "Init stream zero failed: %d\n", ret);
 
 	/* Report 0x40 - Disable built-in autocenter (4 bytes). Advisory:
 	 * if this fails the base keeps its default autocenter, which the
@@ -1139,8 +1873,9 @@ static int t500rs_wheel_init(struct tmff2_device_entry *tmff2, int open_mode)
 
 	return 0;
 
-err_expiry_alloc:
+err_synth_alloc:
 	kfree(t500rs->expiry_buffer);
+err_expiry_alloc:
 	kfree(t500rs->send_buffer);
 err_buffer_alloc:
 	/* t500rs structure is allocated but not yet stored in tmff2->data */
@@ -1162,9 +1897,15 @@ static int t500rs_wheel_destroy(void *data)
 	T500RS_DBG(t500rs, "T500RS: Cleaning up\n");
 
 	/* Cancel any pending work before freeing its buffer. */
+	cancel_delayed_work_sync(&t500rs->synth_work);
 	cancel_delayed_work_sync(&t500rs->expiry_work);
 
 	/* Free resources in reverse order of allocation */
+	if (t500rs->synth_buffer) {
+		kfree(t500rs->synth_buffer);
+		t500rs->synth_buffer = NULL;
+	}
+
 	if (t500rs->expiry_buffer) {
 		kfree(t500rs->expiry_buffer);
 		t500rs->expiry_buffer = NULL;

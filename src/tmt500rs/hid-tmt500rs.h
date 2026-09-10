@@ -18,6 +18,7 @@
 /* Packet type constants */
 #define T500RS_PKT_MAIN 0x01
 #define T500RS_PKT_CONSTANT 0x03
+#define T500RS_PKT_PERIODIC 0x04
 #define T500RS_PKT_GAIN 0x43
 
 /* Control constants */
@@ -44,8 +45,18 @@
 #define T500RS_CONSTANT_PARAM_SUB 0x0e
 #define T500RS_CONSTANT_ENV_SUB 0x1c
 
-/* Effect type constants - codes this driver actually puts on the wire. */
+/* Effect type constants - codes this driver actually puts on the wire.
+ *
+ * Host-side synthesis model (docs/T500RS_FFBEFFECTS.md section 5.4): the
+ * firmware has no periodic waveform engine. Windows declares periodic
+ * effects as a sine (0x22) MAIN on slot 0 with the constant-force
+ * channels and streams the synthesized waveform as 0x04 0x0e level
+ * updates. Only these four type codes are known-good; any other value
+ * in the 0x2x range (square 0x20, triangle 0x21, saw 0x23/0x24) is
+ * unsourced and MUST NOT be sent.
+ */
 #define T500RS_EFFECT_CONSTANT 0x00
+#define T500RS_EFFECT_SINE 0x22 /* the only periodic MAIN type; all waveforms are synthesized onto it */
 
 /* Hardware limits */
 /* Advertise 15 logical effect slots to the framework (logical IDs 0..14).
@@ -100,7 +111,7 @@ extern const signed short t500rs_effects[];
  * - b4-b5: duration in milliseconds (LE)
  * - b6-b7: delay before start in milliseconds (LE)
  * - b8: reserved (0x00)
- * - b9-b10: parameter packet subtype (LE) - determines 0x03 codes
+ * - b9-b10: parameter packet subtype (LE) - determines 0x03/0x04 codes
  * - b11-b12: envelope packet subtype (LE) - determines 0x02 code
  * - b13-b14: reserved (0x0000)
  */
@@ -112,9 +123,31 @@ struct t500rs_pkt_r01_main {
 	__le16 duration_ms; /* b4-b5: duration in ms (LE) */
 	__le16 delay_ms; /* b6-b7: delay before start in ms (LE) */
 	u8 reserved1; /* b8: 0x00 */
-	__le16 packet_code_1; /* b9-b10: param subtype for 0x03/0x04/0x05 (LE) */
+	__le16 packet_code_1; /* b9-b10: param subtype for 0x03/0x04 (LE) */
 	__le16 packet_code_2; /* b11-b12: env subtype for 0x02 (LE) */
 	__le16 reserved2; /* b13-b14: 0x0000 */
+} __packed;
+
+/*
+ * 0x04 - Constant-channel DC level stream (8 bytes)
+ *
+ * The only 0x04 form the firmware accepts. Windows drivers synthesize
+ * periodic/ramp waveforms host-side and stream the combined signed level
+ * on the constant-force channel (code 0x0e) using this packet. The
+ * trailing 0x2710 (LE) is a constant magic marker.
+ *
+ * A per-slot periodic-parameters variant (code != 0x0e, e.g. '04 2a ...')
+ * wedges the wheel until it drops off the bus. Do not reinvent it.
+ */
+struct t500rs_pkt_r04_stream {
+	u8 id; /* b0: T500RS_PKT_PERIODIC */
+	u8 code; /* b1: always 0x0e (constant-force channel) */
+	u8 zero1; /* b2: 0x00 */
+	u8 zero2; /* b3: 0x00 */
+	s8 level; /* b4: signed force level, the synthesized signal */
+	u8 zero3; /* b5: 0x00 */
+	u8 magic_lo; /* b6-b7: 0x2710 LE magic (b6 = 0x10) */
+	u8 magic_hi; /* b7 = 0x27 */
 } __packed;
 
 /*
