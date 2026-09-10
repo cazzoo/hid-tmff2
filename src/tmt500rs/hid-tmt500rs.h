@@ -19,6 +19,7 @@
 #define T500RS_PKT_MAIN 0x01
 #define T500RS_PKT_CONSTANT 0x03
 #define T500RS_PKT_PERIODIC 0x04
+#define T500RS_PKT_CONDITIONAL 0x05
 #define T500RS_PKT_GAIN 0x43
 
 /* Control constants */
@@ -57,6 +58,10 @@
  */
 #define T500RS_EFFECT_CONSTANT 0x00
 #define T500RS_EFFECT_SINE 0x22 /* the only periodic MAIN type; all waveforms are synthesized onto it */
+#define T500RS_EFFECT_SPRING 0x40
+#define T500RS_EFFECT_DAMPER 0x41
+#define T500RS_EFFECT_FRICTION 0x41
+#define T500RS_EFFECT_INERTIA 0x41
 
 /* Hardware limits */
 /* Advertise 15 logical effect slots to the framework (logical IDs 0..14).
@@ -84,6 +89,8 @@
 enum t500rs_seq_packet {
 	T500RS_SEQ_ENVELOPE,
 	T500RS_SEQ_CONSTANT,
+	T500RS_SEQ_CONDITION_X,
+	T500RS_SEQ_CONDITION_Y,
 	T500RS_SEQ_MAIN,
 };
 
@@ -111,19 +118,19 @@ extern const signed short t500rs_effects[];
  * - b4-b5: duration in milliseconds (LE)
  * - b6-b7: delay before start in milliseconds (LE)
  * - b8: reserved (0x00)
- * - b9-b10: parameter packet subtype (LE) - determines 0x03/0x04 codes
+ * - b9-b10: parameter packet subtype (LE) - determines 0x03/0x04/0x05 codes
  * - b11-b12: envelope packet subtype (LE) - determines 0x02 code
  * - b13-b14: reserved (0x0000)
  */
 struct t500rs_pkt_r01_main {
   u8 id; /* b0: T500RS_PKT_MAIN */
-  u8 effect_id; /* b1: hardware slot index */
+  u8 effect_id; /* b1: hardware slot index (0=constant, 1+=non-constant) */
 	u8 effect_type; /* b2: effect type (T500RS_EFFECT_*) */
 	u8 control; /* b3: always T500RS_CONTROL_DEFAULT (0x40) */
 	__le16 duration_ms; /* b4-b5: duration in ms (LE) */
 	__le16 delay_ms; /* b6-b7: delay before start in ms (LE) */
 	u8 reserved1; /* b8: 0x00 */
-	__le16 packet_code_1; /* b9-b10: param subtype for 0x03/0x04 (LE) */
+	__le16 packet_code_1; /* b9-b10: param subtype for 0x03/0x04/0x05 (LE) */
 	__le16 packet_code_2; /* b11-b12: env subtype for 0x02 (LE) */
 	__le16 reserved2; /* b13-b14: 0x0000 */
 } __packed;
@@ -151,8 +158,38 @@ struct t500rs_pkt_r04_stream {
 } __packed;
 
 /*
- * 0x03 - Constant force level (4 bytes)
+ * 0x05 - Conditional Effect Packet (11 bytes)
+ *
+ * Packet format:
+ * - b0: packet type (0x05)
+ * - b1: code (from 0x01 packet_code_1 or packet_code_2)
+ * - b2: reserved (always 0x00)
+ * - b3: right coefficient (u8, 0-10 scale)
+ * - b4: left coefficient (u8, 0-10 scale)
+ * - b5-b6: center/offset (s16 LE, scaled from Linux +-32767 range)
+ * - b7-b8: deadband (u16 LE, scaled from Linux 0-65535 range)
+ * - b9: right saturation (0-100, controls effect strength)
+ * - b10: left saturation (0-100, controls effect strength)
+ *
+ * Scaling (from Linux FFB to device):
+ * - Coefficients: (value * level% * 10) / 32767 -> 0-10 u8, rounded
+ * - Center: value / 20 -> s16 LE
+ * - Deadband: value / 65 -> u16 LE (divisor unconfirmed)
+ * - Saturation: 0-100 (no scaling)
  */
+struct t500rs_pkt_r05_condition {
+	u8 id; /* T500RS_PKT_CONDITIONAL */
+	u8 code; /* from 0x01 code1/code2 */
+	u8 reserved; /* Always 0x00 */
+	u8 right_coeff; /* Right/positive coefficient (0-10 scale) */
+	u8 left_coeff; /* Left/negative coefficient (0-10 scale) */
+	__le16 center; /* Center offset (s16 LE, scaled by /20) */
+	__le16 deadband; /* Deadband width (u16 LE, scaled by /65; divisor unconfirmed) */
+	u8 right_sat; /* Right saturation (0-100) */
+	u8 left_sat; /* Left saturation (0-100) */
+} __packed;
+
+/* 0x03 - Constant force level (4 bytes) */
 struct t500rs_r03_const {
 	u8 id; /* T500RS_PKT_CONSTANT */
 	u8 code; /* param_subtype low byte (e.g. 0x0e for slot 0) */
@@ -163,7 +200,7 @@ struct t500rs_r03_const {
 /* 0x41 - START/STOP command (4 bytes) */
 struct t500rs_r41_cmd {
   u8 id; /* 0x41 */
-  u8 effect_id; /* hardware slot index; init STOP uses 15 */
+  u8 effect_id; /* hardware slot index (0=constant, 1+=non-constant); init STOP uses 15 */
   u8 command; /* 0x41 START, 0x00 STOP, 0x00 clear in init */
   u8 arg; /* 0xff for START, 0x01 for STOP */
 } __packed;

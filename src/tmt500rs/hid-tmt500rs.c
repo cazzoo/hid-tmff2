@@ -44,6 +44,12 @@ static const enum t500rs_seq_packet t500rs_seq_constant[] = {
 	T500RS_SEQ_MAIN,
 };
 
+static const enum t500rs_seq_packet t500rs_seq_condition[] = {
+	T500RS_SEQ_CONDITION_X,
+	T500RS_SEQ_CONDITION_Y,
+	T500RS_SEQ_MAIN,
+};
+
 /* Scale constant level (-32767..32767) to signed 8-bit (-127..127) */
 static inline s8 t500rs_scale_const_level_s8(int level)
 {
@@ -77,8 +83,28 @@ static inline s8 t500rs_scale_const_with_direction(int level, u16 direction)
  * T500RS encodes the effect "slot" in the parameter/envelope subtypes
  * (0x0e + 0x1c*n / 0x1c + 0x1c*n), AND in the 0x01/0x41 effect_id byte.
  * The effect_id byte mirrors the slot index (0=constant, 1+=non-constant),
- * matching the captured Windows behaviour.
+ * matching the param_sub derivation in t500rs_index_to_subtypes() and the
+ * captured Windows behaviour.
  */
+
+/* Map effect index to parameter/envelope subtypes as per protocol:
+ *  param_sub = 0x000e + 0x001c * idx
+ *  env_sub   = 0x001c + 0x001c * idx
+ * idx is the per-effect slot index (callers pass effect->id + 1 so that
+ * non-constant effects never collide with the constant force's fixed
+ * index-0 subtypes). See docs/T500RS_FFBEFFECTS.md.
+ */
+static inline void t500rs_index_to_subtypes(unsigned int idx, u16 *param_sub,
+					    u16 *env_sub)
+{
+	/* Validate inputs */
+	if (idx >= T500RS_MAX_HW_EFFECTS) {
+		idx = T500RS_MAX_HW_EFFECTS - 1; /* Clamp to valid range */
+	}
+
+	*param_sub = 0x000e + (0x001c * idx);
+	*env_sub = 0x001c + (0x001c * idx);
+}
 
 /* Debug logging helper: pass struct t500rs_device_entry * explicitly */
 #define T500RS_DBG(dev, fmt, ...) hid_dbg((dev)->hdev, fmt, ##__VA_ARGS__)
@@ -173,13 +199,16 @@ struct t500rs_device_entry {
  * - effect_id: 16-bit LE hardware effect slot (0..15 for now)
  * - duration_ms: duration in milliseconds
  * - delay_ms: delay before effect starts
- * - param_sub: parameter subtype (used by 0x03/0x04)
- * - envelope_sub: envelope subtype (used by 0x02)
+ * - param_sub: parameter subtype (used by 0x03/0x04/0x05)
+ * - envelope_sub: envelope subtype (used by 0x02), or second conditional
+ * subtype
  *
  * Effect type values this driver puts on the wire:
  * - 0x00 = Constant
  * - 0x22 = Sine (the synth engine's slot-0 declaration; every periodic
  *   and ramp effect is host-synthesized onto it)
+ * - 0x40 = Spring
+ * - 0x41 = Damper/Friction/Inertia
  *
  * NOTE: Direction is sent separately in a 0x03 packet for constant force,
  * not in this 0x01 packet.
@@ -547,6 +576,143 @@ static inline u8 t500rs_scale_saturation(u16 saturation)
 }
 
 /*
+ * Build a 0x05 conditional effect packet.
+ *
+ * Per captures (T500RS_FFBEFFECTS.md):
+ * - packet structure with u8 coefficients and proper field layout
+ * - Coefficients are sent as 0-10 scale (not zero)
+ * - Center and deadband are scaled from Linux FFB ranges
+ *
+ * Parameters:
+ * - code: From 0x01 packet bytes 9-10 (first packet) or 11-12 (second packet)
+ * - right_coeff: Right/positive coefficient from ff_condition_effect (0-32767)
+ * - left_coeff: Left/negative coefficient from ff_condition_effect (0-32767)
+ * - saturation: Saturation value (0-100) for both right/left channels
+ * - deadband: Deadband from ff_condition_effect (0-65535)
+ * - center: Center offset from ff_condition_effect (-32767 to +32767)
+ */
+/* Resolve the per-effect-type strength level (0-100) for conditional effects.
+ * Mirrors T300RS t300rs_calculate_coefficient()'s input_level selection:
+ * spring/damper/friction honor their module params; inertia defaults to 100.
+ *
+ * The module params are 'int' and are not range-checked at module_param load
+ * time; the sysfs store clamps >100 but not negatives. Clamp to [0,100] here
+ * so an out-of-range/negative value cannot wrap through the u8 return and
+ * skew coefficient scaling.
+ */
+static inline u8 t500rs_condition_level(u16 effect_type)
+{
+	int level;
+
+	switch (effect_type) {
+	case FF_SPRING:
+		level = spring_level;
+		break;
+	case FF_DAMPER:
+		level = damper_level;
+		break;
+	case FF_FRICTION:
+		level = friction_level;
+		break;
+	default:
+		level = 100;
+		break;
+	}
+
+	return (u8)clamp_t(int, level, 0, 100);
+}
+
+static void t500rs_build_r05_condition(struct t500rs_pkt_r05_condition *p,
+				       u8 code, s16 right_coeff, s16 left_coeff,
+				       u8 level, u8 right_sat, u8 left_sat,
+				       u16 deadband, s16 center)
+{
+	memset(p, 0, sizeof(*p));
+	p->id = T500RS_PKT_CONDITIONAL;
+	p->code = code;
+	p->reserved = 0x00;
+
+	/* Scale coefficients from Linux 0-32767 range to device 0-10 u8 scale,
+	 * applying the per-effect-type strength level (spring/damper/friction
+	 * module params), matching the T300RS t300rs_calculate_coefficient().
+	 *
+	 * right_coeff/left_coeff are __s16 and may be negative (the FF UAPI
+	 * allows signed condition coefficients). The T500RS device field is an
+	 * unsigned 0..10 strength byte (unlike T300RS's signed 16-bit field),
+	 * so compute in int and clamp the result to [0,10]: a negative
+	 * coefficient maps to 0 (no force) rather than wrapping to ~246, and
+	 * any overflow saturates at 10.
+	 *
+	 * Rounding (not truncation): the 0..10 scale is coarse, and
+	 * truncation needlessly weakens mid-range coefficients (20000 at
+	 * level 30 gives 1/10 truncated, 2/10 rounded).
+	 *
+	 * The exact scaling was derived from the Windows traffic, not from
+	 * a known input/output pair, and values above 10 have never been
+	 * observed on the wire.
+	 */
+	p->right_coeff = (u8)clamp_t(int,
+			(((right_coeff * (int)level) / 100) * 10 + 32767 / 2) /
+				32767,
+			0, 10);
+	p->left_coeff = (u8)clamp_t(int,
+			(((left_coeff * (int)level) / 100) * 10 + 32767 / 2) /
+				32767,
+			0, 10);
+
+	/* Center: scaled by /20. */
+	p->center = cpu_to_le16((s16)(center / 20));
+
+	/* Deadband: the divisor is unconfirmed (captures only ever show
+	 * deadband=0); /65 was chosen so 65535 maps to 1008, which fits
+	 * the device field.
+	 */
+	p->deadband = cpu_to_le16((u16)(deadband / 65));
+
+	p->right_sat = right_sat;
+	p->left_sat = left_sat;
+}
+
+/*
+ * Build and send a 0x05 conditional effect packet.
+ *
+ * This helper function encapsulates the common pattern of building and
+ * sending a condition (spring/damper/friction/inertia) packet, reducing
+ * code duplication and improving maintainability.
+ *
+ * Parameters:
+ * - t500rs: Device context
+ * - buf: Buffer to use for packet construction
+ * - code: Packet code (from param_sub or env_sub)
+ * - cond: Condition effect parameters
+ *
+ * Returns: 0 on success, negative errno on failure
+ */
+static int t500rs_send_condition_packet(struct t500rs_device_entry *t500rs,
+					u8 *buf, u8 code,
+					const struct ff_condition_effect *cond,
+					u8 level)
+{
+	struct t500rs_pkt_r05_condition *p;
+
+	if (!t500rs || !buf || !cond)
+		return -EINVAL;
+
+	/* Scale saturation from Linux FFB range to device range */
+	u8 right_sat = t500rs_scale_saturation(cond->right_saturation);
+	u8 left_sat = t500rs_scale_saturation(cond->left_saturation);
+
+	/* Build and send the condition packet */
+	p = (struct t500rs_pkt_r05_condition *)buf;
+	t500rs_build_r05_condition(p, code, cond->right_coeff, cond->left_coeff,
+				   level, right_sat, left_sat, cond->deadband,
+				   cond->center);
+
+	return t500rs_send_hid(t500rs, buf,
+			       sizeof(struct t500rs_pkt_r05_condition));
+}
+
+/*
  * Build and send a 0x03 constant force packet.
  *
  * This helper function encapsulates the common pattern of building and
@@ -715,7 +881,9 @@ static void t500rs_build_r02_envelope(struct t500rs_pkt_r02_envelope *p,
 }
 
 /* Supported parameters */
-static unsigned long t500rs_params = PARAM_GAIN | PARAM_RANGE;
+static unsigned long t500rs_params = PARAM_SPRING_LEVEL | PARAM_DAMPER_LEVEL |
+				     PARAM_FRICTION_LEVEL | PARAM_GAIN |
+				     PARAM_RANGE;
 
 /* Supported effects.
  *
@@ -727,7 +895,9 @@ static unsigned long t500rs_params = PARAM_GAIN | PARAM_RANGE;
  * FF_RUMBLE: the parent converts rumble to a sine periodic (period 50 ms)
  * and gates the rumble capability bit on FF_PERIODIC being advertised.
  */
-const signed short t500rs_effects[] = { FF_CONSTANT, FF_PERIODIC,
+const signed short t500rs_effects[] = { FF_CONSTANT, FF_SPRING,
+					FF_DAMPER,     FF_FRICTION,
+					FF_INERTIA,    FF_PERIODIC,
 					FF_SQUARE,     FF_SINE,
 					FF_TRIANGLE,   FF_SAW_UP,
 					FF_SAW_DOWN,   FF_RAMP,
@@ -746,11 +916,15 @@ const signed short t500rs_effects[] = { FF_CONSTANT, FF_PERIODIC,
  * Constant force is pinned to slot 0 (its subtypes are fixed in the
  * firmware). Periodic and ramp effects also resolve to slot 0: they share
  * the constant-force channel and are separated in software by the synth
- * engine, never on the wire.
+ * engine, never on the wire. Only condition effects occupy their own
+ * hardware slots (n = effect->id + 1, matching their subtype channels).
  */
 static u8 t500rs_effect_to_hw_id(const struct ff_effect *effect)
 {
-	return 0;
+	if (effect->type == FF_CONSTANT || effect->type == FF_PERIODIC ||
+	    effect->type == FF_RAMP)
+		return 0;
+	return (u8)(effect->id + 1);
 }
 
 /*
@@ -759,7 +933,8 @@ static u8 t500rs_effect_to_hw_id(const struct ff_effect *effect)
  *
  * The 0x01 effect_id byte and the 0x41 START/STOP effect_id byte both mirror
  * the hardware slot derived above. Constant force uses fixed subtypes
- * (T500RS_CONSTANT_PARAM_SUB/ENV_SUB).
+ * (T500RS_CONSTANT_PARAM_SUB/ENV_SUB); every other effect derives subtypes
+ * from its logical id (effect->id + 1).
  */
 static int t500rs_send_packet_sequence(struct t500rs_device_entry *t500rs,
 				       const struct tmff2_effect_state *state,
@@ -769,9 +944,15 @@ static int t500rs_send_packet_sequence(struct t500rs_device_entry *t500rs,
 	const struct ff_effect *effect = &state->effect;
 	u8 *buf = t500rs->send_buffer;
 	u8 hw_id = t500rs_effect_to_hw_id(effect);
-	u16 param_sub = T500RS_CONSTANT_PARAM_SUB;
-	u16 env_sub = T500RS_CONSTANT_ENV_SUB;
 	int ret;
+	u16 param_sub, env_sub;
+
+	if (effect->type == FF_CONSTANT) {
+		param_sub = T500RS_CONSTANT_PARAM_SUB;
+		env_sub = T500RS_CONSTANT_ENV_SUB;
+	} else {
+		t500rs_index_to_subtypes(effect->id + 1, &param_sub, &env_sub);
+	}
 
 	for (size_t i = 0; i < seq_len; i++) {
 		/* Log sequence progress for debugging */
@@ -794,11 +975,42 @@ static int t500rs_send_packet_sequence(struct t500rs_device_entry *t500rs,
 			break;
 		}
 
+		case T500RS_SEQ_CONDITION_X: {
+			const struct ff_condition_effect *cond =
+				&effect->u.condition[0];
+			ret = t500rs_send_condition_packet(t500rs, buf,
+							   (u8)param_sub, cond,
+							   t500rs_condition_level(effect->type));
+			break;
+		}
+
+		case T500RS_SEQ_CONDITION_Y: {
+			/* Y-axis: use condition[1] if available, else zeros */
+			const struct ff_condition_effect *cond =
+				&effect->u.condition[1];
+			ret = t500rs_send_condition_packet(t500rs, buf,
+							   (u8)env_sub, cond,
+							   t500rs_condition_level(effect->type));
+			break;
+		}
+
 		case T500RS_SEQ_MAIN: {
 			u8 effect_type;
 			switch (effect->type) {
 			case FF_CONSTANT:
 				effect_type = T500RS_EFFECT_CONSTANT;
+				break;
+			case FF_SPRING:
+				effect_type = T500RS_EFFECT_SPRING;
+				break;
+			case FF_DAMPER:
+				effect_type = T500RS_EFFECT_DAMPER;
+				break;
+			case FF_FRICTION:
+				effect_type = T500RS_EFFECT_FRICTION;
+				break;
+			case FF_INERTIA:
+				effect_type = T500RS_EFFECT_INERTIA;
 				break;
 			default:
 				/* Periodic/ramp effects never reach the packet
@@ -1014,6 +1226,55 @@ static int t500rs_upload_constant(struct t500rs_device_entry *t500rs,
 }
 
 /*
+ * Upload spring/damper/friction/inertia effect.
+ *
+ * Per Windows captures (T500RS_FFBEFFECTS.md):
+ * - 0x01 packet: direction=0x4000, param_sub=0x002a, envelope_sub=0x0038
+ * - Two 0x05 packets: X-axis (code 0x2a) and Y-axis (code 0x38)
+ * - Saturation values 0x54 (84) for spring, 0x64 (100) for damper/friction
+ */
+static int t500rs_upload_condition(struct t500rs_device_entry *t500rs,
+				   const struct tmff2_effect_state *state)
+{
+	const struct ff_effect *effect = &state->effect;
+	int ret;
+	const char *type_name;
+
+	/* Resolve the effect name for diagnostics. The hardware effect_type
+	 * code and the per-type strength level are derived inside the packet
+	 * sequence (MAIN step) and t500rs_condition_level() respectively.
+	 */
+	switch (effect->type) {
+	case FF_SPRING:
+		type_name = "spring";
+		break;
+	case FF_DAMPER:
+		type_name = "damper";
+		break;
+	case FF_FRICTION:
+		type_name = "friction";
+		break;
+	case FF_INERTIA:
+		type_name = "inertia";
+		break;
+	default:
+		return -EINVAL;
+	}
+
+	/* Send packet sequence for conditional effect */
+	ret = t500rs_send_packet_sequence(
+		t500rs, state, t500rs_seq_condition,
+		sizeof(t500rs_seq_condition) / sizeof(t500rs_seq_condition[0]));
+	if (ret) {
+		hid_err(t500rs->hdev, "Failed to send %s effect sequence: %d\n",
+			type_name, ret);
+		return ret;
+	}
+
+	return 0;
+}
+
+/*
  * Upload periodic effect (sine, square, triangle, saw).
  *
  * No wire declaration exists for periodic effects: the firmware has no
@@ -1147,6 +1408,10 @@ static int t500rs_upload_effect(void *data,
 	switch (effect->type) {
 	case FF_CONSTANT:
 	case FF_RAMP:
+	case FF_SPRING:
+	case FF_DAMPER:
+	case FF_FRICTION:
+	case FF_INERTIA:
 		break;
 
 	case FF_PERIODIC:
@@ -1177,6 +1442,12 @@ static int t500rs_upload_effect(void *data,
 	switch (effect->type) {
 	case FF_CONSTANT:
 		ret = t500rs_upload_constant(t500rs, state);
+		break;
+	case FF_SPRING:
+	case FF_DAMPER:
+	case FF_FRICTION:
+	case FF_INERTIA:
+		ret = t500rs_upload_condition(t500rs, state);
 		break;
 	case FF_PERIODIC:
 		ret = t500rs_upload_periodic(t500rs, state);
@@ -1258,9 +1529,9 @@ static void t500rs_expiry_work(struct work_struct *work)
 			continue;
 
 		a->active = false;
-		/* hw_id was captured at play time (slot 0 for constant
-		 * force) - it is NOT derived from the index here, so finite
-		 * constants STOP the slot they actually run on. */
+		/* hw_id was captured at play time (slot 0 for constant force,
+		 * id+1 for conditions) - it is NOT derived from the index here,
+		 * so finite constants STOP the slot they actually run on. */
 		t500rs_send_stop_now(t500rs, t500rs->expiry_buffer, a->hw_id);
 	}
 	t500rs_expiry_arm_locked(t500rs);
@@ -1291,6 +1562,10 @@ static int t500rs_play_effect(void *data,
 	case FF_CONSTANT:
 	case FF_PERIODIC:
 	case FF_RAMP:
+	case FF_SPRING:
+	case FF_DAMPER:
+	case FF_FRICTION:
+	case FF_INERTIA:
 		break;
 	default:
 		hid_err(t500rs->hdev, "Unsupported effect type for play: %d\n",
@@ -1530,6 +1805,35 @@ static int t500rs_update_effect(void *data,
 		return 0;
 	}
 
+	case FF_SPRING:
+	case FF_DAMPER:
+	case FF_FRICTION:
+	case FF_INERTIA: {
+		/*
+		* Skip update if parameters unchanged - prevents micro-pulse/rumble
+		* when games spam identical condition updates.
+		*/
+		const struct ff_condition_effect *cond =
+			&effect->u.condition[0];
+		const struct ff_condition_effect *cond_old =
+			&old->u.condition[0];
+		u16 param_sub, env_sub;
+
+		if (cond->right_coeff == cond_old->right_coeff &&
+		    cond->left_coeff == cond_old->left_coeff &&
+		    cond->right_saturation == cond_old->right_saturation &&
+		    cond->left_saturation == cond_old->left_saturation &&
+		    cond->deadband == cond_old->deadband &&
+		    cond->center == cond_old->center &&
+		    effect->type == old->type)
+			return 0;
+
+		t500rs_index_to_subtypes(effect->id + 1, &param_sub, &env_sub);
+		return t500rs_send_condition_packet(t500rs, buf,
+						    (u8)param_sub, cond,
+						    t500rs_condition_level(effect->type));
+	}
+
 	default:
 		return -EOPNOTSUPP;
 	}
@@ -1689,6 +1993,7 @@ static int t500rs_wheel_init(struct tmff2_device_entry *tmff2, int open_mode)
 	/* Sanity check protocol packet sizes against documentation */
 	BUILD_BUG_ON(sizeof(struct t500rs_pkt_r01_main) != 15);
 	BUILD_BUG_ON(sizeof(struct t500rs_pkt_r04_stream) != 8);
+	BUILD_BUG_ON(sizeof(struct t500rs_pkt_r05_condition) != 11);
 
 	/* Validate input parameters */
 	if (!tmff2) {

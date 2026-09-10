@@ -22,6 +22,10 @@ Different effects feel like different real-world sensations:
 | Periodic (sine)   | A smooth, repeating vibration (engine rumble, road texture)   |
 | Square / triangle | Sharper, more mechanical vibrations                          |
 | Sawtooth / ramp   | A force that rises then drops, or slides one way             |
+| Spring            | The wheel is pulled back toward the centre                    |
+| Damper            | The wheel gets "thick" and resists being moved                |
+| Friction          | A constant drag as you turn                                   |
+| Inertia           | Resistance to *changing* direction, as if the wheel were heavy|
 
 In a game, these combine to let you feel the road, a collision, or the weight of
 the car.
@@ -51,7 +55,7 @@ Playing any effect follows the same three steps:
 
 1. **Declare it** - send a *main upload* packet (`0x01`) describing what kind of
    effect it is and how long it should last.
-2. **Configure it** - send one or more *parameter* packets (`0x02`/`0x03`/`0x04`)
+2. **Configure it** - send one or more *parameter* packets (`0x02`/`0x03`/`0x04`/`0x05`)
    that set the strength, speed, or shape.
 3. **Start it** - send a *command* packet (`0x41`) with START.
 
@@ -64,6 +68,9 @@ not always `0x00`:
 
 - Constant force (and every periodic/ramp effect, see paragraph 5.4) runs on
   **slot 0** -> `effect_id = 0x00`.
+- Condition effects (spring/damper/friction/inertia) get slots `1, 2, 3, ...`
+  assigned sequentially -> their `0x01` uploads and `0x41` START/STOP packets
+  carry that slot number (`41 01 41 ff` starts slot 1).
 
 ### Why the wheel never stops on its own
 
@@ -87,6 +94,16 @@ Think of a subtype as a **channel number**:
   the fixed channels:
   - parameter subtype = `0x0e`
   - envelope subtype  = `0x1c`
+- **Condition effects** get slot numbers `n = 1, 2, 3, ...` with channels
+  computed by a simple formula:
+
+  ```
+  parameter subtype = 0x0e + 0x1c x n
+  envelope subtype  = 0x1c + 0x1c x n
+  ```
+
+  For example, slot 1 gets `0x2a` and `0x38`. The wheel only cares about these
+  numbers matching between the `0x01` packet and the later parameter packets.
 
 These two subtype values are written into bytes 9-12 of the `0x01` packet, and
 the parameter packets echo back the same numbers so the wheel knows which effect
@@ -107,7 +124,7 @@ This declares an effect. Sent first.
 | Offset | Size | Field          | Meaning                                                        |
 |--------|------|----------------|----------------------------------------------------------------|
 | 0      | 1    | packet type    | `0x01`                                                         |
-| 1      | 1    | effect_id      | Hardware slot: 0 for constant/periodic (see paragraph 3) |
+| 1      | 1    | effect_id      | Hardware slot: 0 for constant/periodic, n for conditions (see paragraph 3) |
 | 2      | 1    | effect type    | What kind of effect (see table below)                          |
 | 3      | 1    | control        | Always `0x40`                                                  |
 | 4-5    | 2    | duration       | How long it should run, in milliseconds                        |
@@ -123,6 +140,8 @@ This declares an effect. Sent first.
 |------|-------------------------------|
 | 0x00 | Constant force                |
 | 0x22 | Sine (host-synthesis carrier, see 5.4) |
+| 0x40 | Spring                        |
+| 0x41 | Damper / friction / inertia   |
 
 Codes 0x20-0x24 (square/triangle/saw) were once guessed to be waveform
 selectors; they are unsourced and per-slot periodic declarations wedge the
@@ -151,7 +170,7 @@ out (fade).
 
 **Note:** the Linux driver applies envelopes to periodic/ramp effects entirely
 in software (the synthesis engine shapes the streamed level). For effects the
-firmware runs natively (constant), all-zero envelopes are sent -
+firmware runs natively (constant, condition), all-zero envelopes are sent -
 non-zero values for those types have never been observed on the wire, and the
 game's envelope is warned about and dropped.
 
@@ -199,18 +218,40 @@ Nothing per-effect is ever declared on the wire.
 > STALLs on this firmware and leaves the wheel wedged until
 > re-enumeration. Do not reinvent per-slot periodic packets.
 
-### 5.5 Command - `0x41` (4 bytes)
+### 5.5 Condition - `0x05` (11 bytes, sent twice)
+
+Used for spring, damper, friction, and inertia. It is sent **twice**: once for the
+x axis and once for the Y axis. The T500RS is a single-axis wheel, so the Y packet
+is normally all zeros.
+
+| Offset | Size | Field          | Meaning                                     |
+|--------|------|----------------|---------------------------------------------|
+| 0      | 1    | packet type    | `0x05`                                      |
+| 1      | 1    | code           | Subtype (first packet uses parameter sub, second uses envelope sub) |
+| 2      | 1    | reserved       | `0x00`                                      |
+| 3      | 1    | right coeff    | Stiffness to the right, 0-10                 |
+| 4      | 1    | left coeff     | Stiffness to the left, 0-10                  |
+| 5-6    | 2    | center         | Where "centre" sits (offset)                 |
+| 7-8    | 2    | deadband       | A zone around centre with no force           |
+| 9      | 1    | right sat      | Max force to the right, 0-100                |
+| 10     | 1    | left sat       | Max force to the left, 0-100                 |
+
+In plain terms: *coefficients* control how strongly the effect responds, *center*
+and *deadband* define where the neutral point is, and *saturation* caps the
+maximum force so it never gets violent.
+
+### 5.6 Command - `0x41` (4 bytes)
 
 Starts or stops an effect.
 
 | Offset | Size | Field       | Meaning                              |
 |--------|------|-------------|--------------------------------------|
 | 0      | 1    | packet type | `0x41`                              |
-| 1      | 1    | effect_id   | The hardware slot (0 for constant/periodic) |
+| 1      | 1    | effect_id   | The hardware slot (0 for constant/periodic, n for conditions) |
 | 2      | 1    | command     | `0x41` = START, `0x00` = STOP        |
 | 3      | 1    | argument    | `0xff` for START, `0x01` for STOP |
 
-### 5.6 Control and sync commands (`0x40`, `0x42`)
+### 5.7 Control and sync commands (`0x40`, `0x42`)
 
 Besides effects, the driver sends short control packets: `0x40` configures
 behaviour such as the steering range and autocentering, and `0x42` packets are
@@ -240,7 +281,7 @@ Reading it back:
 - The `0x03` packet sets a small positive level on channel `0x0e`.
 - The `0x41` START begins playback; a later `0x41` STOP ends it.
 
-Periodic effects follow the exact same shape - only the effect type
+Periodic and condition effects follow the exact same shape - only the effect type
 and the parameter packets differ.
 
 ---
@@ -258,6 +299,10 @@ reference:
 | Constant level      | -32767...+32767     | -127...+127     | `level x 127 / 32767`          |
 | Synth stream level  | -32767...+32767     | -128...+127     | `level x 127 / 32767` (host-side) |
 | Envelope level      | 0-32767             | (applied host-side, 0-100%) | `env / 32767` scale   |
+| Condition coeff.    | 0-32767             | 0-10            | `coeff x level% x 10 / 32767`, rounded |
+| Condition center    | -32767...+32767     | device units    | `center / 20`                  |
+| Condition deadband  | 0-65535             | device units    | `deadband / 65` *(divisor unconfirmed)* |
+| Condition saturation| 0-65535             | 0-100           | `sat x 100 / 65535`            |
 
 Periodic magnitude, phase, offset, period and ramp levels no longer appear
 in this table: they are consumed by the software synthesis engine and never
@@ -277,22 +322,26 @@ its own. One known exception is game-side: rFactor 2 uploads its effects
 sign-inverted, so it needs the in-game "FFB invert" (-100%) setting; a
 driver cannot detect or special-case a game.
 
+Only the condition deadband divisor is unconfirmed - it works, but the
+exact scaling was never checked against a known input/output pair.
+
 ---
 
 ## 8. Things to watch out for
 
-- **`effect_id` names the hardware slot** (0 for constant/periodic). Hardcoding
-  `0x00` everywhere breaks per-slot STOPs.
+- **`effect_id` names the hardware slot** (0 for constant/periodic, `n` for
+  conditions). Hardcoding `0x00` everywhere breaks per-slot STOPs.
 - **Constant force uses fixed subtypes** (`0x0e` / `0x1c`). Giving it a per-effect
   channel breaks level updates.
-- **Never send per-slot periodic packets** (`04 2a ...`): the firmware STALLs
-  them and the wheel wedges until re-enumeration.
+- **Never send per-slot periodic packets** (`04 2a ...` or a MAIN on condition
+  channels with a `0x2x` type): the firmware STALLs them and the wheel wedges
+  until re-enumeration.
 - **Duration:** send `0xffff` in MAINs for constant/periodic; the driver's
   software timers enforce real durations for everything.
 - **The wheel never auto-stops.** Ending an effect is the driver's job, via the
   software-expiry timer (native effects) or the synthesis engine (periodic/ramp).
 - **Direction** is folded into the level's *sign* (+/-1, never a magnitude
   scale); it is not a separate field in any packet.
-- **Live updates:** only the parameter packets (`0x03`/`0x04`) can be
+- **Live updates:** only the parameter packets (`0x03`/`0x04`/`0x05`) can be
   changed while an effect plays. Changing duration or delay requires re-uploading
   the whole effect.
